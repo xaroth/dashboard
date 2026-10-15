@@ -115,26 +115,51 @@ type Status struct {
 // Statuses returns every module's status, sorted by name.
 func (s *Set) Statuses(ctx context.Context) ([]Status, error) {
 	states, err := storage.New(s.db.Reader).ListStates(ctx)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err != nil {
 		return nil, err
 	}
 	byName := map[string]storage.ModuleState{}
 	for _, st := range states {
 		byName[st.Module] = st
 	}
-	now := s.now()
 	out := make([]Status, 0, len(s.instances))
 	for _, inst := range s.instances {
-		inst.mu.Lock()
-		st := Status{Name: inst.reg.name, Phase: inst.phase, Interval: inst.interval, NextRun: inst.nextRun}
-		inst.mu.Unlock()
-		row := byName[inst.reg.name]
-		st.AttemptedAt, st.FetchedAt = row.AttemptedAt, row.FetchedAt
-		st.Error = cmp.Or(errString(inst.initErr), deref(row.Error))
-		st.Stale = row.FetchedAt == nil || now.Sub(*row.FetchedAt) > inst.staleAfter
-		out = append(out, st)
+		out = append(out, s.status(inst, byName[inst.reg.name]))
 	}
 	return out, nil
+}
+
+// StaleModules returns the names of modules whose data is stale.
+func (s *Set) StaleModules(ctx context.Context) ([]string, error) {
+	st, err := s.Statuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, m := range st {
+		if m.Stale {
+			out = append(out, m.Name)
+		}
+	}
+	return out, nil
+}
+
+func (s *Set) state(ctx context.Context, inst *instance) (Status, error) {
+	row, err := storage.New(s.db.Reader).GetState(ctx, inst.reg.name)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Status{}, err
+	}
+	return s.status(inst, row), nil
+}
+
+func (s *Set) status(inst *instance, row storage.ModuleState) Status {
+	inst.mu.Lock()
+	st := Status{Name: inst.reg.name, Phase: inst.phase, Interval: inst.interval, NextRun: inst.nextRun}
+	inst.mu.Unlock()
+	st.AttemptedAt, st.FetchedAt = row.AttemptedAt, row.FetchedAt
+	st.Error = cmp.Or(errString(inst.initErr), deref(row.Error))
+	st.Stale = row.FetchedAt == nil || s.now().Sub(*row.FetchedAt) > inst.staleAfter
+	return st
 }
 
 func errString(err error) string {

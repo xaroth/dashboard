@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
+	"reflect"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 )
@@ -40,6 +43,8 @@ type Registration struct {
 	interval   time.Duration
 	staleAfter time.Duration
 	migrations fs.FS
+	queries    map[string]query
+	moduleType reflect.Type
 	initialize func(ctx context.Context, m any, cfg any) error
 	enabled    func(ctx context.Context, m any) bool
 	update     func(ctx context.Context, m any) error
@@ -81,6 +86,8 @@ func Define[M any, C any, PM interface {
 		newConfig:  func() any { return defaults() },
 		interval:   defaultInterval,
 		staleAfter: defaultStaleAfter,
+		queries:    map[string]query{},
+		moduleType: reflect.TypeFor[*M](),
 		initialize: func(ctx context.Context, m any, cfg any) error { return m.(PM).Initialize(ctx, cfg.(*C)) },
 		enabled:    func(ctx context.Context, m any) bool { return m.(PM).Enabled(ctx) },
 		update:     func(ctx context.Context, m any) error { return m.(PM).Update(ctx) },
@@ -91,7 +98,16 @@ func Define[M any, C any, PM interface {
 	if r.interval <= 0 || r.staleAfter <= 0 {
 		panic(fmt.Sprintf("modules: %s: update interval and stale after must be positive", name))
 	}
+	for name, q := range r.queries {
+		if q.moduleType != r.moduleType {
+			panic(fmt.Sprintf("modules: %s: query %s is a method of %s, not %s", r.name, name, q.moduleType, r.moduleType))
+		}
+	}
 	return r
+}
+
+func (r Registration) queryNames() []string {
+	return slices.Sorted(maps.Keys(r.queries))
 }
 
 var (

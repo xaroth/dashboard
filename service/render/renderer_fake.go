@@ -76,3 +76,39 @@ func (f *FakeRenderer) Closed() bool {
 	defer f.mu.Unlock()
 	return f.closed
 }
+
+// FakeResolver answers queries from a map keyed "module.query" and records
+// the params it was asked with. Unknown queries resolve to an error result.
+type FakeResolver struct {
+	mu      sync.Mutex
+	results map[string]Result
+	stale   []string
+	asked   map[string]map[string]any
+}
+
+func NewFakeResolver(results map[string]Result, stale ...string) *FakeResolver {
+	return &FakeResolver{results: results, stale: stale, asked: map[string]map[string]any{}}
+}
+
+func (f *FakeResolver) Resolve(_ context.Context, q QueryDescriptor) Result {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := q.Module + "." + q.Query
+	f.asked[key] = q.Params
+	if r, ok := f.results[key]; ok {
+		return r
+	}
+	msg := "unknown query " + key
+	return Result{Stale: true, Error: &msg}
+}
+
+func (f *FakeResolver) StaleModules(context.Context) ([]string, error) {
+	return append([]string{}, f.stale...), nil
+}
+
+// Asked returns the params the last resolve of module.query used.
+func (f *FakeResolver) Asked(key string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.asked[key]
+}
