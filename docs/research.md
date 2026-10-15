@@ -134,11 +134,21 @@ Options, in order of preference:
 
 Consumption = P1 import - P1 export + solar production; needed for a self-consumption figure on screen.
 
-DTU at `192.168.5.233`. Probed 2026-10-15 ~18:50 (around sunset): TCP 502 accepts connections but FC03 reads (unit IDs 0, 1, 2, 101, 247, 255; registers 0x2000 serial, 0x1000 inverter data) get no response. TCP 80 and 10081 closed. Read-only test script: `tools/dtu_read.py <host>`.
+DTU at `192.168.5.233`, wired Ethernet. Read-only test script: `tools/dtu_read.py <host>`.
 
-Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per inverter port: 20 holding regs at `0x1000 + i*40`; serial (6 B), port, PV V/A, grid V/Hz, PV W, today Wh, total Wh, temp, status, alarm, link. Plant totals are sums over linked ports.
+Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per inverter port: 20 holding regs at `0x1000 + i*40`; serial (6 B), port, PV V/A, grid V/Hz, PV W, today Wh, total Wh, temp, status, alarm, link. Plant totals are sums over linked ports. Some DTUs send a wrong byte-count in responses; `hoymiles-modbus` patches it.
 
-To verify: DTU on Ethernet (Modbus TCP is Ethernet-only), Modbus enabled in DTU settings, retry in daylight, DTU data refresh interval.
+### Modbus status (2026-10-15)
+
+TCP 502 accepts connections, but FC03 reads get no response on any unit ID tried. Same client works against the P1 dongle's Modbus server, so the client and network path are fine; the DTU's Modbus service is not answering. TCP 80 and 10081 closed.
+
+Likely causes, most likely first:
+
+1. **Firmware V00.02.22**: Photovoltaikforum (Feb 2024) reports exactly this on DTU-Pro-S V00.02.22: every Modbus TCP query times out. V00.02.23 reported the same (ioBroker, 2024). Hoymiles support reflashed affected units to V00.02.19, which restored Modbus. DTU-Pro firmware has since moved to V00.07.x (V00.07.04 is the minimum for `ha-hoymiles-dtupro`); whether a V00.07 build exists for the DTU-Pro-S is unconfirmed. Updates are offered through S-Miles; rollback only via Hoymiles support.
+2. **RS-485 port config**: in the S-Miles Installer app, Toolkit > DTU Information > RS-485 Port Config. "Export control" blocks Modbus TCP; "Remote control" enables it. Note the Modbus address shown there.
+3. **Address mismatch**: unlikely; a sweep of all unit IDs 0-255 is the check.
+
+If Modbus stays dead: S-Miles Cloud (unofficial API). OpenDTU is a weak fallback: drops S-Miles, reported gaps for HMT 3-phase data, and Hoymiles' Aug 2026 inverter security firmware blocks OpenDTU/AhoyDTU on updated inverters.
 
 ## Car: Hyundai Kona Electric 2024 (Bluelink EU)
 
@@ -183,7 +193,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 
 ## Open questions
 
-1. DTU: connected via Ethernet or Wi-Fi? Modbus enabled?
+1. DTU: RS-485 port config (Remote control?) and Modbus address in S-Miles Installer.
 2. iCal address of the shared calendar (likely available).
 3. Does the Pleos API return data for the Kona Electric 2024?
 4. Content, layout and placement per screen (deferred).
@@ -212,5 +222,9 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 - Pleos API compatibility: https://document.pleos.ai/en/api-reference/vehicle-data-api/api-compatibility
 - Hyundai data rights (EU): https://connected-mobility.hyundai.com/data-rights-en
 - Google Calendar API events.list: https://developers.google.com/workspace/calendar/api/v3/reference/events/list
+- ioBroker DTU-Pro-S Modbus thread: https://forum.iobroker.net/topic/74880/hoymiles-dtu-pro-s-modbus
+- ha-hoymiles-dtupro: https://github.com/netnic0/ha-hoymiles-dtupro
+- Photovoltaikforum DTU firmware 2.22: https://www.photovoltaikforum.com/thread/221261-neues-firmware-update-2-22-f%C3%BCr-dtu-pro-erh%C3%A4ltlich/
+- heise, Hoymiles security update: https://www.heise.de/en/news/PV-inverters-Hoymiles-releases-security-update-11436678.html
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
