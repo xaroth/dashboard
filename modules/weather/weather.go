@@ -20,6 +20,9 @@ type config struct {
 	// Location is a place name, optionally with its country after a comma.
 	Location     string `yaml:"location"`
 	ForecastDays int    `yaml:"forecast_days"`
+	// Model is an Open-Meteo weather model, e.g. knmi_seamless. Empty lets
+	// Open-Meteo pick per location.
+	Model        string `yaml:"model"`
 	GeocodingURL string `yaml:"geocoding_url"`
 	ForecastURL  string `yaml:"forecast_url"`
 }
@@ -62,7 +65,7 @@ func (m *weather) Update(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	f, err := fetchForecast(ctx, m.cfg.ForecastURL, loc, m.cfg.ForecastDays)
+	f, err := fetchForecast(ctx, m.cfg.ForecastURL, m.cfg.Model, loc, m.cfg.ForecastDays)
 	if err != nil {
 		return err
 	}

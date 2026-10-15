@@ -90,7 +90,7 @@ func geocode(ctx context.Context, base, query string) (Location, error) {
 
 // fetchForecast asks for times as Unix seconds in the location's timezone,
 // so daily values cover local days.
-func fetchForecast(ctx context.Context, base string, loc Location, days int) (Forecast, error) {
+func fetchForecast(ctx context.Context, base, model string, loc Location, days int) (Forecast, error) {
 	v := url.Values{
 		"latitude":        {strconv.FormatFloat(loc.Latitude, 'f', -1, 64)},
 		"longitude":       {strconv.FormatFloat(loc.Longitude, 'f', -1, 64)},
@@ -101,6 +101,9 @@ func fetchForecast(ctx context.Context, base string, loc Location, days int) (Fo
 		"timeformat":      {"unixtime"},
 		"forecast_days":   {strconv.Itoa(days)},
 		"wind_speed_unit": {"kmh"},
+	}
+	if model != "" {
+		v.Set("models", model)
 	}
 	var r struct {
 		Current struct {
@@ -114,21 +117,21 @@ func fetchForecast(ctx context.Context, base string, loc Location, days int) (Fo
 			IsDay         int     `json:"is_day"`
 		} `json:"current"`
 		Hourly struct {
-			Time                     []int64   `json:"time"`
-			Temperature              []float64 `json:"temperature_2m"`
-			PrecipitationProbability []*int    `json:"precipitation_probability"`
-			Precipitation            []float64 `json:"precipitation"`
-			WeatherCode              []int     `json:"weather_code"`
+			Time                     []int64    `json:"time"`
+			Temperature              []*float64 `json:"temperature_2m"`
+			PrecipitationProbability []*int     `json:"precipitation_probability"`
+			Precipitation            []*float64 `json:"precipitation"`
+			WeatherCode              []*int     `json:"weather_code"`
 		} `json:"hourly"`
 		Daily struct {
-			Time                        []int64   `json:"time"`
-			WeatherCode                 []int     `json:"weather_code"`
-			TemperatureMax              []float64 `json:"temperature_2m_max"`
-			TemperatureMin              []float64 `json:"temperature_2m_min"`
-			PrecipitationSum            []float64 `json:"precipitation_sum"`
-			PrecipitationProbabilityMax []*int    `json:"precipitation_probability_max"`
-			Sunrise                     []int64   `json:"sunrise"`
-			Sunset                      []int64   `json:"sunset"`
+			Time                        []int64    `json:"time"`
+			WeatherCode                 []*int     `json:"weather_code"`
+			TemperatureMax              []*float64 `json:"temperature_2m_max"`
+			TemperatureMin              []*float64 `json:"temperature_2m_min"`
+			PrecipitationSum            []*float64 `json:"precipitation_sum"`
+			PrecipitationProbabilityMax []*int     `json:"precipitation_probability_max"`
+			Sunrise                     []int64    `json:"sunrise"`
+			Sunset                      []int64    `json:"sunset"`
 		} `json:"daily"`
 	}
 	if err := getJSON(ctx, base+"?"+v.Encode(), &r); err != nil {
@@ -152,18 +155,26 @@ func fetchForecast(ctx context.Context, base string, loc Location, days int) (Fo
 			WeatherCode: r.Current.WeatherCode, WindSpeed: r.Current.WindSpeed, WindDirection: r.Current.WindDirection,
 			Precipitation: r.Current.Precipitation, IsDay: r.Current.IsDay == 1,
 		},
-		Hourly: make([]Hour, len(h.Time)),
-		Daily:  make([]Day, len(d.Time)),
+		Hourly: make([]Hour, 0, len(h.Time)),
+		Daily:  make([]Day, 0, len(d.Time)),
 	}
+	// A model's series end in nulls past its horizon, not all at the same
+	// entry; the forecast stops at the first. Probabilities may be null earlier.
 	for i := range h.Time {
-		f.Hourly[i] = Hour{Time: at(h.Time[i]), Temperature: h.Temperature[i], PrecipitationProbability: h.PrecipitationProbability[i], Precipitation: h.Precipitation[i], WeatherCode: h.WeatherCode[i]}
+		if h.Temperature[i] == nil || h.Precipitation[i] == nil || h.WeatherCode[i] == nil {
+			break
+		}
+		f.Hourly = append(f.Hourly, Hour{Time: at(h.Time[i]), Temperature: *h.Temperature[i], PrecipitationProbability: h.PrecipitationProbability[i], Precipitation: *h.Precipitation[i], WeatherCode: *h.WeatherCode[i]})
 	}
 	for i := range d.Time {
-		f.Daily[i] = Day{
-			Date: at(d.Time[i]), WeatherCode: d.WeatherCode[i], TemperatureMax: d.TemperatureMax[i], TemperatureMin: d.TemperatureMin[i],
-			PrecipitationSum: d.PrecipitationSum[i], PrecipitationProbabilityMax: d.PrecipitationProbabilityMax[i],
-			Sunrise: at(d.Sunrise[i]), Sunset: at(d.Sunset[i]),
+		if d.TemperatureMax[i] == nil || d.TemperatureMin[i] == nil || d.PrecipitationSum[i] == nil || d.WeatherCode[i] == nil {
+			break
 		}
+		f.Daily = append(f.Daily, Day{
+			Date: at(d.Time[i]), WeatherCode: *d.WeatherCode[i], TemperatureMax: *d.TemperatureMax[i], TemperatureMin: *d.TemperatureMin[i],
+			PrecipitationSum: *d.PrecipitationSum[i], PrecipitationProbabilityMax: d.PrecipitationProbabilityMax[i],
+			Sunrise: at(d.Sunrise[i]), Sunset: at(d.Sunset[i]),
+		})
 	}
 	return f, nil
 }

@@ -17,3 +17,4 @@ renderer:
 modules:
   weather:
     location: "Amsterdam, The Netherlands"   # geocoded once, coordinates cached
+    model: knmi_seamless   # KNMI HARMONIE for 2.5 days, then ECMWF; omit to let Open-Meteo pick
