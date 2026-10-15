@@ -2,6 +2,7 @@
 package weather
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"embed"
@@ -9,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/xaroth/dashboard/service/modules"
+	"github.com/xaroth/dashboard/module"
 )
 
 //go:embed sql/migrations/*.sql
@@ -32,20 +33,21 @@ func defaultConfig() *config {
 	}
 }
 
-type module struct {
+type weather struct {
 	cfg *config
 }
 
-var _ = modules.Register[module, config](
+// Module is the weather registration.
+var Module = module.Define[weather, config](
 	"weather",
 	defaultConfig,
-	modules.WithUpdateInterval(15*time.Minute),
-	modules.WithStaleAfter(2*time.Hour),
-	modules.WithMigrations(migrations),
-	modules.WithQuery("forecast", (*module).forecast),
+	module.WithUpdateInterval(15*time.Minute),
+	module.WithStaleAfter(2*time.Hour),
+	module.WithMigrations(migrations),
+	module.WithQuery("forecast", (*weather).forecast),
 )
 
-func (m *module) Initialize(_ context.Context, cfg *config) error {
+func (m *weather) Initialize(_ context.Context, cfg *config) error {
 	if cfg.ForecastDays < 1 || cfg.ForecastDays > 16 {
 		return fmt.Errorf("forecast_days must be 1 to 16, got %d", cfg.ForecastDays)
 	}
@@ -53,9 +55,9 @@ func (m *module) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *module) Enabled(context.Context) bool { return m.cfg.Location != "" }
+func (m *weather) Enabled(context.Context) bool { return m.cfg.Location != "" }
 
-func (m *module) Update(ctx context.Context) error {
+func (m *weather) Update(ctx context.Context) error {
 	loc, err := m.location(ctx)
 	if err != nil {
 		return err
@@ -64,19 +66,19 @@ func (m *module) Update(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return modules.SaveSnapshot(ctx, f)
+	return module.SaveSnapshot(ctx, f)
 }
 
 // location returns the coordinates for the configured location, geocoding
 // it on first use and when the setting changes.
-func (m *module) location(ctx context.Context) (Location, error) {
-	q := New(modules.Database(ctx))
+func (m *weather) location(ctx context.Context) (Location, error) {
+	q := New(module.Database(ctx))
 	row, err := q.GetLocation(ctx, m.cfg.Location)
 	if err == nil {
 		return Location{Name: row.Name, Country: row.Country, Latitude: row.Latitude, Longitude: row.Longitude, Timezone: row.Timezone}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
-		return Location{}, err
+		return Location{}, fmt.Errorf("reading cached location: %w", err)
 	}
 	loc, err := geocode(ctx, m.cfg.GeocodingURL, m.cfg.Location)
 	if err != nil {
@@ -85,12 +87,12 @@ func (m *module) location(ctx context.Context) (Location, error) {
 	err = q.SaveLocation(ctx, SaveLocationParams{
 		Query: m.cfg.Location, Name: loc.Name, Country: loc.Country,
 		Latitude: loc.Latitude, Longitude: loc.Longitude, Timezone: loc.Timezone,
-		ResolvedAt: modules.Clock(ctx)(),
+		ResolvedAt: module.Clock(ctx)(),
 	})
 	if err != nil {
 		return Location{}, fmt.Errorf("caching location: %w", err)
 	}
-	modules.Logger(ctx).Info("geocoded location", "query", m.cfg.Location, "name", loc.Name, "lat", loc.Latitude, "lon", loc.Longitude)
+	module.Logger(ctx).Info("geocoded location", "query", m.cfg.Location, "name", loc.Name, "lat", loc.Latitude, "lon", loc.Longitude)
 	return loc, nil
 }
 
@@ -103,12 +105,12 @@ type forecastParams struct {
 
 // forecast returns the stored forecast from now on: Hours hourly entries
 // starting at the current hour, Days daily entries starting today.
-func (m *module) forecast(ctx context.Context, p forecastParams) (*Forecast, error) {
+func (m *weather) forecast(ctx context.Context, p forecastParams) (*Forecast, error) {
 	if p.Hours < 0 || p.Days < 0 {
 		return nil, errors.New("hours and days must not be negative")
 	}
 	var f Forecast
-	ok, err := modules.LoadSnapshot(ctx, &f)
+	ok, err := module.LoadSnapshot(ctx, &f)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -116,13 +118,13 @@ func (m *module) forecast(ctx context.Context, p forecastParams) (*Forecast, err
 	if err != nil {
 		return nil, fmt.Errorf("forecast timezone: %w", err)
 	}
-	now := modules.Clock(ctx)()
-	f.Hourly = from(f.Hourly, func(h Hour) bool { return now.Before(h.Time.Add(time.Hour)) }, cmpOr(p.Hours, 24))
+	now := module.Clock(ctx)()
+	f.Hourly = from(f.Hourly, func(h Hour) bool { return now.Before(h.Time.Add(time.Hour)) }, cmp.Or(p.Hours, 24))
 	// The next local midnight, not Date+24h: days are 23 or 25 hours on DST changes.
 	f.Daily = from(f.Daily, func(d Day) bool {
 		y, m, day := d.Date.In(tz).Date()
 		return now.Before(time.Date(y, m, day+1, 0, 0, 0, 0, tz))
-	}, cmpOr(p.Days, 3))
+	}, cmp.Or(p.Days, 3))
 	return &f, nil
 }
 
@@ -135,11 +137,4 @@ func from[T any](s []T, keep func(T) bool, n int) []T {
 		}
 	}
 	return []T{}
-}
-
-func cmpOr(v, def int) int {
-	if v == 0 {
-		return def
-	}
-	return v
 }

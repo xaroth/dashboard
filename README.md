@@ -25,6 +25,6 @@ Open http://127.0.0.1:8081/ for previews of every page per device and panel, and
 
 Tests: `go test -race ./...`, `bun test`, `bunx tsc --noEmit`.
 
-After changing SQL or query types: `sqlc generate` and `go run ./cmd/gentypes`; both outputs are committed.
+After changing SQL or query types: `go tool sqlc generate` and `go run ./cmd/gentypes`; both outputs are committed.
 
 Device API keys are kept in memory until storage lands. After a restart, the first token a configured MAC presents is accepted, so anyone on the device network who knows a MAC can claim it first. Keep the device listener on a trusted network.

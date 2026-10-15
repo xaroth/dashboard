@@ -15,12 +15,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/xaroth/dashboard/service/modules"
+	"github.com/xaroth/dashboard/module"
 )
 
 var (
 	timeType          = reflect.TypeFor[time.Time]()
-	durationType      = reflect.TypeFor[modules.Duration]()
+	durationType      = reflect.TypeFor[module.Duration]()
 	rawMessageType    = reflect.TypeFor[json.RawMessage]()
 	jsonMarshaler     = reflect.TypeFor[json.Marshaler]()
 	textMarshaler     = reflect.TypeFor[encoding.TextMarshaler]()
@@ -41,8 +41,8 @@ type generator struct {
 	prefix string
 }
 
-func generate(regs []modules.Registration) ([]byte, error) {
-	regs = slices.SortedFunc(slices.Values(regs), func(a, b modules.Registration) int { return cmp.Compare(a.Name(), b.Name()) })
+func generate(regs []module.Registration) ([]byte, error) {
+	regs = slices.SortedFunc(slices.Values(regs), func(a, b module.Registration) int { return cmp.Compare(a.Name(), b.Name()) })
 	g := &generator{names: map[declKey]string{}, decls: map[string]string{}}
 	var entries []string
 	for _, r := range regs {
