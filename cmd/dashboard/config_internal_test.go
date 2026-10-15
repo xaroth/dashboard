@@ -81,6 +81,7 @@ func TestParseConfigErrors(t *testing.T) {
 		{"duplicate mac", "public_url: http://x\ndevices:\n  a: {mac: 'aa:bb:cc:dd:ee:ff', pages: [p]}\n  b: {mac: 'AA-BB-CC-DD-EE-FF', pages: [p]}\n", "already used"},
 		{"bad rotation", device("mac: 'aa:bb:cc:dd:ee:ff', rotation: 45, pages: [p]"), "rotation"},
 		{"no pages", device("mac: 'aa:bb:cc:dd:ee:ff'"), "pages"},
+		{"name with slash", "public_url: http://x\ndevices:\n  a/b: {mac: 'aa:bb:cc:dd:ee:ff', pages: [p]}\n", "letters"},
 		{"reserved name", "public_url: http://x\ndevices:\n  page: {mac: 'aa:bb:cc:dd:ee:ff', pages: [p]}\n", "reserved"},
 	}
 	for _, testCase := range testCases {

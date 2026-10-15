@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -48,6 +49,9 @@ type Device struct {
 	Params map[string]map[string]any `yaml:"params"`
 }
 
+// Device names appear in URL paths.
+var deviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 // DefaultConfig returns the values used for keys missing from the file.
 func DefaultConfig() Config {
 	return Config{
@@ -77,6 +81,9 @@ func (c *Config) Validate() error {
 	}
 	macs := map[string]string{}
 	for name, d := range c.Devices {
+		if !deviceName.MatchString(name) {
+			return fmt.Errorf("devices.%s: name may only contain letters, digits, - and _", name)
+		}
 		if name == "page" {
 			// Taken by the admin route /preview/page/{page}.png.
 			return fmt.Errorf("devices.page: the name page is reserved")

@@ -12,16 +12,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/xaroth/dashboard/service/device"
 	"github.com/xaroth/dashboard/service/render"
 )
-
-// Device is a configured device as the admin UI shows it.
-type Device struct {
-	Name     string
-	Pages    []string
-	Rotation int
-}
 
 type Pipeline interface {
 	Pages(ctx context.Context) ([]string, error)
@@ -29,19 +24,29 @@ type Pipeline interface {
 	Render(ctx context.Context, t render.Target, page string) (render.Image, error)
 }
 
-type Handler struct {
-	Pipeline Pipeline
-	Devices  []Device
-	// Target returns how a device is rendered: its last reported model and
-	// wake, or a default model when it has not connected yet.
-	Target func(device string) (render.Target, bool)
-	Log    *slog.Logger
+type Devices interface {
+	Statuses() []device.Status
+	Pending() []device.Pending
+	// Target is how a device is rendered: its last reported model and wake.
+	Target(name string) (render.Target, bool)
 }
 
-const defaultModel = "reterminal_e1001"
+type Handler struct {
+	Pipeline Pipeline
+	Devices  Devices
+	// DeviceAPI serves the device protocol; the simulator calls it in-process.
+	DeviceAPI http.Handler
+	Log       *slog.Logger
+
+	simMu   sync.Mutex
+	simKeys map[string]string // device name -> api_key from setup
+}
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", h.index)
+	mux.HandleFunc("GET /simulate/{device}", h.simulatePage)
+	mux.HandleFunc("POST /simulate/{device}/wake", h.simulateWake)
+	mux.Handle("GET /images/{file}", h.DeviceAPI)
 	mux.HandleFunc("GET /preview/page/{file}", h.previewPage)
 	mux.HandleFunc("GET /preview/{device}/{file}", h.previewDevice)
 	mux.HandleFunc("GET /preview/{device}/{page}/props.json", h.previewProps)
@@ -76,7 +81,8 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	err = indexTmpl.Execute(w, map[string]any{
-		"Devices": h.Devices,
+		"Devices": h.Devices.Statuses(),
+		"Pending": h.Devices.Pending(),
 		"Pages":   pages,
 		"Panels":  panels,
 	})
@@ -94,7 +100,7 @@ func (h *Handler) previewPage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	t := render.Target{Name: "preview", Model: q.Get("model"), Rotation: 0}
 	if t.Model == "" {
-		t.Model = defaultModel
+		t.Model = device.DefaultModel
 	}
 	if s := q.Get("rotation"); s != "" {
 		rot, err := strconv.Atoi(s)
@@ -140,7 +146,7 @@ func (h *Handler) previewProps(w http.ResponseWriter, r *http.Request) {
 
 // target resolves the device in the path; ?model= overrides its model.
 func (h *Handler) target(r *http.Request) (render.Target, bool) {
-	t, ok := h.Target(r.PathValue("device"))
+	t, ok := h.Devices.Target(r.PathValue("device"))
 	if !ok {
 		return t, false
 	}
