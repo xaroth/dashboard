@@ -39,7 +39,7 @@ func TestHealthz(t *testing.T) {
 	t.Parallel()
 	s := newService(t, "", "")
 	rec := httptest.NewRecorder()
-	s.Admin().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
 		t.Errorf("got %d %q, want 200 \"ok\\n\"", rec.Code, rec.Body.String())
 	}

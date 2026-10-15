@@ -4,7 +4,6 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -58,9 +57,6 @@ modules:
 	}}
 	if diff := cmp.Diff(want, cfg); diff != "" {
 		t.Errorf("config (-want +got):\n%s", diff)
-	}
-	if cfg.Schedule.DetailTimeout != 5*time.Minute {
-		t.Errorf("got detail_timeout %v, want 5m", cfg.Schedule.DetailTimeout)
 	}
 }
 
