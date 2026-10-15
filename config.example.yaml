@@ -10,3 +10,6 @@ devices:
     mac: "AA:BB:CC:DD:EE:01"
     rotation: 0
     pages: [hello]
+
+renderer:
+  watch: true   # rebuild pages on change; reload the browser to see them

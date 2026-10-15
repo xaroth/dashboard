@@ -15,6 +15,7 @@ type Config struct {
 	Timezone  string               `yaml:"timezone"`
 	DataDir   string               `yaml:"data_dir"`
 	Schedule  Schedule             `yaml:"schedule"`
+	Renderer  RendererConfig       `yaml:"renderer"`
 	Modules   map[string]yaml.Node `yaml:"modules"`
 	Devices   map[string]Device    `yaml:"devices"`
 }
@@ -28,6 +29,15 @@ type Schedule struct {
 	FirstWake     string        `yaml:"first_wake"`
 	LastWake      string        `yaml:"last_wake"`
 	DetailTimeout time.Duration `yaml:"detail_timeout"`
+}
+
+// RendererConfig is how the Bun render process is started.
+type RendererConfig struct {
+	Bun string `yaml:"bun"`
+	// Dir holds renderer/, pages/, fonts/ and node_modules.
+	Dir string `yaml:"dir"`
+	// Watch rebuilds pages on change, for development.
+	Watch bool `yaml:"watch"`
 }
 
 type Device struct {
@@ -45,6 +55,7 @@ func DefaultConfig() Config {
 		Timezone: "Europe/Amsterdam",
 		DataDir:  "/data",
 		Schedule: Schedule{FirstWake: "07:00", LastWake: "00:00", DetailTimeout: 5 * time.Minute},
+		Renderer: RendererConfig{Bun: "bun", Dir: "."},
 	}
 }
 

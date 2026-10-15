@@ -1,16 +1,22 @@
 package service_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/png"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/xaroth/dashboard/service"
+	"github.com/xaroth/dashboard/service/render"
 )
 
 // freeAddr returns an address that was free a moment ago.
@@ -24,20 +30,77 @@ func freeAddr(tb testing.TB) string {
 	return l.Addr().String()
 }
 
-func newService(tb testing.TB, device, admin string) *service.Service {
-	tb.Helper()
+// stubRenderer has one page, hello, and renders a white image.
+type stubRenderer struct{ closed atomic.Bool }
+
+func (s *stubRenderer) Describe(context.Context) ([]render.PageInfo, string, error) {
+	return []render.PageInfo{{Name: "hello"}}, "v1", nil
+}
+
+func (s *stubRenderer) Render(_ context.Context, _ string, vp render.Viewport, _ any) ([]byte, error) {
+	var buf bytes.Buffer
+	err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, vp.Width, vp.Height)))
+	return buf.Bytes(), err
+}
+
+func (s *stubRenderer) Hash() string { return "v1" }
+
+func (s *stubRenderer) Close() error {
+	s.closed.Store(true)
+	return nil
+}
+
+func testConfig(device, admin string) service.Config {
 	cfg := service.DefaultConfig()
 	cfg.Listen = service.Listen{Device: device, Admin: admin}
-	s, err := service.New(cfg, slog.New(slog.DiscardHandler))
+	cfg.Devices = map[string]service.Device{"hallway": {MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello"}}}
+	return cfg
+}
+
+func newService(tb testing.TB, cfg service.Config) (*service.Service, *stubRenderer) {
+	tb.Helper()
+	stub := &stubRenderer{}
+	s, err := service.New(tb.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub))
 	if err != nil {
 		tb.Fatalf("New: %v", err)
 	}
-	return s
+	return s, stub
+}
+
+func TestNewRejectsUnknownPage(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig("", "")
+	cfg.Devices["hallway"] = service.Device{MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello", "nope"}}
+	stub := &stubRenderer{}
+	_, err := service.New(t.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub))
+	if err == nil || !strings.Contains(err.Error(), `"nope"`) {
+		t.Errorf("got %v, want error naming the missing page", err)
+	}
+	if !stub.closed.Load() {
+		t.Error("renderer not closed after failed New")
+	}
+}
+
+func TestDevicePreview(t *testing.T) {
+	t.Parallel()
+	s, _ := newService(t, testConfig("", ""))
+	rec := httptest.NewRecorder()
+	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/preview/hallway/hello.png?model=reterminal_e1003", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %s, want 200", rec.Code, rec.Body)
+	}
+	cfg, err := png.DecodeConfig(rec.Body)
+	if err != nil {
+		t.Fatalf("decoding png: %v", err)
+	}
+	if cfg.Width != 1872 || cfg.Height != 1404 {
+		t.Errorf("got %dx%d, want 1872x1404", cfg.Width, cfg.Height)
+	}
 }
 
 func TestHealthz(t *testing.T) {
 	t.Parallel()
-	s := newService(t, "", "")
+	s, _ := newService(t, testConfig("", ""))
 	rec := httptest.NewRecorder()
 	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
@@ -47,7 +110,7 @@ func TestHealthz(t *testing.T) {
 
 func TestRunStopsOnCancel(t *testing.T) {
 	t.Parallel()
-	s := newService(t, freeAddr(t), freeAddr(t))
+	s, stub := newService(t, testConfig(freeAddr(t), freeAddr(t)))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- s.Run(ctx) }()
@@ -56,6 +119,9 @@ func TestRunStopsOnCancel(t *testing.T) {
 	case err := <-done:
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
+		}
+		if !stub.closed.Load() {
+			t.Error("renderer not closed after Run")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
@@ -69,7 +135,7 @@ func TestRunFailsOnBindError(t *testing.T) {
 		t.Fatalf("listening: %v", err)
 	}
 	defer l.Close()
-	s := newService(t, l.Addr().String(), freeAddr(t))
+	s, _ := newService(t, testConfig(l.Addr().String(), freeAddr(t)))
 	done := make(chan error, 1)
 	go func() { done <- s.Run(t.Context()) }()
 	select {
