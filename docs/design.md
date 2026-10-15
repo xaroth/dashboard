@@ -152,25 +152,27 @@ Dependencies come through the context: `modules.Database(ctx)`, `modules.Logger(
 
 ## Storage
 
-One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo. It supports every pragma below and keeps the Go binary static; a cgo driver would add a C toolchain to the build for no requirement we have.
+One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo, static binary.
 
 ### SQL files
 
-SQL lives in `.sql` files next to the code that owns it, as in yulai:
+SQL lives in `.sql` files next to the code that owns it:
 
 ```
 service/storage/sql/migrations/00001_state.sql
 service/storage/sql/queries.sql
 modules/weather/sql/migrations/00001_init.sql
 modules/weather/sql/queries.sql
+sqlc.yaml                       one entry per owner
 ```
 
 - **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. The service runs the storage migrations, then each registered module's, before any `Initialize`. A failing migration stops startup.
-- **Queries** are written in `queries.sql` and turned into Go by sqlc (one `sqlc.yaml` entry per owner, schema = that owner's migrations). Generated files are committed; CI checks they are up to date (`sqlc diff`).
-- **Tables** are prefixed with their owner (`weather_locations`, `p1_samples`). An owner never reads or writes another owner's tables; shared data goes through the service (state, series).
-- **Times** are `TEXT` in RFC 3339, written in UTC.
+- **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`sqlc diff`).
+- **Tables** are prefixed with their owner (`weather_locations`). An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state, and series through `modules.Series(ctx)` for writes (buffered) and reads (bucketed, picking the rollup).
+- **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Anything sampled every minute goes through the series buffer, so it lands in the minute flush.
+- **Times** are `TIMESTAMP` columns in UTC, stored as SQLite date text (driver option `_time_format=sqlite`), so SQLite's date functions work on them. Series use integer Unix seconds to keep rows small.
 
-Registration hands the migrations to the service:
+Registration hands the migrations to the service; `WithMigrations` takes the embedded FS and uses its `sql/migrations` directory as the goose root:
 
 ```go
 //go:embed sql/migrations/*.sql
@@ -183,9 +185,10 @@ var _ = modules.Register[module, config]("weather", defaultConfig,
 
 ### Connections
 
-- One writer connection (`MaxOpenConns(1)`), used by `Update`, the minute flush, rollups and migrations.
-- A reader pool opened with `query_only(1)`, used by query functions. `modules.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
-- Pragmas on every connection: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB), `mmap_size=268435456` (256 MB). `page_size=16384` is set before the first table is created.
+- **Page size**: on a new file, `page_size=16384` runs on its own connection before the switch to WAL, which writes it into the header; after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
+- **Writer**: one connection (`MaxOpenConns(1)`), used by `Update`, the minute flush, rollups and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
+- **Reader**: a pool of 4 opened with `query_only(1)` after migrations, used by query functions. `modules.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
+- DSN pragmas apply to every new pooled connection: `journal_mode=WAL` (writer), `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared).
 
 ### Write load
 
@@ -210,7 +213,7 @@ Modules that need more (caches, tokens, history) define their own tables in thei
 
 ### Time series
 
-For P1 and solar history graphs and device battery. Schema `series(name, ts, value)` with rollup tables at 5 minutes, 1 hour and 1 day. Retention: raw 7 days, 5-minute 90 days, hourly and daily forever. Queries pick the coarsest resolution that still fills the graph.
+For P1 and solar history graphs and device battery. Schema `series(name, ts, value)` with `ts` in Unix seconds, with rollup tables at 5 minutes, 1 hour and 1 day. Retention: raw 7 days, 5-minute 90 days, hourly and daily forever. Queries pick the coarsest resolution that still fills the graph.
 
 Each series declares a kind, which decides rollups and usage:
 
@@ -353,14 +356,14 @@ var _ = modules.Register[module, config](
 )
 
 func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
-	q := p1sql.New(modules.Database(ctx)) // sqlc, read-only connection
-	// bucketed averages over p.Range at p.Step
+	// series are service-owned; the service picks the rollup and buckets
+	return modules.Series(ctx).Query(ctx, "p1.power_import", p.Range, p.Step)
 }
 ```
 
 - Params are decoded from the page header into the query's own struct; unknown keys and bad values fail at startup, not at render.
 - Results are plain structs that serialize to JSON; TypeScript types for them are generated (see [Types](#types)).
-- Queries read storage only, never the source.
+- Queries read storage only, never the source: their own tables through sqlc on the read-only connection, series through `modules.Series(ctx)`.
 
 ### Data volume
 
@@ -412,7 +415,7 @@ Each step has its own test with no network:
 | --- | --- | --- |
 | Module `Update` | `go test` | `httptest` fake of the source, assert on stored state and series |
 | Queries | `go test` | storage in a temp dir with migrations applied, seeded with inserts, `cmp.Diff` on the returned struct |
-| Migrations | `go test` | every owner's migrations apply to an empty database |
+| Migrations | `go test` | all owners' migrations applied together to one empty database, so table name collisions show |
 | Pipeline | `go test` | fake renderer and queries, including failing and stale ones |
 | Formatting, chart math | `bun test` | table tests on pure functions |
 | Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered, reduced to 4 grays, compared to a golden PNG with a small pixel tolerance; a mismatch writes a diff image. Goldens are regenerated deliberately on Takumi or font upgrades. |
