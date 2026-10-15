@@ -14,7 +14,9 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	_ "github.com/xaroth/dashboard/modules"
 	"github.com/xaroth/dashboard/service/device"
+	"github.com/xaroth/dashboard/service/modules"
 	"github.com/xaroth/dashboard/service/render"
 	"github.com/xaroth/dashboard/service/storage"
 	"github.com/xaroth/dashboard/service/web"
@@ -31,11 +33,18 @@ type Service struct {
 	log      *slog.Logger
 	renderer Renderer
 	db       *storage.DB
+	modules  *modules.Set
+	regs     []modules.Registration
 	device   *http.ServeMux
 	admin    *http.ServeMux
 }
 
 type Option func(*Service)
+
+// WithRegistrations replaces the registered modules.
+func WithRegistrations(regs ...modules.Registration) Option {
+	return func(s *Service) { s.regs = regs }
+}
 
 // WithRenderer replaces the Bun render process.
 func WithRenderer(r Renderer) Option {
@@ -48,6 +57,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	s := &Service{
 		cfg:    cfg,
 		log:    log,
+		regs:   modules.Registered(),
 		device: http.NewServeMux(),
 		admin:  http.NewServeMux(),
 	}
@@ -65,6 +75,17 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	}()
 	if s.db, err = storage.Open(ctx, cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("opening storage: %w", err)
+	}
+	s.modules, err = modules.Load(ctx, modules.Options{
+		Registrations: s.regs,
+		Configs:       cfg.Modules,
+		DB:            s.db,
+		Log:           log,
+		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+		Now:           time.Now,
+	})
+	if err != nil {
+		return nil, err
 	}
 	if s.renderer == nil {
 		cmd := []string{cfg.Renderer.Bun, "renderer/main.ts", "--pages", "pages", "--fonts", "fonts"}
@@ -108,6 +129,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	webHandler := &web.Handler{
 		Pipeline:  pipeline,
 		Devices:   devices,
+		Modules:   s.modules,
 		DeviceAPI: s.device,
 		Log:       log.With("component", "web"),
 	}
@@ -126,6 +148,10 @@ func (s *Service) Admin() http.Handler { return s.admin }
 func (s *Service) Run(ctx context.Context) error {
 	defer s.close()
 	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		s.modules.Run(ctx)
+		return nil
+	})
 	s.serve(ctx, g, "device", s.cfg.Listen.Device, s.device)
 	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.admin)
 	return g.Wait()
