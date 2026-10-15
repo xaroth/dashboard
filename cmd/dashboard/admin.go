@@ -49,9 +49,9 @@ func (h *adminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /simulate/{device}", h.simulatePage)
 	mux.HandleFunc("POST /simulate/{device}/wake", h.simulateWake)
 	mux.Handle("GET /images/{file}", h.DeviceAPI)
-	mux.HandleFunc("GET /preview/page/{file}", h.previewPage)
-	mux.HandleFunc("GET /preview/{device}/{file}", h.previewDevice)
-	mux.HandleFunc("GET /preview/{device}/{page}/props.json", h.previewProps)
+	mux.HandleFunc("GET /preview/page/{layout}/{file}", h.previewPage)
+	mux.HandleFunc("GET /preview/{device}/{layout}/{file}", h.previewDevice)
+	mux.HandleFunc("GET /preview/{device}/{layout}/{page}/props.json", h.previewProps)
 }
 
 //go:embed index.html
@@ -95,7 +95,7 @@ func (h *adminHandler) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminHandler) previewPage(w http.ResponseWriter, r *http.Request) {
-	page, ok := strings.CutSuffix(r.PathValue("file"), ".png")
+	page, ok := pngPage(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -117,7 +117,7 @@ func (h *adminHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *adminHandler) previewDevice(w http.ResponseWriter, r *http.Request) {
-	page, ok := strings.CutSuffix(r.PathValue("file"), ".png")
+	page, ok := pngPage(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -136,7 +136,7 @@ func (h *adminHandler) previewProps(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	props, err := h.Pipeline.Props(r.Context(), t, r.PathValue("page"))
+	props, err := h.Pipeline.Props(r.Context(), t, r.PathValue("layout")+"/"+r.PathValue("page"))
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -145,6 +145,12 @@ func (h *adminHandler) previewProps(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.Encode(props)
+}
+
+// pngPage is the page name from a {layout}/{file} path ending in .png.
+func pngPage(r *http.Request) (string, bool) {
+	file, ok := strings.CutSuffix(r.PathValue("file"), ".png")
+	return r.PathValue("layout") + "/" + file, ok
 }
 
 // target resolves the device in the path; ?model= overrides its model.

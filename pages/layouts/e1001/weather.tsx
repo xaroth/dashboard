@@ -1,7 +1,7 @@
-import { LineChart } from "./components/LineChart";
-import { formatDayShort, formatMillimeters, formatTemperature, formatTime } from "./lib/format";
-import { query, type PageProps } from "./lib/page";
-import { weatherLabel, windDirection } from "./lib/weather";
+import { LineChart } from "../../components/LineChart";
+import { formatDayShort, formatMillimeters, formatTemperature, formatTime } from "../../lib/format";
+import { query, type PageProps } from "../../lib/page";
+import { weatherLabel, windDirection } from "../../lib/weather";
 import styles from "./weather.module.css";
 
 export const data = {

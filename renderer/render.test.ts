@@ -8,7 +8,7 @@ const root = join(import.meta.dir, "..");
 
 test("bundles and renders the hello page", async () => {
   const pages = await bundlePages(join(root, "pages"));
-  const hello = pages.get("hello")!;
+  const hello = pages.get("e1001/hello")!;
   expect(hello.css).toContain("font-size");
 
   const renderer = new Renderer();
@@ -23,4 +23,11 @@ test("bundles and renders the hello page", async () => {
   expect([...png.slice(1, 4)]).toEqual([80, 78, 71]);
   const view = new DataView(png.buffer, png.byteOffset);
   expect([view.getUint32(16), view.getUint32(20)]).toEqual([800, 480]);
+});
+
+test("pages with the same name in two layouts stay apart", async () => {
+  const pages = await bundlePages(join(import.meta.dir, "testdata/same-name"));
+  expect([...pages.keys()]).toEqual(["large/home", "small/home"]);
+  expect(pages.get("small/home")!.css).toContain("1px");
+  expect(pages.get("large/home")!.css).toContain("2px");
 });

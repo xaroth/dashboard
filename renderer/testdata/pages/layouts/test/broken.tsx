@@ -1,4 +1,4 @@
-import { query } from "../../../pages/lib/page";
+import { query } from "../../../../../pages/lib/page";
 
 export const data = { forecast: query("weather.forecast", { hours: 2 }) };
 

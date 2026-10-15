@@ -109,7 +109,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	var configs []device.Config
 	for name, d := range cfg.Devices {
 		mac, _ := device.NormalizeMAC(d.MAC) // validated with the config
-		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.Pages, Params: d.Params})
+		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.pages(), Params: d.params()})
 	}
 	devices := device.New(device.Options{
 		Devices:   configs,
@@ -168,13 +168,13 @@ func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) err
 	}
 	for name, d := range s.cfg.Devices {
 		for _, page := range d.Pages {
-			if _, ok := pages[page]; !ok {
-				return fmt.Errorf("devices.%s: page %q does not exist (have %v)", name, page, names)
+			if _, ok := pages[d.Layout+"/"+page]; !ok {
+				return fmt.Errorf("devices.%s: page %q does not exist in layout %s (have %v)", name, page, d.Layout, names)
 			}
 		}
 		for ref, override := range d.Params {
 			page, key, _ := strings.Cut(ref, ".")
-			q, ok := pages[page].Data[key]
+			q, ok := pages[d.Layout+"/"+page].Data[key]
 			if !ok {
 				return fmt.Errorf("devices.%s.params: %q is not a page data key (page.key)", name, ref)
 			}
