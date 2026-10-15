@@ -71,6 +71,9 @@ func defaultConfig() *config {
 	return &config{Location: "Amsterdam, The Netherlands"}
 }
 
+// Initialize geocodes Location through Open-Meteo once and caches the
+// coordinates in state; a changed Location triggers a new lookup.
+
 type module struct {
 	cfg *config
 }
@@ -117,16 +120,15 @@ Optional, detected by interface assertion:
 
 | Method | Purpose |
 | --- | --- |
-| `View(ctx) (any, error)` | Template-facing object for this module. Its methods are called from templates and read storage lazily (see [Rendering](#rendering)). Never touches the network. |
 | `Routes(mux *http.ServeMux)` | Handlers mounted under `/modules/<name>/` on the admin listener: OAuth redirect/callback, login forms, debug pages. |
 
-Options: `WithUpdateInterval`, `WithStaleAfter`, `WithActiveHours` (e.g. car only 06:00-23:00 to spare the Bluelink quota). Config can override each.
+Options: `WithUpdateInterval`, `WithStaleAfter`, `WithActiveHours` (e.g. car only 06:00-23:00 to spare the Bluelink quota), and `WithQuery` to expose data to pages (see [Queries](#queries)). Config can override the timing options.
 
-Update and View are split so a slow or failing source never blocks a screen: pages render from the last stored data.
+Update and queries are split so a slow or failing source never blocks a screen: pages render from the last stored data.
 
 ### Dependencies
 
-The proposal above passes dependencies through the context (`modules.Database(ctx)`, likewise logger, HTTP client, clock). Alternative: a typed `*modules.Host` argument to `Initialize` holding the same dependencies, kept on the module struct. It makes dependencies visible in signatures and avoids a runtime lookup that can panic when missing. To decide.
+Dependencies come through the context: `modules.Database(ctx)`, `modules.Logger(ctx)`, `modules.HTTPClient(ctx)`, `modules.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. Tests build a context with fakes through the same setters.
 
 ## Storage
 
@@ -136,7 +138,7 @@ One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), n
 
 Two ways to keep most data in memory with periodic disk writes:
 
-1. **On-disk SQLite tuned for memory** (proposed): WAL mode, `synchronous=NORMAL`, a large page cache and `mmap_size`, so reads are served from memory. Writes are buffered in the service (e.g. P1 samples) and flushed in one transaction per minute. A crash loses at most the unflushed buffer; the file is always consistent.
+1. **On-disk SQLite tuned for memory** (chosen): WAL mode, `synchronous=NORMAL`, a large page cache and `mmap_size`, so reads are served from memory. Writes are buffered in the service (e.g. P1 samples) and flushed in one transaction per minute. A crash loses at most the unflushed buffer; the file is always consistent.
 2. **In-memory database** with a periodic snapshot to disk (`VACUUM INTO` or the backup API). Fastest, but a crash loses everything since the last snapshot, and startup loads the snapshot back.
 
 Data volume either way: tens of MB per year.
@@ -217,22 +219,90 @@ Health reaches people through the screens: every page gets `.System` with this d
 
 ## Rendering
 
+### Page files
+
+A page is one file: a YAML header declaring the data it needs, then the template. The template only presents; it never fetches.
+
+```html
+---
+data:
+  weather: weather.forecast {days: 3}
+  power:   p1.power         {range: 24h, step: 5m}
+  solar:   solar.production {range: 24h, step: 5m}
+  events:  calendar.upcoming {limit: 5}
+---
+<div class="screen">
+  {{ with .Data.weather }}{{ .Value.Current.Temperature | temp }}{{ end }}
+  {{ chart "area" .Data.power.Value .Viewport.Width 200 }}
+</div>
+```
+
+Each `data` entry is `<key>: <module>.<query> {params}`. The header shows a reader, human or agent, exactly what the page depends on.
+
+### Queries
+
+Modules expose named, typed queries; this is how stored data reaches templates.
+
+```go
+type powerParams struct {
+	Range time.Duration `yaml:"range"`
+	Step  time.Duration `yaml:"step"`
+}
+
+var _ = modules.Register[module, config](
+	"p1",
+	defaultConfig,
+	modules.WithQuery("power", (*module).power),
+)
+
+func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
+	db := modules.Database(ctx)
+	// SELECT bucketed averages over p.Range at p.Step
+}
+```
+
+- Params are decoded from the page header into the query's own struct; unknown keys and bad values fail at startup, not at render.
+- Results are plain structs that serialize to JSON. No methods are needed in templates.
+- Queries read storage only, never the source.
+
+### Data volume
+
+24 hours of one-minute samples is 1,440 points per series; P1 import, P1 export and solar together are ~4,300. The E1001 is 800 pixels wide, so more points than pixels add nothing. Series queries take a `step` and bucket in SQL (average for power, last value for meter readings): 5 minutes gives 288 points per series. Rollup tables serve longer ranges. A chart helper given more points than its pixel width buckets again, so the SVG stays small whatever the query returns.
+
 ### Pipeline
 
-1. **Select**: device, page and viewport from the request.
-2. **Execute template**: Go `html/template` with root data `.Device`, `.Viewport`, `.System`, `.Now`. Module data is pulled during execution: `{{ with module "weather" }}{{ .Current.Temperature }}{{ end }}`. `module` returns the module's `View` object; its methods can take arguments and query storage on demand, e.g. `{{ (module "p1").Usage "24h" }}`.
-3. **Hash**: hash the HTML output. Same hash as the last render for this device and page: reuse the PNG, the device skips the redraw.
-4. **Render**: Takumi CLI (subprocess, spike in commit `8da478f`: 12-35 ms) turns HTML + CSS into a PNG at the viewport size.
-5. **Reduce**: rotate if needed, map to the panel's gray levels (4 or 16), encode a 2- or 4-bit PNG.
+1. **Load** (startup, and per request in preview): parse page files, resolve each `module.query`, decode params. Errors stop startup.
+2. **Resolve**: run the page's queries concurrently with a timeout. Each result is `{Value, FetchedAt, Stale, Error}`; one failing query yields an error entry, not a failed page.
+3. **Execute**: `html/template` with `.Data`, `.Device`, `.Viewport`, `.System`, `.Now`.
+4. **Hash**: hash the HTML. Same as last time for this device and page: reuse the PNG; the device skips the redraw.
+5. **Render**: Takumi CLI (subprocess, spike in commit `8da478f`: 12-35 ms) at the viewport size.
+6. **Reduce**: rotate if needed, map to 4 or 16 grays, encode a 2- or 4-bit PNG.
 
-Executing a template costs milliseconds, so hashing its output is the simplest correct cache key: anything that changes the screen changes the hash.
+### Helpers
 
-### Templates
+Pure functions, data in and string out: formatting (Dutch decimal comma, day and month names, Europe/Amsterdam, durations, "updated at" labels) and charts (`line`, `area`, `bar`, `sparkline` as inline SVG). Takumi's support for inline `<svg>` versus an `<img>` data URI is to verify.
 
-- Embedded in the binary as defaults (`embed.FS`), overridable by a `templates_dir` on the config mount. The override wins per file, so one page can be edited without rebuilding the image. Preview requests reload templates from disk.
-- Shared helpers: Dutch formatting (decimal comma, day and month names, Europe/Amsterdam), durations, freshness labels.
-- Graphs: helpers that turn a series query into inline SVG (line, bar, sparkline). Takumi's support for inline `<svg>` versus SVG as `<img>` data URI is to verify.
-- Fonts bundled in the image.
+### Testing
+
+Each step has its own test with no network:
+
+| What | How |
+| --- | --- |
+| Module `Update` | `httptest` fake of the source, assert on stored state and series |
+| Queries | seeded storage, `cmp.Diff` on the returned struct |
+| Chart and format helpers | table tests, golden SVG |
+| Pages | fixture data (`testdata/<page>.json`) through execute + render, compared to a golden PNG |
+| Pipeline | fake queries, including failing and stale ones |
+
+Fixtures come from the live service: the preview serves the resolved data as JSON (`/preview/{device}/{page}/data.json`), saved as-is into `testdata/`. A golden PNG test fails with the path of a diff image.
+
+### Templates on disk
+
+Embedded in the binary as defaults (`embed.FS`), overridable per file by a `templates_dir` on the config mount. Preview requests reload from disk.
+
+### Fonts
+
+Bundled in the image.
 
 ## Web UI
 
@@ -243,7 +313,9 @@ On a separate admin listener, so only the device listener faces the IoT network.
 | `GET /` | Devices, pages, module status (last update, errors), pending devices |
 | `GET /preview/{device}/{page}.png` | Exactly what the device gets |
 | `GET /preview/{device}/{page}.html` | The HTML fed to the renderer (browser rendering may differ from Takumi) |
+| `GET /preview/{device}/{page}/data.json` | The resolved query results, as fed to the template; saved as test fixtures |
 | `GET /preview/page/{page}.png?model=...&rotation=...` | A page on a panel without a device |
+| `GET /queries` | Every registered query with its params and a sample result |
 | `/modules/{name}/...` | Module routes, e.g. `/modules/car/login` |
 | `GET /healthz` | Liveness |
 
@@ -265,7 +337,7 @@ schedule:
 
 modules:
   weather:
-    location: "Amsterdam, The Netherlands"
+    location: "Amsterdam, The Netherlands"   # geocoded once, coordinates cached in state
   p1:
     url: http://192.168.1.20
   calendar:
@@ -292,7 +364,5 @@ Runtime state (OAuth tokens, device API keys) lives in the database, not the con
 
 ## Open questions
 
-1. Module dependencies: through the context, or a typed `*modules.Host` argument?
-2. Storage: on-disk SQLite tuned for memory, or in-memory with snapshots?
-3. Weather location as a place name needs geocoding (Open-Meteo has a free geocoding API), resolved once at `Initialize`. Or configure coordinates directly?
-4. Buttons and rotation direction: to verify on hardware.
+1. Buttons and rotation direction: to verify on hardware.
+2. Takumi: inline `<svg>` support.
