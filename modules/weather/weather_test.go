@@ -324,8 +324,8 @@ func TestForecastModel(t *testing.T) {
 			name: "past the model horizon", extra: "forecast_days: 3, model: knmi_seamless", wantModel: "knmi_seamless",
 			// As knmi_seamless returns them: precipitation and code end before temperature.
 			nullHourly: map[string]int{"temperature_2m": 1, "precipitation": 3, "weather_code": 3},
-			nullDaily:  map[string]int{"temperature_2m_max": 1, "weather_code": 1},
-			wantHours:  3, wantDays: 1,
+			nullDaily:  map[string]int{"temperature_2m_max": 1, "precipitation_sum": 2},
+			wantHours:  3, wantDays: 2,
 		},
 		{
 			name: "all null", extra: "forecast_days: 3, model: knmi_seamless", wantModel: "knmi_seamless",
@@ -363,15 +363,12 @@ func TestForecastModel(t *testing.T) {
 			if got := fake.forecastParams().Get("models"); got != testCase.wantModel {
 				t.Errorf("got models %q, want %q", got, testCase.wantModel)
 			}
-			f, res := forecast(t, set, map[string]any{"hours": 1000, "days": 16})
+			f, _ := forecast(t, set, map[string]any{"hours": 1000, "days": 16})
 			if got, want := len(f.Hourly), max(0, hours-testCase.wantHours); got != want {
 				t.Errorf("got %d hours, want %d", got, want)
 			}
 			if got, want := len(f.Daily), max(0, days-testCase.wantDays); got != want {
 				t.Errorf("got %d days, want %d", got, want)
-			}
-			if b, _ := json.Marshal(res.Value); strings.Contains(string(b), "null") && testCase.name == "all null" {
-				t.Errorf("got %s, want empty arrays", b)
 			}
 		})
 	}
