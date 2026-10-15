@@ -258,7 +258,7 @@ TRMNL BYOS, on the device listener:
 
 ### Health
 
-Recorded per request: battery voltage (also as a series), charging, RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage through a resting-voltage table per model (the firmware measures before Wi-Fi and the display draw current).
+Recorded per request: battery voltage (also as a series), charging (`Battery-Charging`), USB connected (`USB-Connected`), RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage through a resting-voltage table per model (the firmware measures before Wi-Fi and the display draw current).
 
 Health reaches people through the screens: every page gets a `system` prop with this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
 
