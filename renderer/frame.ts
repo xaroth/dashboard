@@ -4,6 +4,8 @@
 export type Frame = { header: Record<string, unknown>; body?: Uint8Array };
 
 const maxHeader = 16 << 20;
+// Matches maxPNG on the Go side.
+const maxBody = 64 << 20;
 
 export function encodeFrame(header: Record<string, unknown>, body?: Uint8Array): Uint8Array {
   const json = new TextEncoder().encode(JSON.stringify(body ? { ...header, png: body.length } : header));
@@ -31,7 +33,13 @@ export class FrameReader {
     const json = await this.read(n);
     if (!json) throw new Error("stream ended inside a frame");
     const header = JSON.parse(new TextDecoder().decode(json));
-    if (typeof header.png !== "number") return { header };
+    if (typeof header !== "object" || header === null || Array.isArray(header)) {
+      throw new Error("frame header is not an object");
+    }
+    if (header.png === undefined) return { header };
+    if (!Number.isInteger(header.png) || header.png < 0 || header.png > maxBody) {
+      throw new Error(`invalid frame body length: ${header.png}`);
+    }
     const body = await this.read(header.png);
     if (!body) throw new Error("stream ended inside a frame body");
     return { header, body };

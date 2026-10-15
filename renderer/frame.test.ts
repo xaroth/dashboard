@@ -36,6 +36,21 @@ test("truncated frame is an error", async () => {
   expect(r.next()).rejects.toThrow("ended inside");
 });
 
+test("malformed header is an error", async () => {
+  for (const [header, want] of [
+    ["null", "not an object"],
+    ['{"png":-1}', "body length"],
+    ['{"png":1.5}', "body length"],
+    [`{"png":${(64 << 20) + 1}}`, "body length"],
+  ]) {
+    const json = new TextEncoder().encode(header);
+    const f = new Uint8Array(4 + json.length);
+    new DataView(f.buffer).setUint32(0, json.length);
+    f.set(json, 4);
+    expect(new FrameReader(streamOf(f, 1000)).next()).rejects.toThrow(want);
+  }
+});
+
 // Shared with service/render/frame_internal_test.go.
 const vectorRequest = "000000187b226964223a312c226f70223a226465736372696265227d";
 const vectorResponse = "0000001b7b226964223a322c2268617368223a2268222c22706e67223a337d010203";
