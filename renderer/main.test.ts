@@ -37,3 +37,29 @@ test("process answers describe and render over frames", async () => {
   proc.stdin.end();
   expect(await proc.exited).toBe(0);
 }, 20000);
+
+test("a throwing page with stray output yields an error frame and the process keeps serving", async () => {
+  const proc = Bun.spawn(["bun", join(root, "renderer/main.ts"), "--pages", join(root, "renderer/testdata/pages"), "--fonts", join(root, "fonts")], {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const reader = new FrameReader(proc.stdout);
+  const vp = { width: 100, height: 100, portrait: false };
+
+  for (const id of [1, 2]) {
+    proc.stdin.write(encodeFrame({ id, op: "render", page: "broken", viewport: vp, props: {} }));
+    proc.stdin.flush();
+    expect((await reader.next())!.header).toMatchObject({ id, error: "boom" });
+  }
+
+  proc.stdin.write(encodeFrame({ id: 3, op: "describe" }));
+  proc.stdin.flush();
+  expect((await reader.next())!.header.pages).toEqual([
+    { name: "broken", data: { power: { module: "p1", query: "power", params: { range: "24h" } } } },
+  ]);
+
+  proc.stdin.end();
+  expect(await proc.exited).toBe(0);
+  expect(await new Response(proc.stderr).text()).toContain("stray output");
+}, 20000);
