@@ -104,8 +104,9 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) error {
 	at := s.now()
 	q := storage.New(s.db.Writer)
 	if err == nil {
+		// The update itself worked; a failed write here is not a source failure to back off from.
 		if err := q.RecordSuccess(ctx, storage.RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
-			return fmt.Errorf("recording update: %w", err)
+			inst.log.Error("recording update", "err", err)
 		}
 		return nil
 	}

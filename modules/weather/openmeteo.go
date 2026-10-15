@@ -46,7 +46,7 @@ type Current struct {
 type Hour struct {
 	Time                     time.Time `json:"time"`
 	Temperature              float64   `json:"temperature"`
-	PrecipitationProbability int       `json:"precipitationProbability"` // %
+	PrecipitationProbability *int      `json:"precipitationProbability"` // %, null where the model has none
 	Precipitation            float64   `json:"precipitation"`            // mm
 	WeatherCode              int       `json:"weatherCode"`
 }
@@ -57,7 +57,7 @@ type Day struct {
 	TemperatureMax              float64   `json:"temperatureMax"`
 	TemperatureMin              float64   `json:"temperatureMin"`
 	PrecipitationSum            float64   `json:"precipitationSum"`
-	PrecipitationProbabilityMax int       `json:"precipitationProbabilityMax"`
+	PrecipitationProbabilityMax *int      `json:"precipitationProbabilityMax"` // null where the model has none
 	Sunrise                     time.Time `json:"sunrise"`
 	Sunset                      time.Time `json:"sunset"`
 }
@@ -116,7 +116,7 @@ func fetchForecast(ctx context.Context, base string, loc Location, days int) (Fo
 		Hourly struct {
 			Time                     []int64   `json:"time"`
 			Temperature              []float64 `json:"temperature_2m"`
-			PrecipitationProbability []int     `json:"precipitation_probability"`
+			PrecipitationProbability []*int    `json:"precipitation_probability"`
 			Precipitation            []float64 `json:"precipitation"`
 			WeatherCode              []int     `json:"weather_code"`
 		} `json:"hourly"`
@@ -126,7 +126,7 @@ func fetchForecast(ctx context.Context, base string, loc Location, days int) (Fo
 			TemperatureMax              []float64 `json:"temperature_2m_max"`
 			TemperatureMin              []float64 `json:"temperature_2m_min"`
 			PrecipitationSum            []float64 `json:"precipitation_sum"`
-			PrecipitationProbabilityMax []int     `json:"precipitation_probability_max"`
+			PrecipitationProbabilityMax []*int    `json:"precipitation_probability_max"`
 			Sunrise                     []int64   `json:"sunrise"`
 			Sunset                      []int64   `json:"sunset"`
 		} `json:"daily"`

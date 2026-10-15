@@ -34,6 +34,25 @@ type fakeOpenMeteo struct {
 	forecastBody []byte
 }
 
+func (f *fakeOpenMeteo) geocodeCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.geocodes
+}
+
+func (f *fakeOpenMeteo) forecastParams() url.Values {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.forecast
+}
+
+// serve replaces the forecast response.
+func (f *fakeOpenMeteo) serve(body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forecastBody = body
+}
+
 func newFake(tb testing.TB) *fakeOpenMeteo {
 	tb.Helper()
 	geocode, err := os.ReadFile("testdata/geocode.json")
@@ -81,6 +100,11 @@ func registration(tb testing.TB) modules.Registration {
 // load loads the weather module against the fake, with the given extra config keys.
 func load(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string) *modules.Set {
 	tb.Helper()
+	return loadAt(tb, dir, fake, extra, fixtureNow)
+}
+
+func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now time.Time) *modules.Set {
+	tb.Helper()
 	db, err := storage.Open(tb.Context(), dir)
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
@@ -97,7 +121,7 @@ func load(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string) *modules
 		DB:            db,
 		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    fake.Client(),
-		Now:           func() time.Time { return fixtureNow },
+		Now:           func() time.Time { return now },
 	})
 	if err != nil {
 		tb.Fatalf("Load: %v", err)
@@ -128,7 +152,7 @@ func TestUpdateAndForecast(t *testing.T) {
 		"timeformat": {"unixtime"}, "forecast_days": {"3"}, "wind_speed_unit": {"kmh"},
 	}
 	for k, v := range want {
-		if diff := cmp.Diff(v, fake.forecast[k]); diff != "" {
+		if diff := cmp.Diff(v, fake.forecastParams()[k]); diff != "" {
 			t.Errorf("forecast param %s (-want +got):\n%s", k, diff)
 		}
 	}
@@ -200,16 +224,16 @@ func TestGeocodeCached(t *testing.T) {
 	if err := set.Update(t.Context(), "weather"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if fake.geocodes != 1 {
-		t.Errorf("got %d geocode calls, want 1", fake.geocodes)
+	if fake.geocodeCalls() != 1 {
+		t.Errorf("got %d geocode calls, want 1", fake.geocodeCalls())
 	}
 	// A different location is looked up again.
 	set = load(t, dir, fake, `location: "Uithoorn"`)
 	if err := set.Update(t.Context(), "weather"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if fake.geocodes != 2 {
-		t.Errorf("got %d geocode calls after changing the location, want 2", fake.geocodes)
+	if fake.geocodeCalls() != 2 {
+		t.Errorf("got %d geocode calls after changing the location, want 2", fake.geocodeCalls())
 	}
 }
 
@@ -224,7 +248,7 @@ func TestUpdateErrors(t *testing.T) {
 		{"country mismatch", `location: "Uithoorn, Belgium"`, nil, "no match"},
 		{"upstream error", "", func(f *fakeOpenMeteo) { f.fail = true }, "502"},
 		{"uneven series", "", func(f *fakeOpenMeteo) {
-			f.forecastBody = []byte(`{"current":{},"hourly":{"time":[1,2],"temperature_2m":[1]},"daily":{}}`)
+			f.serve([]byte(`{"current":{},"hourly":{"time":[1,2],"temperature_2m":[1]},"daily":{}}`))
 		}, "different lengths"},
 	}
 	for _, testCase := range testCases {
@@ -264,6 +288,71 @@ func TestConfig(t *testing.T) {
 			st, err := set.Statuses(t.Context())
 			if err != nil || st[0].Phase != testCase.want {
 				t.Errorf("got %+v, %v, want phase %s", st, err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestForecastNullProbabilities(t *testing.T) {
+	t.Parallel()
+	fake := newFake(t)
+	var body map[string]any
+	if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	body["hourly"].(map[string]any)["precipitation_probability"].([]any)[1] = nil
+	body["daily"].(map[string]any)["precipitation_probability_max"].([]any)[1] = nil
+	b, _ := json.Marshal(body)
+	fake.serve(b)
+	set := load(t, t.TempDir(), fake, "forecast_days: 3")
+	if err := set.Update(t.Context(), "weather"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	f, _ := forecast(t, set, map[string]any{"hours": 2, "days": 2})
+	if f.Hourly[0].PrecipitationProbability == nil || f.Hourly[1].PrecipitationProbability != nil {
+		t.Errorf("got hourly %v, %v, want a value then null", f.Hourly[0].PrecipitationProbability, f.Hourly[1].PrecipitationProbability)
+	}
+	if f.Daily[0].PrecipitationProbabilityMax == nil || f.Daily[1].PrecipitationProbabilityMax != nil {
+		t.Errorf("got daily %v, %v, want a value then null", f.Daily[0].PrecipitationProbabilityMax, f.Daily[1].PrecipitationProbabilityMax)
+	}
+}
+
+func TestForecastWindows(t *testing.T) {
+	t.Parallel()
+	ams, _ := time.LoadLocation("Europe/Amsterdam")
+	// 25 Oct 2026 has 25 hours in Amsterdam: the clocks go back at 03:00.
+	dst := []byte(`{"current":{"time":1792879200},
+		"hourly":{"time":[],"temperature_2m":[],"precipitation_probability":[],"precipitation":[],"weather_code":[]},
+		"daily":{"time":[1792879200,1792969200],"weather_code":[3,3],"temperature_2m_max":[1,1],"temperature_2m_min":[0,0],
+			"precipitation_sum":[0,0],"precipitation_probability_max":[0,0],"sunrise":[1792908000,1792994400],"sunset":[1792944000,1793030400]}}`)
+	testCases := []struct {
+		name      string
+		body      []byte
+		now       time.Time
+		firstHour string
+		firstDay  string
+	}{
+		{"on the hour", nil, time.Date(2026, 10, 16, 1, 0, 0, 0, ams), "10-16 01:00", "10-16"},
+		{"at local midnight", nil, time.Date(2026, 10, 17, 0, 0, 0, 0, ams), "10-17 00:00", "10-17"},
+		{"late on a 25 hour day", dst, time.Date(2026, 10, 25, 23, 30, 0, 0, ams), "", "10-25"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newFake(t)
+			if testCase.body != nil {
+				fake.serve(testCase.body)
+			}
+			set := loadAt(t, t.TempDir(), fake, "forecast_days: 3", testCase.now)
+			if err := set.Update(t.Context(), "weather"); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			f, _ := forecast(t, set, map[string]any{"hours": 1, "days": 1})
+			if testCase.firstHour != "" && (len(f.Hourly) == 0 || f.Hourly[0].Time.In(ams).Format("01-02 15:04") != testCase.firstHour) {
+				t.Errorf("got hourly %v, want first %s", f.Hourly, testCase.firstHour)
+			}
+			if len(f.Daily) == 0 || f.Daily[0].Date.In(ams).Format("01-02") != testCase.firstDay {
+				t.Errorf("got daily %v, want first %s", f.Daily, testCase.firstDay)
 			}
 		})
 	}

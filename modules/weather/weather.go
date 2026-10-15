@@ -112,9 +112,17 @@ func (m *module) forecast(ctx context.Context, p forecastParams) (*Forecast, err
 	if err != nil || !ok {
 		return nil, err
 	}
+	tz, err := time.LoadLocation(f.Location.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("forecast timezone: %w", err)
+	}
 	now := modules.Clock(ctx)()
-	f.Hourly = from(f.Hourly, func(h Hour) bool { return !h.Time.Add(time.Hour).Before(now) }, cmpOr(p.Hours, 24))
-	f.Daily = from(f.Daily, func(d Day) bool { return !d.Date.AddDate(0, 0, 1).Before(now) }, cmpOr(p.Days, 3))
+	f.Hourly = from(f.Hourly, func(h Hour) bool { return now.Before(h.Time.Add(time.Hour)) }, cmpOr(p.Hours, 24))
+	// The next local midnight, not Date+24h: days are 23 or 25 hours on DST changes.
+	f.Daily = from(f.Daily, func(d Day) bool {
+		y, m, day := d.Date.In(tz).Date()
+		return now.Before(time.Date(y, m, day+1, 0, 0, 0, 0, tz))
+	}, cmpOr(p.Days, 3))
 	return &f, nil
 }
 
