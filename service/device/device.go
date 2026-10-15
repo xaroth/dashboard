@@ -51,6 +51,7 @@ type Devices struct {
 	pipeline  Pipeline
 	store     *Store
 	publicURL string
+	schedule  Schedule
 	log       *slog.Logger
 	now       func() time.Time
 
@@ -88,6 +89,7 @@ type Options struct {
 	Store    *Store
 	// PublicURL is the base of image_url, as the devices reach this service.
 	PublicURL string
+	Schedule  Schedule
 	Log       *slog.Logger
 	Now       func() time.Time
 }
@@ -97,6 +99,7 @@ func New(o Options) *Devices {
 		pipeline:  o.Pipeline,
 		store:     o.Store,
 		publicURL: strings.TrimSuffix(o.PublicURL, "/"),
+		schedule:  o.Schedule,
 		log:       o.Log,
 		now:       o.Now,
 		byMAC:     map[string]*state{},
