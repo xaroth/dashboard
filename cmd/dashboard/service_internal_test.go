@@ -206,7 +206,7 @@ func (b *blockingRenderer) Close() error {
 func TestRunCancelsRequestsAfterDrain(t *testing.T) {
 	t.Parallel()
 	admin := freeAddr(t)
-	r := &blockingRenderer{FakeRenderer: render.NewFakeRenderer(render.PageInfo{Name: "hello"}), started: make(chan struct{})}
+	r := &blockingRenderer{FakeRenderer: render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"}), started: make(chan struct{})}
 	s, err := New(t.Context(), testConfig(t, freeAddr(t), admin), slog.New(slog.DiscardHandler), WithRenderer(r))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -219,7 +219,7 @@ func TestRunCancelsRequestsAfterDrain(t *testing.T) {
 	// Polls the listener until it is up; the request then blocks in Render.
 	go func() {
 		for ctx.Err() == nil {
-			resp, err := http.Get("http://" + admin + "/preview/page/hello.png")
+			resp, err := http.Get("http://" + admin + "/preview/page/e1001/hello.png")
 			if err == nil {
 				resp.Body.Close()
 				return
