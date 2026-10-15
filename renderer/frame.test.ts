@@ -47,7 +47,7 @@ test("malformed header is an error", async () => {
     const f = new Uint8Array(4 + json.length);
     new DataView(f.buffer).setUint32(0, json.length);
     f.set(json, 4);
-    expect(new FrameReader(streamOf(f, 1000)).next()).rejects.toThrow(want);
+    await expect(new FrameReader(streamOf(f, 1000)).next()).rejects.toThrow(want);
   }
 });
 
