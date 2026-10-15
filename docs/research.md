@@ -74,7 +74,7 @@ LaraPaper supports both (it syncs models from that API) but is not used: two fix
 
 Server: one Go service that fetches data, renders and serves the device protocol.
 
-Rendering: HTML templates + CSS rendered by Takumi (Rust, no browser) through a small CLI in `renderer/`, called as a subprocess (`render/`). Go reduces the output to the panel's grays and encodes the PNG. Switch to cgo if subprocess overhead ever matters. Spike results: 12 ms / 7.6 KB for E1001, 35 ms / 34 KB for E1003, including process start.
+Rendering: HTML templates + CSS rendered by Takumi (Rust, no browser) through a small CLI called as a subprocess (spike: commit `8da478f`). Go reduces the output to the panel's grays and encodes the PNG. Switch to cgo if subprocess overhead ever matters. Spike results: 12 ms / 7.6 KB for E1001, 35 ms / 34 KB for E1003, including process start.
 
 ## Data sources without Home Assistant
 
