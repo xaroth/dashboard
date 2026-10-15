@@ -6,8 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
-
-	"github.com/xaroth/dashboard/service"
 )
 
 func env(vars map[string]string) func(string) (string, bool) {
@@ -47,9 +45,9 @@ modules:
 	}
 
 	cfg.Modules = nil
-	want := service.DefaultConfig()
+	want := DefaultConfig()
 	want.PublicURL = "http://192.168.1.10:8080"
-	want.Devices = map[string]service.Device{"hallway": {
+	want.Devices = map[string]Device{"hallway": {
 		MAC:      "aa-bb-cc-dd-ee-ff",
 		Rotation: 90,
 		Pages:    []string{"hello"},

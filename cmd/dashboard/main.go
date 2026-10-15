@@ -1,3 +1,5 @@
+// Command dashboard serves TRMNL devices and the admin UI. It wires storage,
+// modules, the renderer and the listeners together.
 package main
 
 import (
@@ -8,8 +10,6 @@ import (
 	"os/signal"
 	"syscall"
 	_ "time/tzdata"
-
-	"github.com/xaroth/dashboard/service"
 )
 
 func main() {
@@ -26,7 +26,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	svc, err := service.New(ctx, cfg, log)
+	svc, err := New(ctx, cfg, log)
 	if err != nil {
 		log.Error("starting service", "err", err)
 		os.Exit(1)

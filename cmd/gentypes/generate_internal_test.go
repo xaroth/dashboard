@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/xaroth/dashboard/service/modules"
+	"github.com/xaroth/dashboard/module"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/golden.ts")
@@ -32,14 +32,14 @@ type Base struct {
 
 type Item struct {
 	Base
-	At       time.Time        `json:"at"`
-	Window   modules.Duration `json:"window"`
-	Note     *string          `json:"note"`
-	Tags     []string         `json:"tags,omitempty"`
-	Counts   map[string]int   `json:"counts"`
-	Optional []*float64       `json:"optional"`
-	Nested   struct{ X int }  `json:"nested"`
-	Hidden   string           `json:"-"`
+	At       time.Time       `json:"at"`
+	Window   module.Duration `json:"window"`
+	Note     *string         `json:"note"`
+	Tags     []string        `json:"tags,omitempty"`
+	Counts   map[string]int  `json:"counts"`
+	Optional []*float64      `json:"optional"`
+	Nested   struct{ X int } `json:"nested"`
+	Hidden   string          `json:"-"`
 	hidden   string
 	Any      any    `json:"any"`
 	Raw      []byte `json:"raw"`
@@ -47,8 +47,8 @@ type Item struct {
 }
 
 type listParams struct {
-	Limit  int              `json:"limit"`
-	Window modules.Duration `json:"window"`
+	Limit  int             `json:"limit"`
+	Window module.Duration `json:"window"`
 }
 
 type Page[T any] struct {
@@ -77,13 +77,13 @@ func (*mod) one(context.Context, struct{}) (*Item, error)     { return nil, nil 
 
 func TestGenerate(t *testing.T) {
 	t.Parallel()
-	reg := modules.Define[mod, cfg]("demo_mod", func() *cfg { return &cfg{} },
-		modules.WithQuery("list", (*mod).list),
-		modules.WithQuery("one", (*mod).one),
-		modules.WithQuery("extra", (*mod).extra),
-		modules.WithQuery("echo", (*mod).echo),
+	reg := module.Define[mod, cfg]("demo_mod", func() *cfg { return &cfg{} },
+		module.WithQuery("list", (*mod).list),
+		module.WithQuery("one", (*mod).one),
+		module.WithQuery("extra", (*mod).extra),
+		module.WithQuery("echo", (*mod).echo),
 	)
-	got, err := generate([]modules.Registration{reg})
+	got, err := generate([]module.Registration{reg})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -119,18 +119,18 @@ func TestGenerateErrors(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
 		name string
-		opt  modules.Option
+		opt  module.Option
 		want string
 	}{
-		{"non-string map key", modules.WithQuery("bad", (*mod).bad), "map keys"},
-		{"params not a struct", modules.WithQuery("bad_params", (*mod).badParams), "params must be a struct"},
-		{"own JSON encoding", modules.WithQuery("marshaler", (*mod).marshaler), "own JSON encoding"},
+		{"non-string map key", module.WithQuery("bad", (*mod).bad), "map keys"},
+		{"params not a struct", module.WithQuery("bad_params", (*mod).badParams), "params must be a struct"},
+		{"own JSON encoding", module.WithQuery("marshaler", (*mod).marshaler), "own JSON encoding"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			reg := modules.Define[mod, cfg]("demo", func() *cfg { return &cfg{} }, testCase.opt)
-			_, err := generate([]modules.Registration{reg})
+			reg := module.Define[mod, cfg]("demo", func() *cfg { return &cfg{} }, testCase.opt)
+			_, err := generate([]module.Registration{reg})
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Errorf("got %v, want error containing %q", err, testCase.want)
 			}
