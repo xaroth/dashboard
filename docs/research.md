@@ -78,6 +78,7 @@ TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation
 | Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
 | Calendar | ICS / CalDAV URL | Google, iCloud, Nextcloud all expose ICS |
 | Power usage | Smartstuff P1 dongle, DSMR-API firmware, local HTTP | No adapter needed, see below |
+| Solar production | Hoymiles DTU, Modbus TCP (local) or S-Miles cloud | 16 panels, micro inverters; see below |
 | Car status | Hyundai Bluelink EU cloud API | Kona 2024; needs adapter, see below |
 
 Weather and calendar fit LaraPaper polling plugins directly. Car and power may need a small adapter on the server that exposes clean JSON.
@@ -91,12 +92,26 @@ Local HTTP JSON, no cloud, no adapter needed. Dashboard server polls it directly
 | `/api/v2/sm/actual` | Live values: power delivered/returned, per-phase, meter readings, gas |
 | `/api/v2/hist/hours`, `/days`, `/months` | History for today/week/month graphs; requires local storage enabled |
 | `/api/v2/dash/live` | Combined live values incl. production/battery |
-| `/api/v2/gen` | Solar production, if an inverter is linked (`active:false` otherwise) |
 | `/api/v1/data` | HomeWizard-compatible, if reusing HomeWizard tooling |
 
 Also available: MQTT push, WebSocket on `:81/ws` (max 3 clients), raw telegram on TCP port 82. Not needed for a dashboard that refreshes every few minutes.
 
 Give the dongle a fixed IP or DHCP reservation.
+
+## Solar: Hoymiles micro inverters
+
+16 panels on Hoymiles micro inverters, DTU uploads to S-Miles Cloud. The P1 dongle cannot read Hoymiles (its solar link supports SolarEdge, Enphase, SMA only), so the P1 only sees net import/export. Production must come from the DTU.
+
+Options, in order of preference:
+
+1. **Modbus TCP on the DTU** (local). Supported on DTU-Pro and DTU-Pro-S via the Ethernet port, TCP 502, unit ID 1. Data per inverter: current power, today's and total energy, temperature, alarms, grid voltage/frequency. Libraries: `hoymiles-modbus` (Python, pre-alpha, single maintainer), `ha-hoymiles-modbus-tcp` (register reference), evcc template `hoymiles-dtu-mb`. Cloud upload keeps working alongside.
+2. **Native DTU protocol** (local, protobuf over TCP 10081). `hoymiles-wifi` (Python), tested with DTU-WLite, DTU-Pro, HMS-xxxW-2T. Option if the DTU has no Ethernet/Modbus. Newer DTU-Pro-S firmware reportedly encrypts it.
+3. **S-Miles Cloud** (unofficial API). Works for any DTU, but cloud-dependent and coarse (DTU uploads every ~15 min).
+4. **OpenDTU** (replace DTU with ESP32 + radio: nRF24 for HM series, CMT2300A for HMS). Local REST/MQTT, but drops S-Miles Cloud. Only if 1 and 2 fail.
+
+Consumption = P1 import - P1 export + solar production; needed for a self-consumption figure on screen.
+
+To verify: DTU model and firmware, inverter series (HM vs HMS), Modbus enable path (DTU local settings or S-Miles installer app), DTU data refresh interval.
 
 ## Car: Hyundai Kona 2024 (Bluelink EU)
 
@@ -124,7 +139,7 @@ Risks:
 
 ## Open questions
 
-1. Solar inverter present? (`/api/v2/gen`)
+1. Hoymiles DTU model (DTU-Pro, DTU-Pro-S, DTU-Lite) and inverter model?
 2. Calendar provider?
 3. Mounting: wall with USB power, or battery only? Determines refresh interval.
 4. What goes on which screen, per location?
@@ -144,5 +159,9 @@ Risks:
 - Hyundai EU login issue: https://github.com/Hyundai-Kia-Connect/kia_uvo/issues/1927
 - openHAB Bluelink (refresh/limits notes): https://www.openhab.org/addons/bindings/bluelink/
 - Smartstuff DSMR-API endpoints: https://docs.smart-stuff.nl/dsmr-api/geavanceerd/api-overzicht
+- hoymiles-modbus: https://pypi.org/project/hoymiles-modbus/
+- ha-hoymiles-modbus-tcp: https://github.com/wil-lem/ha-hoymiles-modbus-tcp
+- evcc Hoymiles DTU Modbus: https://docs.evcc.io/en/meters/hoymiles-hmt-hms-series-with-dtu-pro-s-modbus-tcp
+- hoymiles-wifi: https://pypi.org/project/hoymiles-wifi/
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
