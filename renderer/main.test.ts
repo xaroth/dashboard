@@ -16,7 +16,7 @@ test("process answers describe and render over frames", async () => {
   proc.stdin.flush();
   const desc = await reader.next();
   expect(desc!.header.id).toBe(1);
-  expect(desc!.header.pages).toContainEqual({ name: "hello", data: {} });
+  expect(desc!.header.pages).toContainEqual({ name: "e1001/hello", data: {} });
 
   proc.stdin.write(encodeFrame({ id: 2, op: "render", page: "nope", props: {} }));
   proc.stdin.flush();
@@ -25,7 +25,7 @@ test("process answers describe and render over frames", async () => {
   proc.stdin.write(encodeFrame({
     id: 3,
     op: "render",
-    page: "hello",
+    page: "e1001/hello",
     props: {
       data: {},
       device: { name: "t", model: "m", rotation: 0 },
@@ -54,7 +54,7 @@ test("a throwing page with stray output yields an error frame and the process ke
   const props = { viewport: { width: 100, height: 100, portrait: false } };
 
   for (const id of [1, 2]) {
-    proc.stdin.write(encodeFrame({ id, op: "render", page: "broken", props }));
+    proc.stdin.write(encodeFrame({ id, op: "render", page: "test/broken", props }));
     proc.stdin.flush();
     expect((await reader.next())!.header).toMatchObject({ id, error: "boom" });
   }
@@ -62,7 +62,7 @@ test("a throwing page with stray output yields an error frame and the process ke
   proc.stdin.write(encodeFrame({ id: 3, op: "describe" }));
   proc.stdin.flush();
   expect((await reader.next())!.header.pages).toEqual([
-    { name: "broken", data: { forecast: { module: "weather", query: "forecast", params: { hours: 2 } } } },
+    { name: "test/broken", data: { forecast: { module: "weather", query: "forecast", params: { hours: 2 } } } },
   ]);
 
   proc.stdin.end();

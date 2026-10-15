@@ -37,13 +37,13 @@ func testConfig(tb testing.TB, device, admin string) Config {
 	cfg := DefaultConfig()
 	cfg.DataDir = tb.TempDir()
 	cfg.Listen = Listen{Device: device, Admin: admin}
-	cfg.Devices = map[string]Device{"hallway": {MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello"}}}
+	cfg.Devices = map[string]Device{"hallway": {MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello"}}}
 	return cfg
 }
 
 func newService(tb testing.TB, cfg Config) (*Service, *render.FakeRenderer) {
 	tb.Helper()
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
 	s, err := New(tb.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
 	if err != nil {
 		tb.Fatalf("New: %v", err)
@@ -54,8 +54,8 @@ func newService(tb testing.TB, cfg Config) (*Service, *render.FakeRenderer) {
 func TestNewRejectsUnknownPage(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t, "", "")
-	cfg.Devices["hallway"] = Device{MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello", "nope"}}
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
+	cfg.Devices["hallway"] = Device{MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello", "nope"}}
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
 	_, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
 	if err == nil || !strings.Contains(err.Error(), `"nope"`) {
 		t.Errorf("got %v, want error naming the missing page", err)
@@ -82,7 +82,7 @@ func TestNewFailsOnUnusableDataDir(t *testing.T) {
 	if err := os.WriteFile(cfg.DataDir, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
 	if _, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub)); err == nil {
 		t.Error("got nil error, want one")
 	}
@@ -95,7 +95,7 @@ func TestNewRejectsUnknownModule(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t, "", "")
 	cfg.Modules = map[string]yaml.Node{"nope": {}}
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
 	_, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
 	if err == nil || !strings.Contains(err.Error(), "no such module") {
 		t.Errorf("got %v, want an unknown module error", err)
@@ -109,7 +109,7 @@ func TestDevicePreview(t *testing.T) {
 	t.Parallel()
 	s, _ := newService(t, testConfig(t, "", ""))
 	rec := httptest.NewRecorder()
-	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/preview/hallway/hello.png?model=reterminal_e1003", nil))
+	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/preview/hallway/e1001/hello.png?model=reterminal_e1003", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d %s, want 200", rec.Code, rec.Body)
 	}

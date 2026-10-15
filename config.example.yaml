@@ -9,6 +9,7 @@ devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:01"
     rotation: 0
+    layout: e1001   # pages/layouts/e1001/
     pages: [weather, hello]
 
 renderer:

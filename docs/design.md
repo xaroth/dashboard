@@ -36,7 +36,8 @@ modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
 modules/<name>/sql/        the module's migrations and queries
 renderer/                  Bun process: bundles pages, renders with takumi-js
-pages/                     TSX pages, components, CSS modules
+pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
+pages/components/, lib/    shared by all layouts
 pages/generated/           TypeScript types generated from Go query results
 ```
 
@@ -258,8 +259,11 @@ devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:FF"
     rotation: 0          # 0, 90, 180, 270
+    layout: e1001        # folder under pages/layouts/
     pages: [overview, energy, car]
 ```
+
+A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for one panel size; a page is named `<layout>/<page>`. Each device uses one layout and lists pages from it; a page missing from the layout stops startup. Components and helpers shared by layouts live in `pages/components/` and `pages/lib/`.
 
 The model and native panel size come from the device's own headers (`Model: reterminal_e1001`, `Width`, `Height`), not from config. Both models get the same 4-gray treatment: the E1003 is rendered at its own resolution but with the E1001's four gray levels, so one set of styles works on both.
 
@@ -326,10 +330,10 @@ Health reaches people through the screens: every page gets a `system` prop with 
 Pages are React components in TSX, styled with CSS modules, rendered by Takumi through `takumi-js` (no browser). A page exports the data it needs and a default component that receives the results as props:
 
 ```tsx
-// pages/overview.tsx
-import { query, type PageProps } from "./lib/page";
-import { Screen } from "./components/Screen";
-import { AreaChart } from "./components/AreaChart";
+// pages/layouts/e1001/overview.tsx
+import { query, type PageProps } from "../../lib/page";
+import { Screen } from "../../components/Screen";
+import { AreaChart } from "../../components/AreaChart";
 import { EventList } from "./components/EventList";
 import styles from "./overview.module.css";
 
@@ -394,7 +398,7 @@ func (m *p1) power(ctx context.Context, p powerParams) (Series, error) {
 
 A long-running Bun process (`renderer/`), started and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
 
-- **Bundling**: at start the renderer bundles `pages/` (shipped in the image) with `Bun.build` into JS plus CSS. With `watch` on, for development, it rebuilds on file changes. Pages change through a new image; no pages on the config mount in v1.
+- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` (shipped in the image) with `Bun.build` into JS plus CSS. With `watch` on, for development, it rebuilds on file changes. Pages change through a new image; no pages on the config mount in v1.
 - **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
 
 | Request | Response |
@@ -445,7 +449,7 @@ Each step has its own test with no network:
 | Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered, reduced to 4 grays, compared to a golden PNG with a small pixel tolerance; a mismatch writes a diff image. Goldens are regenerated deliberately on Takumi or font upgrades. |
 | Types | `tsc --noEmit` | pages against generated types |
 
-Fixtures come from the live service: the preview serves the resolved props as JSON (`/preview/{device}/{page}/props.json`), saved as-is into `pages/testdata/`.
+Fixtures come from the live service: the preview serves the resolved props as JSON (`/preview/{device}/{layout}/{page}/props.json`), saved as-is into `pages/testdata/`.
 
 ### Fonts
 
@@ -458,9 +462,9 @@ On a separate admin listener. No authentication; access is restricted at the net
 | Route | Purpose |
 | --- | --- |
 | `GET /` | Devices, pages, module status (last update, errors), pending devices |
-| `GET /preview/{device}/{page}.png` | Exactly what the device gets |
-| `GET /preview/{device}/{page}/props.json` | The props the page received; saved as test fixtures |
-| `GET /preview/page/{page}.png?model=...&rotation=...` | A page on a panel without a device |
+| `GET /preview/{device}/{layout}/{page}.png` | Exactly what the device gets |
+| `GET /preview/{device}/{layout}/{page}/props.json` | The props the page received; saved as test fixtures |
+| `GET /preview/page/{layout}/{page}.png?model=...&rotation=...` | A page on a panel without a device |
 | `GET /queries` | Every registered query with its params and a sample result |
 | `GET /healthz` | Liveness |
 
@@ -498,8 +502,9 @@ devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:FF"
     rotation: 0
+    layout: e1001
     pages: [overview, energy, car]
-    params:                       # optional per-device query param overrides
+    params:                       # optional per-device query param overrides, page.key within the layout
       overview.events: {limit: 8}
 ```
 

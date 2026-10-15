@@ -23,6 +23,7 @@ devices:
   hallway:
     mac: "aa-bb-cc-dd-ee-ff"
     rotation: '${ROT}'
+    layout: e1001
     pages: [hello]
     params:
       hello.events: {limit: 8}
@@ -50,6 +51,7 @@ modules:
 	want.Devices = map[string]Device{"hallway": {
 		MAC:      "aa-bb-cc-dd-ee-ff",
 		Rotation: 90,
+		Layout:   "e1001",
 		Pages:    []string{"hello"},
 		Params:   map[string]map[string]any{"hello.events": {"limit": 8}},
 	}}
@@ -78,12 +80,13 @@ func TestParseConfigErrors(t *testing.T) {
 		{"sub-minute interval", "public_url: http://x\nschedule: {interval: 30s}\n", "interval"},
 		{"interval over a day", "public_url: http://x\nschedule: {interval: 25h}\n", "interval"},
 		{"zero detail timeout", "public_url: http://x\nschedule: {detail_timeout: 0s}\n", "detail_timeout"},
-		{"bad mac", device("mac: nope, pages: [p]"), "mac"},
-		{"duplicate mac", "public_url: http://x\ndevices:\n  a: {mac: 'aa:bb:cc:dd:ee:ff', pages: [p]}\n  b: {mac: 'AA-BB-CC-DD-EE-FF', pages: [p]}\n", "already used"},
-		{"bad rotation", device("mac: 'aa:bb:cc:dd:ee:ff', rotation: 45, pages: [p]"), "rotation"},
-		{"no pages", device("mac: 'aa:bb:cc:dd:ee:ff'"), "pages"},
-		{"name with slash", "public_url: http://x\ndevices:\n  a/b: {mac: 'aa:bb:cc:dd:ee:ff', pages: [p]}\n", "letters"},
-		{"reserved name", "public_url: http://x\ndevices:\n  page: {mac: 'aa:bb:cc:dd:ee:ff', pages: [p]}\n", "reserved"},
+		{"bad mac", device("mac: nope, layout: l, pages: [p]"), "mac"},
+		{"duplicate mac", "public_url: http://x\ndevices:\n  a: {mac: 'aa:bb:cc:dd:ee:ff', layout: l, pages: [p]}\n  b: {mac: 'AA-BB-CC-DD-EE-FF', layout: l, pages: [p]}\n", "already used"},
+		{"bad rotation", device("mac: 'aa:bb:cc:dd:ee:ff', rotation: 45, layout: l, pages: [p]"), "rotation"},
+		{"no layout", device("mac: 'aa:bb:cc:dd:ee:ff', pages: [p]"), "layout"},
+		{"no pages", device("mac: 'aa:bb:cc:dd:ee:ff', layout: l"), "pages"},
+		{"name with slash", "public_url: http://x\ndevices:\n  a/b: {mac: 'aa:bb:cc:dd:ee:ff', layout: l, pages: [p]}\n", "letters"},
+		{"reserved name", "public_url: http://x\ndevices:\n  page: {mac: 'aa:bb:cc:dd:ee:ff', layout: l, pages: [p]}\n", "reserved"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

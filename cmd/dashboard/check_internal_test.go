@@ -35,7 +35,7 @@ func clockRegistration() module.Registration {
 func TestNewChecksQueries(t *testing.T) {
 	t.Parallel()
 	page := func(query string, params map[string]any) render.PageInfo {
-		return render.PageInfo{Name: "hello", Data: map[string]render.QueryDescriptor{
+		return render.PageInfo{Name: "e1001/hello", Data: map[string]render.QueryDescriptor{
 			"ticks": {Module: "clock", Query: query, Params: params},
 		}}
 	}
@@ -47,7 +47,7 @@ func TestNewChecksQueries(t *testing.T) {
 	}{
 		{"valid", page("ticks", map[string]any{"limit": 2}), nil, ""},
 		{"valid override", page("ticks", nil), map[string]map[string]any{"hello.ticks": {"limit": 8}}, ""},
-		{"unknown query", page("tocks", nil), nil, "page hello, data ticks"},
+		{"unknown query", page("tocks", nil), nil, "page e1001/hello, data ticks"},
 		{"bad param", page("ticks", map[string]any{"limit": "two"}), nil, "limit"},
 		{"override for unknown key", page("ticks", nil), map[string]map[string]any{"hello.tocks": {"limit": 8}}, "not a page data key"},
 		{"override without page", page("ticks", nil), map[string]map[string]any{"ticks": {"limit": 8}}, "not a page data key"},
