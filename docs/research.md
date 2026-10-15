@@ -78,9 +78,25 @@ TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation
 | Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
 | Calendar | ICS / CalDAV URL | Google, iCloud, Nextcloud all expose ICS |
 | Power usage | P1 meter local API (e.g. HomeWizard), inverter API | Depends on hardware |
-| Car status | Manufacturer cloud API | Brand TBD; often OAuth, may need a small adapter service |
+| Car status | Hyundai Bluelink EU cloud API | Kona 2024; needs adapter, see below |
 
 Weather and calendar fit LaraPaper polling plugins directly. Car and power may need a small adapter on the server that exposes clean JSON.
+
+## Car: Hyundai Kona 2024 (Bluelink EU)
+
+No official public API. Use `hyundai_kia_connect_api` (Python, the library behind the HA `kia_uvo` integration) in a small adapter container that exposes JSON for the dashboard server.
+
+- **Auth**: EU username/password login supported directly since v4.12.0. Fallback: generate a refresh token via a browser tool (KiaHyundaiToken in the library repo, or bluelink-refresh-token); valid ~180 days.
+- **Data**: SoC, range, charging state, locks/doors, climate, odometer, location, last update time, trip info (EU).
+- **Cached vs forced**: cached reads return the last state the car pushed to the cloud (car pushes on events and at every 10% SoC). Forced refresh wakes the car via the modem.
+- **Limits**: EU API is daily rate-limited (cap undocumented); exceeding it can lock the account for days. Frequent forced refreshes drain the 12V battery.
+- **Polling plan**: cached read every 15-30 min, forced refresh at most every 4 h (or never), and show "last updated" on screen.
+
+Risks:
+
+1. EU auth breaks periodically; an Oct 2026 `kia_uvo` issue reports fresh Hyundai EU logins failing on API 4.35.0.
+2. Library maintainer no longer owns a Hyundai/Kia; fixes depend on community.
+3. Adapter must fail soft: serve last known state with its timestamp when the API is down.
 
 ## Technical requirements
 
@@ -92,11 +108,10 @@ Weather and calendar fit LaraPaper polling plugins directly. Car and power may n
 
 ## Open questions
 
-1. Car brand/model?
-2. Power: which meter/inverter (P1 dongle, solar)?
+1. Power: which meter/inverter (P1 dongle, solar)?
 3. Calendar provider?
 4. Mounting: wall with USB power, or battery only? Determines refresh interval.
-5. What goes on which screen, per location?
+4. What goes on which screen, per location?
 
 ## Sources
 
@@ -109,5 +124,8 @@ Weather and calendar fit LaraPaper polling plugins directly. Car and power may n
 - TRMNL HA screenshot: https://help.trmnl.com/en/articles/13281388-home-assistant-screenshot
 - TRMNL BYOD license: https://shop.trmnl.com/products/byod
 - Puppet add-on: https://github.com/balloob/home-assistant-addons
+- hyundai_kia_connect_api: https://github.com/Hyundai-Kia-Connect/hyundai_kia_connect_api
+- Hyundai EU login issue: https://github.com/Hyundai-Kia-Connect/kia_uvo/issues/1927
+- openHAB Bluelink (refresh/limits notes): https://www.openhab.org/addons/bindings/bluelink/
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
