@@ -72,8 +72,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("schedule: %q is not HH:MM", s)
 		}
 	}
-	if c.Schedule.Interval <= 0 || c.Schedule.Interval > 24*time.Hour {
-		return fmt.Errorf("schedule: interval must be between 0 and 24h")
+	if i := c.Schedule.Interval; i < time.Minute || i > 24*time.Hour || i%time.Minute != 0 {
+		return fmt.Errorf("schedule: interval must be whole minutes from 1m to 24h")
 	}
 	if c.Schedule.DetailTimeout <= 0 {
 		return fmt.Errorf("schedule: detail_timeout must be positive")

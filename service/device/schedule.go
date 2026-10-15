@@ -39,11 +39,14 @@ func (s Schedule) next(t time.Time) time.Time {
 	panic("device: schedule has no wake within two days")
 }
 
-// refresh is the device's sleep in seconds after showing a page at now.
+// refresh is the device's sleep in whole seconds, at least 1, after showing a
+// page at now.
 func (s Schedule) refresh(now time.Time, detail bool) int {
-	sleep := s.next(now.Add(minSleep)).Sub(now)
+	var sleep time.Duration
 	if detail {
 		sleep = min(s.Detail, s.next(now).Sub(now))
+	} else {
+		sleep = s.next(now.Add(minSleep)).Sub(now)
 	}
-	return int(sleep.Round(time.Second) / time.Second)
+	return max(1, int((sleep+time.Second-1)/time.Second))
 }

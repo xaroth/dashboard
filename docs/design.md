@@ -251,10 +251,12 @@ Global: a wake every `interval` from `first_wake` up to and including `last_wake
 
 `refresh_rate` is computed from the server clock on every request:
 
-- **Main page**: seconds until the next wake time. If that is less than 60 s (a device that woke just before a wake time), use the wake after it: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
+- **Main page**: seconds until the next wake time. If that is 60 s or less (a device that woke just before a wake time), use the wake after it: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
 - **Detail page** (after a button press): `detail_timeout` (5 minutes), or until the next wake time if that is sooner. The following timer wake shows the main page.
 
-DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights.
+DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights. Wakes in a skipped hour are dropped; in a repeated hour they happen once, on the second pass.
+
+`interval` is whole minutes, from 1m to 24h.
 
 ### Buttons
 

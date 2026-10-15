@@ -46,8 +46,8 @@ func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
 	tb.Helper()
 	fake := render.NewFakeRenderer(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"})
 	clock := &atomic.Int64{}
-	clock.Store(1792087200)
-	now := func() time.Time { return time.Unix(clock.Load(), 0) }
+	clock.Store(time.Unix(1792087200, 0).UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	devices := device.New(device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
 		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(nil), time.UTC, now),
@@ -228,7 +228,7 @@ func TestDisplayRefresh(t *testing.T) {
 	testCases := []struct {
 		name     string
 		schedule device.Schedule
-		at       string // local time
+		at       string // local time, time.DateTime with optional fraction
 		source   string
 		want     float64
 	}{
@@ -238,6 +238,11 @@ func TestDisplayRefresh(t *testing.T) {
 		{"night sleep", hourly(amsterdam), "2026-10-16 00:00:00", "timer", 7 * 3600},
 		{"woken at night", hourly(amsterdam), "2026-10-16 03:00:00", "powercycle", 4 * 3600},
 		{"night sleep on DST end", hourly(amsterdam), "2026-10-25 00:00:00", "timer", 8 * 3600},
+		{"night sleep on DST start", hourly(amsterdam), "2027-03-28 00:00:00", "timer", 6 * 3600},
+		{"exactly a minute before the hour", hourly(amsterdam), "2026-10-15 17:59:00", "timer", 3660},
+		{"window past midnight", device.Schedule{First: 7 * time.Hour, Last: 2 * time.Hour, Interval: time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-16 01:00:00", "timer", 3600},
+		{"once a day", device.Schedule{First: 7 * time.Hour, Last: 7 * time.Hour, Interval: 24 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 07:00:00", "timer", 24 * 3600},
+		{"detail rounds up", hourly(amsterdam), "2026-10-15 18:59:59.6", "button", 1},
 		{"detail", hourly(amsterdam), "2026-10-15 18:30:00", "button", 300},
 		{"detail cut short by wake", hourly(amsterdam), "2026-10-15 18:58:00", "button", 120},
 		{"half-hourly", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Interval: 30 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 18:00:00", "timer", 1800},
@@ -246,12 +251,12 @@ func TestDisplayRefresh(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			at, err := time.ParseInLocation(time.DateTime, testCase.at, amsterdam)
+			at, err := time.ParseInLocation("2006-01-02 15:04:05.999", testCase.at, amsterdam)
 			if err != nil {
 				t.Fatal(err)
 			}
 			e := newEnvSchedule(t, testCase.schedule)
-			e.clock.Store(at.Unix())
+			e.clock.Store(at.UnixNano())
 			_, body := e.display(t, e.setup(t), testCase.source)
 			if body["refresh_rate"] != testCase.want {
 				t.Errorf("got refresh_rate %v, want %v", body["refresh_rate"], testCase.want)
@@ -265,7 +270,7 @@ func TestDisplayUnchangedImageKeepsFilename(t *testing.T) {
 	e := newEnv(t)
 	key := e.setup(t)
 	_, first := e.display(t, key, "timer")
-	e.clock.Add(3600)
+	e.clock.Add(int64(time.Hour))
 	_, second := e.display(t, key, "timer")
 	if first["filename"] != second["filename"] {
 		t.Errorf("got %v then %v, want the same filename for the same pixels", first["filename"], second["filename"])
