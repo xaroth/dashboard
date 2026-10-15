@@ -296,7 +296,7 @@ func TestBunRenderer(t *testing.T) {
 	if len(pages) == 0 {
 		t.Fatal("got no pages")
 	}
-	raw, err := p.Render(t.Context(), "hello", render.Props{
+	raw, err := p.Render(t.Context(), "e1001/hello", render.Props{
 		Data:     map[string]render.Result{},
 		Device:   render.DeviceProps{Name: "test", Model: "reterminal_e1003", Rotation: 90},
 		Viewport: render.ViewportFor(render.Panels["reterminal_e1003"], 90),
