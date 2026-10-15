@@ -38,7 +38,6 @@ modules/<name>/sql/        the module's migrations and queries
 renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/                     TSX pages, components, CSS modules
 pages/generated/           TypeScript types generated from Go query results
-fonts/
 ```
 
 Everything outside `modules/` is the service. `service/service.go` imports `modules` so all modules are linked in; it only knows them through the registry.
@@ -373,7 +372,7 @@ func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
 
 ### Renderer process
 
-A long-running Bun process (`renderer/`), started and supervised by the Go service. Per-render process start would cost 50-100 ms plus font loading; a resident process renders in ~20 ms (measured, 800x480).
+A long-running Bun process (`renderer/`), started and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
 
 - **Bundling**: at start the renderer bundles `pages/` (shipped in the image) with `Bun.build` into JS plus CSS. With `watch` on, for development, it rebuilds on file changes. Pages change through a new image; no pages on the config mount in v1.
 - **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
@@ -385,7 +384,6 @@ A long-running Bun process (`renderer/`), started and supervised by the Go servi
 
 - **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
 - **Supervision**: Go restarts the process on exit with backoff and applies a timeout per render. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
-- **Fonts**: loaded once at start.
 
 ### Pipeline
 
@@ -431,7 +429,7 @@ Fixtures come from the live service: the preview serves the resolved props as JS
 
 ### Fonts
 
-Bundled in the image, loaded by the renderer.
+Takumi's built-in sans-serif, a variable font covering all weights. No font files are loaded.
 
 ## Web UI
 
@@ -487,7 +485,7 @@ Runtime state (device API keys, module caches) lives in the database, not the co
 
 ## Deployment
 
-- One Docker image, multi-stage: Go service, Bun runtime with the renderer and `node_modules`, pages, fonts. Base is a slim image with Bun (~60-90 MB); the Go binary is static.
+- One Docker image, multi-stage: Go service, Bun runtime with the renderer and `node_modules`, pages. Base is a slim image with Bun (~60-90 MB); the Go binary is static.
 - CI: `go test`, `bun test`, `tsc --noEmit`, generated types and sqlc code up to date.
 - Built by GitHub Actions, pushed to GHCR.
 - Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite, own ZFS dataset, `recordsize=16K`) mounts.

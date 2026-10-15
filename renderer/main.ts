@@ -1,10 +1,11 @@
 // Long-running render process. Reads request frames on stdin, writes response
-// frames on stdout. Usage: bun renderer/main.ts --pages pages --fonts fonts [--watch]
+// frames on stdout. Usage: bun renderer/main.ts --pages pages [--watch]
+import { Renderer } from "@takumi-rs/core";
 import { watch } from "node:fs";
 import { parseArgs } from "node:util";
 import { bundlePages, type Bundle } from "./bundle";
 import { encodeFrame, FrameReader } from "./frame";
-import { loadRenderer, renderPage } from "./render";
+import { renderPage } from "./render";
 
 // stdout carries frames only; frames go through Bun.stdout, which these do not touch.
 console.log = console.info = console.debug = console.error;
@@ -13,12 +14,11 @@ process.stdout.write = process.stderr.write.bind(process.stderr) as typeof proce
 const { values: args } = parseArgs({
   options: {
     pages: { type: "string", default: "pages" },
-    fonts: { type: "string", default: "fonts" },
     watch: { type: "boolean", default: false },
   },
 });
 
-const renderer = await loadRenderer(args.fonts!);
+const renderer = new Renderer();
 let bundle: Bundle = await bundlePages(args.pages!);
 console.error(`renderer: bundled ${bundle.pages.size} pages, hash ${bundle.hash}`);
 
