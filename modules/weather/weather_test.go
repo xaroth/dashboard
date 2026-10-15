@@ -310,31 +310,70 @@ func TestForecastNullProbabilities(t *testing.T) {
 
 func TestForecastModel(t *testing.T) {
 	t.Parallel()
-	fake := newFake(t)
-	var body map[string]any
-	if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
-		t.Fatal(err)
+	testCases := []struct {
+		name       string
+		extra      string
+		wantModel  string
+		nullHourly map[string]int // series -> entries from the end set to null
+		nullDaily  map[string]int
+		wantHours  int // entries cut from the end
+		wantDays   int
+	}{
+		{name: "open-meteo pick", extra: "forecast_days: 3"},
+		{
+			name: "past the model horizon", extra: "forecast_days: 3, model: knmi_seamless", wantModel: "knmi_seamless",
+			// As knmi_seamless returns them: precipitation and code end before temperature.
+			nullHourly: map[string]int{"temperature_2m": 1, "precipitation": 3, "weather_code": 3},
+			nullDaily:  map[string]int{"temperature_2m_max": 1, "weather_code": 1},
+			wantHours:  3, wantDays: 1,
+		},
+		{
+			name: "all null", extra: "forecast_days: 3, model: knmi_seamless", wantModel: "knmi_seamless",
+			nullHourly: map[string]int{"temperature_2m": 1000}, nullDaily: map[string]int{"temperature_2m_min": 1000},
+			wantHours: 1000, wantDays: 1000,
+		},
 	}
-	// Past the model's horizon: the last day and hour are null.
-	hourly := body["hourly"].(map[string]any)["temperature_2m"].([]any)
-	hourly[len(hourly)-1] = nil
-	daily := body["daily"].(map[string]any)["temperature_2m_max"].([]any)
-	daily[len(daily)-1] = nil
-	b, _ := json.Marshal(body)
-	fake.serve(b)
-	set := load(t, t.TempDir(), fake, "forecast_days: 3, model: knmi_seamless")
-	if err := set.Update(t.Context(), "weather"); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if got := fake.forecastParams().Get("models"); got != "knmi_seamless" {
-		t.Errorf("got models %q, want knmi_seamless", got)
-	}
-	f, _ := forecast(t, set, map[string]any{"hours": 1000, "days": 16})
-	if got, want := len(f.Hourly), len(hourly)-1; got > want {
-		t.Errorf("got %d hours, want at most %d", got, want)
-	}
-	if got, want := len(f.Daily), len(daily)-1; got > want {
-		t.Errorf("got %d days, want at most %d", got, want)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newFake(t)
+			var body map[string]any
+			if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
+				t.Fatal(err)
+			}
+			nullTail := func(series map[string]any, nulls map[string]int) int {
+				n := len(series["time"].([]any))
+				for key, k := range nulls {
+					values := series[key].([]any)
+					for i := max(0, n-k); i < n; i++ {
+						values[i] = nil
+					}
+				}
+				return n
+			}
+			hours := nullTail(body["hourly"].(map[string]any), testCase.nullHourly)
+			days := nullTail(body["daily"].(map[string]any), testCase.nullDaily)
+			b, _ := json.Marshal(body)
+			fake.serve(b)
+			// Before the first entry, so the query windows start at the beginning.
+			set := loadAt(t, t.TempDir(), fake, testCase.extra, time.Unix(0, 0))
+			if err := set.Update(t.Context(), "weather"); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			if got := fake.forecastParams().Get("models"); got != testCase.wantModel {
+				t.Errorf("got models %q, want %q", got, testCase.wantModel)
+			}
+			f, res := forecast(t, set, map[string]any{"hours": 1000, "days": 16})
+			if got, want := len(f.Hourly), max(0, hours-testCase.wantHours); got != want {
+				t.Errorf("got %d hours, want %d", got, want)
+			}
+			if got, want := len(f.Daily), max(0, days-testCase.wantDays); got != want {
+				t.Errorf("got %d days, want %d", got, want)
+			}
+			if b, _ := json.Marshal(res.Value); strings.Contains(string(b), "null") && testCase.name == "all null" {
+				t.Errorf("got %s, want empty arrays", b)
+			}
+		})
 	}
 }
 
