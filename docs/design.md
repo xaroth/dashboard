@@ -26,13 +26,15 @@ cmd/dashboard/main.go      entrypoint: load config, build service, run
 cmd/dashboard/config.go    config loading: YAML file, ${ENV} substitution, validation
 service/service.go         the service: wires storage, scheduler, modules, listeners
 service/modules/           registration API and the module contract
-service/storage/           SQLite: state, series, rollups, devices
+service/storage/           SQLite: connections, migrations, state, series, rollups, devices
+service/storage/sql/       the service's own migrations and queries
 service/scheduler/         module updates, rollups, retention
 service/device/            TRMNL protocol, health, page selection, screen schedule
 service/render/            page pipeline, renderer process, gray reduction, PNG
 service/web/               admin UI, preview, module route mounting
 modules/modules.go         blank-imports every module so it registers
 modules/<name>/            one module per data source
+modules/<name>/sql/        the module's migrations and queries
 renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/                     TSX pages, components, CSS modules
 pages/generated/           TypeScript types generated from Go query results
@@ -117,11 +119,11 @@ Deliberately small; capabilities are added when a module needs them.
 
 | Method | Purpose |
 | --- | --- |
-| `Initialize(ctx, *C) error` | Receive config, set up clients, create the module's own tables. No network I/O: it runs for every registered module, configured or not. |
+| `Initialize(ctx, *C) error` | Receive config, set up clients. The module's migrations have run by then. No network I/O: it runs for every registered module, configured or not. |
 | `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `car` is enabled when credentials are set). |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
-Options: `WithUpdateInterval`, `WithStaleAfter`, `WithQuery` (see [Queries](#queries)).
+Options: `WithUpdateInterval`, `WithStaleAfter`, `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)).
 
 Not in v1, added when a module needs it: HTTP routes (OAuth, login forms), active hours, backfill hooks, a shared key-value store.
 
@@ -150,7 +152,40 @@ Dependencies come through the context: `modules.Database(ctx)`, `modules.Logger(
 
 ## Storage
 
-One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo.
+One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo. It supports every pragma below and keeps the Go binary static; a cgo driver would add a C toolchain to the build for no requirement we have.
+
+### SQL files
+
+SQL lives in `.sql` files next to the code that owns it, as in yulai:
+
+```
+service/storage/sql/migrations/00001_state.sql
+service/storage/sql/queries.sql
+modules/weather/sql/migrations/00001_init.sql
+modules/weather/sql/queries.sql
+```
+
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. The service runs the storage migrations, then each registered module's, before any `Initialize`. A failing migration stops startup.
+- **Queries** are written in `queries.sql` and turned into Go by sqlc (one `sqlc.yaml` entry per owner, schema = that owner's migrations). Generated files are committed; CI checks they are up to date (`sqlc diff`).
+- **Tables** are prefixed with their owner (`weather_locations`, `p1_samples`). An owner never reads or writes another owner's tables; shared data goes through the service (state, series).
+- **Times** are `TEXT` in RFC 3339, written in UTC.
+
+Registration hands the migrations to the service:
+
+```go
+//go:embed sql/migrations/*.sql
+var migrations embed.FS
+
+var _ = modules.Register[module, config]("weather", defaultConfig,
+	modules.WithMigrations(migrations),
+)
+```
+
+### Connections
+
+- One writer connection (`MaxOpenConns(1)`), used by `Update`, the minute flush, rollups and migrations.
+- A reader pool opened with `query_only(1)`, used by query functions. `modules.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
+- Pragmas on every connection: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB), `mmap_size=268435456` (256 MB). `page_size=16384` is set before the first table is created.
 
 ### Write load
 
@@ -171,7 +206,7 @@ Backups: ZFS snapshots of the `/data` dataset. WAL mode keeps the file crash-con
 
 The service keeps, per module, the latest status: `fetched_at`, `attempted_at`, `error`, plus a JSON document for modules whose data is one snapshot (weather, calendar, car). Queries return data with its freshness (age above `stale_after` marks it stale).
 
-Modules that need more (caches, tokens, own tables) create tables prefixed with their name in `Initialize` (`CREATE TABLE IF NOT EXISTS`). Shared migrations come when a second module needs the same thing.
+Modules that need more (caches, tokens, history) define their own tables in their [SQL files](#sql-files).
 
 ### Time series
 
@@ -318,8 +353,8 @@ var _ = modules.Register[module, config](
 )
 
 func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
-	db := modules.Database(ctx)
-	// SELECT bucketed averages over p.Range at p.Step
+	q := p1sql.New(modules.Database(ctx)) // sqlc, read-only connection
+	// bucketed averages over p.Range at p.Step
 }
 ```
 
@@ -376,7 +411,8 @@ Each step has its own test with no network:
 | What | Tool | How |
 | --- | --- | --- |
 | Module `Update` | `go test` | `httptest` fake of the source, assert on stored state and series |
-| Queries | `go test` | seeded storage, `cmp.Diff` on the returned struct |
+| Queries | `go test` | storage in a temp dir with migrations applied, seeded with inserts, `cmp.Diff` on the returned struct |
+| Migrations | `go test` | every owner's migrations apply to an empty database |
 | Pipeline | `go test` | fake renderer and queries, including failing and stale ones |
 | Formatting, chart math | `bun test` | table tests on pure functions |
 | Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered, reduced to 4 grays, compared to a golden PNG with a small pixel tolerance; a mismatch writes a diff image. Goldens are regenerated deliberately on Takumi or font upgrades. |
@@ -443,7 +479,7 @@ Runtime state (device API keys, module caches) lives in the database, not the co
 ## Deployment
 
 - One Docker image, multi-stage: Go service, Bun runtime with the renderer and `node_modules`, pages, fonts. Base is a slim image with Bun (~60-90 MB); the Go binary is static.
-- CI: `go test`, `bun test`, `tsc --noEmit`, generated types up to date.
+- CI: `go test`, `bun test`, `tsc --noEmit`, generated types and sqlc code up to date.
 - Built by GitHub Actions, pushed to GHCR.
 - Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite, own ZFS dataset, `recordsize=16K`) mounts.
 - Restart policy `unless-stopped` and a Docker health check on `/healthz`.
