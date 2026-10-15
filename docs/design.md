@@ -60,7 +60,7 @@ device         -> render
 | `solar` | Hoymiles: S-Miles Cloud now, DTU Modbus later | state + series (production per inverter, alarms) |
 | `calendar` | Google Calendar secret iCal URL | state (upcoming events) |
 | `car` | Pleos Vehicle Data API, fallback Bluelink | state (SoC, range, charging, locks) |
-| `weather` | Open-Meteo | state (now, hourly, daily) |
+| `weather` | Open-Meteo; `model` picks the weather model, e.g. `knmi_seamless` for KNMI HARMONIE | state (now, hourly, daily) |
 
 Later candidates: Plex recently added, waste collection, public transport.
 
@@ -485,6 +485,7 @@ schedule:
 modules:
   weather:
     location: "Uithoorn, The Netherlands"   # geocoded once, coordinates cached in the module's table
+    model: knmi_seamless   # Open-Meteo weather model; omit to let Open-Meteo pick
   p1:
     url: http://192.168.5.180
   calendar:

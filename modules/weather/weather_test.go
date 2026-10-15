@@ -308,6 +308,36 @@ func TestForecastNullProbabilities(t *testing.T) {
 	}
 }
 
+func TestForecastModel(t *testing.T) {
+	t.Parallel()
+	fake := newFake(t)
+	var body map[string]any
+	if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	// Past the model's horizon: the last day and hour are null.
+	hourly := body["hourly"].(map[string]any)["temperature_2m"].([]any)
+	hourly[len(hourly)-1] = nil
+	daily := body["daily"].(map[string]any)["temperature_2m_max"].([]any)
+	daily[len(daily)-1] = nil
+	b, _ := json.Marshal(body)
+	fake.serve(b)
+	set := load(t, t.TempDir(), fake, "forecast_days: 3, model: knmi_seamless")
+	if err := set.Update(t.Context(), "weather"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := fake.forecastParams().Get("models"); got != "knmi_seamless" {
+		t.Errorf("got models %q, want knmi_seamless", got)
+	}
+	f, _ := forecast(t, set, map[string]any{"hours": 1000, "days": 16})
+	if got, want := len(f.Hourly), len(hourly)-1; got > want {
+		t.Errorf("got %d hours, want at most %d", got, want)
+	}
+	if got, want := len(f.Daily), len(daily)-1; got > want {
+		t.Errorf("got %d days, want at most %d", got, want)
+	}
+}
+
 func TestForecastWindows(t *testing.T) {
 	t.Parallel()
 	ams, _ := time.LoadLocation("Europe/Amsterdam")
