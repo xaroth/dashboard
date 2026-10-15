@@ -72,9 +72,6 @@ func defaultConfig() *config {
 	return &config{Location: "Amsterdam, The Netherlands"}
 }
 
-// Initialize geocodes Location through Open-Meteo once and caches the
-// coordinates in state; a changed Location triggers a new lookup.
-
 type module struct {
 	cfg *config
 }
@@ -91,9 +88,15 @@ func (m *module) Initialize(ctx context.Context, cfg *config) error {
 	return nil
 }
 
+func (m *module) Enabled(ctx context.Context) bool {
+	return m.cfg.Location != ""
+}
+
 func (m *module) Update(ctx context.Context) error {
 	db := modules.Database(ctx)
-	// fetch from the source, write state and series
+	// on first run, geocode Location through Open-Meteo and cache the coordinates
+	// in the module's table; a changed Location triggers a new lookup.
+	// then fetch the forecast and write state.
 }
 ```
 
@@ -114,7 +117,8 @@ Deliberately small; capabilities are added when a module needs them.
 
 | Method | Purpose |
 | --- | --- |
-| `Initialize(ctx, *C) error` | Receive config, set up clients, create the module's own tables. |
+| `Initialize(ctx, *C) error` | Receive config, set up clients, create the module's own tables. No network I/O: it runs for every registered module, configured or not. |
+| `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `car` is enabled when credentials are set). |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
 Options: `WithUpdateInterval`, `WithStaleAfter`, `WithQuery` (see [Queries](#queries)).
@@ -125,8 +129,9 @@ Update and queries are split so a slow or failing source never blocks a screen: 
 
 ### Configuration and lifecycle
 
-- A module runs only if it has a `modules.<name>` section in the YAML. Registered but unconfigured modules stay off.
-- The section holds the module's own keys, decoded over its defaults; unknown keys are an error. Timing overrides live under a reserved `schedule` key that the service strips before decoding:
+- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys and decode errors stop startup: they are operator errors.
+- The scheduler asks `Enabled` before each update. A disabled module skips the update and shows as disabled (not failed) in the web UI; its queries still serve stored data, marked stale once older than `stale_after`. Because it is asked every time, a module can enable itself later, e.g. once a token appears in its table.
+- Timing overrides live under a reserved `schedule` key that the service strips before decoding:
 
 ```yaml
 modules:
@@ -136,7 +141,7 @@ modules:
       update_interval: 1m
 ```
 
-- A source being offline never stops the service. If `Initialize` fails, the module is marked failed, shown as such on the screens, and `Initialize` is retried with backoff; `Update` runs only after it succeeds.
+- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. If `Initialize` returns an error, the module is marked failed and stays off until restart.
 - Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until the config changes or the service restarts, and show on the screens. Modules return a typed error for this (`modules.ErrAuth`).
 
 ### Dependencies
