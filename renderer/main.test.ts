@@ -56,7 +56,7 @@ test("a throwing page with stray output yields an error frame and the process ke
   proc.stdin.write(encodeFrame({ id: 3, op: "describe" }));
   proc.stdin.flush();
   expect((await reader.next())!.header.pages).toEqual([
-    { name: "broken", data: { power: { module: "p1", query: "power", params: { range: "24h" } } } },
+    { name: "broken", data: { forecast: { module: "weather", query: "forecast", params: { hours: 2 } } } },
   ]);
 
   proc.stdin.end();
