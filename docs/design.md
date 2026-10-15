@@ -169,7 +169,7 @@ sqlc.yaml                       one entry per owner
 - **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. The service runs the storage migrations, then each registered module's, before any `Initialize`. A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`sqlc diff`).
 - **Tables** are prefixed with their owner (`weather_locations`). An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state, and series through `modules.Series(ctx)` for writes (buffered) and reads (bucketed, picking the rollup).
-- **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Anything sampled every minute goes through the series buffer, so it lands in the minute flush.
+- **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Anything sampled every minute goes through the series buffer, so it lands in the minute flush. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
 - **Times** are `TIMESTAMP` columns in UTC, stored as SQLite date text (driver option `_time_format=sqlite`), so SQLite's date functions work on them. Series use integer Unix seconds to keep rows small.
 
 Registration hands the migrations to the service; `WithMigrations` takes the embedded FS and uses its `sql/migrations` directory as the goose root:
@@ -185,10 +185,10 @@ var _ = modules.Register[module, config]("weather", defaultConfig,
 
 ### Connections
 
-- **Page size**: on a new file, `page_size=16384` runs on its own connection before the switch to WAL, which writes it into the header; after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
+- **Page size**: on a new file, a bootstrap connection runs `page_size=16384` and then `journal_mode=WAL`; the WAL switch writes the header with that page size, and after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
 - **Writer**: one connection (`MaxOpenConns(1)`), used by `Update`, the minute flush, rollups and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
 - **Reader**: a pool of 4 opened with `query_only(1)` after migrations, used by query functions. `modules.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
-- DSN pragmas apply to every new pooled connection: `journal_mode=WAL` (writer), `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared).
+- DSN pragmas apply to every new pooled connection: `journal_mode=WAL` (writer), `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared). Driver options on both: `_time_format=sqlite` and `_timezone=UTC`, so every time is converted to UTC before it is written.
 
 ### Write load
 
