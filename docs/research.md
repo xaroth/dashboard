@@ -134,7 +134,11 @@ Options, in order of preference:
 
 Consumption = P1 import - P1 export + solar production; needed for a self-consumption figure on screen.
 
-To verify: DTU IP, Ethernet connected, Modbus TCP enabled (DTU local settings or S-Miles installer app), DTU data refresh interval.
+DTU at `192.168.1.21`. Probed 2026-10-15 ~18:50 (around sunset): TCP 502 accepts connections but FC03 reads (unit IDs 0, 1, 2, 101, 247, 255; registers 0x2000 serial, 0x1000 inverter data) get no response. TCP 80 and 10081 closed. Read-only test script: `tools/dtu_read.py <host>`.
+
+Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per inverter port: 20 holding regs at `0x1000 + i*40`; serial (6 B), port, PV V/A, grid V/Hz, PV W, today Wh, total Wh, temp, status, alarm, link. Plant totals are sums over linked ports.
+
+To verify: DTU on Ethernet (Modbus TCP is Ethernet-only), Modbus enabled in DTU settings, retry in daylight, DTU data refresh interval.
 
 ## Car: Hyundai Kona Electric 2024 (Bluelink EU)
 
@@ -179,8 +183,8 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 
 ## Open questions
 
-1. Is the secret iCal address available on the shared calendar?
-2. DTU IP; is Modbus TCP enabled?
+1. DTU: connected via Ethernet or Wi-Fi? Modbus enabled?
+2. iCal address of the shared calendar (likely available).
 3. Does the Pleos API return data for the Kona Electric 2024?
 4. Content, layout and placement per screen (deferred).
 5. Daytime hours and refresh interval per screen (deferred).
