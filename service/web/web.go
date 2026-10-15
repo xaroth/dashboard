@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/xaroth/dashboard/service/device"
+	"github.com/xaroth/dashboard/service/modules"
 	"github.com/xaroth/dashboard/service/render"
 )
 
@@ -31,9 +32,14 @@ type Devices interface {
 	Target(name string) (render.Target, bool)
 }
 
+type Modules interface {
+	Statuses(ctx context.Context) ([]modules.Status, error)
+}
+
 type Handler struct {
 	Pipeline Pipeline
 	Devices  Devices
+	Modules  Modules
 	// DeviceAPI serves the device protocol; the simulator calls it in-process.
 	DeviceAPI http.Handler
 	Log       *slog.Logger
@@ -79,10 +85,16 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	mods, err := h.Modules.Statuses(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	err = indexTmpl.Execute(w, map[string]any{
 		"Devices": h.Devices.Statuses(),
 		"Pending": h.Devices.Pending(),
+		"Modules": mods,
 		"Pages":   pages,
 		"Panels":  panels,
 	})

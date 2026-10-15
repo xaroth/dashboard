@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/xaroth/dashboard/service"
 	"github.com/xaroth/dashboard/service/render"
 	"github.com/xaroth/dashboard/service/storage"
@@ -83,6 +85,20 @@ func TestNewFailsOnUnusableDataDir(t *testing.T) {
 	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
 	if _, err := service.New(t.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub)); err == nil {
 		t.Error("got nil error, want one")
+	}
+	if !stub.Closed() {
+		t.Error("renderer not closed after failed New")
+	}
+}
+
+func TestNewRejectsUnknownModule(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t, "", "")
+	cfg.Modules = map[string]yaml.Node{"nope": {}}
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
+	_, err := service.New(t.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub))
+	if err == nil || !strings.Contains(err.Error(), "no such module") {
+		t.Errorf("got %v, want an unknown module error", err)
 	}
 	if !stub.Closed() {
 		t.Error("renderer not closed after failed New")

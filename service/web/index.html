@@ -9,11 +9,34 @@
   .row { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
   figure { margin: 0; }
   figcaption { margin-top: 4px; }
+  table { border-collapse: collapse; background: #fff; }
+  td, th { padding: 4px 10px; text-align: left; border-bottom: 1px solid #ddd; }
+  .stale { color: #a00; }
   img { display: block; background: #fff; border: 8px solid #222; border-radius: 6px; max-width: 480px; max-height: 480px; }
 </style>
 </head>
 <body>
 <h1>dashboard</h1>
+
+<h2>Modules</h2>
+{{with .Modules}}
+<table>
+  <tr><th>Module</th><th>State</th><th>Every</th><th>Fetched</th><th>Attempted</th><th>Next</th><th>Error</th></tr>
+  {{range .}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td>{{.Phase}}{{if .Stale}} <span class="stale">stale</span>{{end}}</td>
+    <td>{{.Interval}}</td>
+    <td>{{with .FetchedAt}}{{.Local.Format "01-02 15:04:05"}}{{else}}-{{end}}</td>
+    <td>{{with .AttemptedAt}}{{.Local.Format "01-02 15:04:05"}}{{else}}-{{end}}</td>
+    <td>{{if not .NextRun.IsZero}}{{.NextRun.Local.Format "01-02 15:04:05"}}{{else}}-{{end}}</td>
+    <td>{{.Error}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p>No modules registered.</p>
+{{end}}
 
 <h2>Devices</h2>
 {{range .Devices}}{{$d := .}}

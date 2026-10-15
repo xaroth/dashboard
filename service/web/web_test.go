@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/service/device"
+	"github.com/xaroth/dashboard/service/modules"
 	"github.com/xaroth/dashboard/service/render"
 	"github.com/xaroth/dashboard/service/web"
 )
@@ -52,6 +53,16 @@ func (s *stubPipeline) Render(ctx context.Context, t render.Target, page string)
 	return render.Image{PNG: []byte("png"), Filename: "f", Props: props}, nil
 }
 
+type stubModules struct{}
+
+func (stubModules) Statuses(context.Context) ([]modules.Status, error) {
+	fetched := time.Date(2026, 10, 16, 7, 0, 0, 0, time.UTC)
+	return []modules.Status{
+		{Name: "weather", Phase: modules.PhaseWaiting, Interval: 15 * time.Minute, FetchedAt: &fetched},
+		{Name: "car", Phase: modules.PhaseAuth, Error: "token <refused>", Stale: true},
+	}, nil
+}
+
 func newHandler(tb testing.TB, devices ...device.Config) (http.Handler, *stubPipeline) {
 	tb.Helper()
 	if devices == nil {
@@ -71,6 +82,7 @@ func newHandler(tb testing.TB, devices ...device.Config) (http.Handler, *stubPip
 	h := &web.Handler{
 		Pipeline:  stub,
 		Devices:   devs,
+		Modules:   stubModules{},
 		DeviceAPI: deviceAPI,
 		Log:       slog.New(slog.DiscardHandler),
 	}
@@ -97,6 +109,10 @@ func TestIndex(t *testing.T) {
 		`src="/preview/hallway/hello.png"`,
 		`href="/preview/hallway/hello/props.json"`,
 		`src="/preview/page/hello.png?model=reterminal_e1003&rotation=90"`,
+		`<td>weather</td>`,
+		`<td>15m0s</td>`,
+		`auth <span class="stale">stale</span>`,
+		`token &lt;refused&gt;`,
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("index lacks %s", want)
