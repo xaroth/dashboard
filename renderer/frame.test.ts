@@ -53,10 +53,10 @@ test("malformed header is an error", async () => {
 
 // Shared with render/frame_internal_test.go.
 const vectorRequest = "000000187b226964223a312c226f70223a226465736372696265227d";
-const vectorResponse = "0000001b7b226964223a322c2268617368223a2268222c22706e67223a337d010203";
+const vectorResponse = "000000107b226964223a322c22706e67223a337d010203";
 
 test("byte vectors shared with the Go side", async () => {
-  expect(Buffer.from(encodeFrame({ id: 2, hash: "h" }, new Uint8Array([1, 2, 3]))).toString("hex")).toBe(vectorResponse);
+  expect(Buffer.from(encodeFrame({ id: 2 }, new Uint8Array([1, 2, 3]))).toString("hex")).toBe(vectorResponse);
   const r = new FrameReader(streamOf(new Uint8Array(Buffer.from(vectorRequest, "hex")), 1000));
   expect(await r.next()).toEqual({ header: { id: 1, op: "describe" } });
 });

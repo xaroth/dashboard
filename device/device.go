@@ -33,10 +33,9 @@ type Pipeline interface {
 // Status is what the service knows about a device right now.
 type Status struct {
 	Config
-	Model    string
-	Wake     *render.Wake
-	Page     string
-	Filename string
+	Model string
+	Wake  *render.Wake
+	Page  string
 }
 
 // Pending is a MAC that asked for setup but is not configured.
@@ -116,9 +115,6 @@ func New(o Options) *Devices {
 	return d
 }
 
-// Store is where rendered images are kept.
-func (d *Devices) Store() *Store { return d.store }
-
 // Target is how the named device is rendered: its reported model and wake.
 func (d *Devices) Target(name string) (render.Target, bool) {
 	d.mu.Lock()
@@ -137,11 +133,10 @@ func (d *Devices) Statuses() []Status {
 	out := make([]Status, 0, len(d.byName))
 	for _, s := range d.byName {
 		out = append(out, Status{
-			Config:   s.cfg,
-			Model:    cmp.Or(s.model, DefaultModel),
-			Wake:     s.wake,
-			Page:     s.cfg.Pages[s.page],
-			Filename: s.filename,
+			Config: s.cfg,
+			Model:  cmp.Or(s.model, DefaultModel),
+			Wake:   s.wake,
+			Page:   s.cfg.Pages[s.page],
 		})
 	}
 	slices.SortFunc(out, func(a, b Status) int { return cmp.Compare(a.Name, b.Name) })

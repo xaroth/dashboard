@@ -15,14 +15,12 @@ import (
 )
 
 type countParams struct {
-	Limit  int             `json:"limit"`
-	Window module.Duration `json:"window"`
+	Limit int `json:"limit"`
 }
 
 type countResult struct {
-	Updates int    `json:"updates"`
-	Limit   int    `json:"limit"`
-	Window  string `json:"window"`
+	Updates int `json:"updates"`
+	Limit   int `json:"limit"`
 }
 
 // count reads the snapshot on the query connection.
@@ -34,7 +32,7 @@ func (m *testModule) count(ctx context.Context, p countParams) (countResult, err
 	if p.Limit < 0 {
 		return countResult{}, errors.New("limit must not be negative")
 	}
-	return countResult{Updates: snap["updates"], Limit: p.Limit, Window: time.Duration(p.Window).String()}, nil
+	return countResult{Updates: snap["updates"], Limit: p.Limit}, nil
 }
 
 // boom panics.
@@ -67,13 +65,11 @@ func TestCheck(t *testing.T) {
 		wantErr error
 		wantMsg string
 	}{
-		{"valid", "test", "count", map[string]any{"limit": 3, "window": "24h"}, nil, ""},
+		{"valid", "test", "count", map[string]any{"limit": 3}, nil, ""},
 		{"no params", "test", "count", nil, nil, ""},
 		{"unknown module", "nope", "count", nil, module.ErrUnknownModule, ""},
-		{"unknown query", "test", "nope", nil, module.ErrUnknownQuery, "boom, count, write"},
-		{"null duration", "test", "count", map[string]any{"window": nil}, nil, ""},
+		{"unknown query", "test", "nope", nil, nil, "unknown query test.nope (have boom, count, write)"},
 		{"unknown param", "test", "count", map[string]any{"bogus": 1}, nil, "bogus"},
-		{"bad duration", "test", "count", map[string]any{"window": "soon"}, nil, "soon"},
 		{"wrong type", "test", "count", map[string]any{"limit": "three"}, nil, "limit"},
 	}
 	for _, testCase := range testCases {
@@ -98,10 +94,10 @@ func TestResolve(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		set, _ := loadWith(ctx, t, "test: {key: k}", queryRegistration())
-		params := map[string]any{"limit": 3, "window": "1h"}
+		params := map[string]any{"limit": 3}
 
 		before := set.Resolve(ctx, "test", "count", params)
-		if diff := cmp.Diff(module.Result{Value: countResult{Limit: 3, Window: "1h0m0s"}, Stale: true}, before); diff != "" {
+		if diff := cmp.Diff(module.Result{Value: countResult{Limit: 3}, Stale: true}, before); diff != "" {
 			t.Errorf("before any update (-want +got):\n%s", diff)
 		}
 
@@ -115,7 +111,7 @@ func TestResolve(t *testing.T) {
 		if after.FetchedAt == nil || after.Stale || after.Error != "" {
 			t.Errorf("after an update: got %+v, want fresh", after)
 		}
-		if diff := cmp.Diff(countResult{Updates: 1, Limit: 3, Window: "1h0m0s"}, after.Value); diff != "" {
+		if diff := cmp.Diff(countResult{Updates: 1, Limit: 3}, after.Value); diff != "" {
 			t.Errorf("value (-want +got):\n%s", diff)
 		}
 		cancel()

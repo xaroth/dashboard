@@ -99,7 +99,11 @@ func TestPipelineRender(t *testing.T) {
 	if want := render.Filename(img.PNG, testNow); img.Filename != want {
 		t.Errorf("got filename %q, want %q", img.Filename, want)
 	}
-	if diff := cmp.Diff(img.Props, fake.LastProps()); diff != "" {
+	want, err := p.Props(t.Context(), render.Target{Name: "x", Model: "reterminal_e1003", Rotation: 270}, "hello")
+	if err != nil {
+		t.Fatalf("Props: %v", err)
+	}
+	if diff := cmp.Diff(want, fake.LastProps()); diff != "" {
 		t.Errorf("props sent to renderer (-want +got):\n%s", diff)
 	}
 }

@@ -45,7 +45,7 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		case <-time.After(delay):
 		}
 
-		uctx := s.context(ctx, inst, s.writer)
+		uctx, _ := s.context(ctx, inst, s.writer, false)
 		if !inst.reg.enabled(uctx, inst.module) {
 			phase, delay = PhaseDisabled, inst.interval
 			continue
@@ -92,8 +92,8 @@ func (s *Set) Update(ctx context.Context, name string) error {
 func (s *Set) runUpdate(ctx context.Context, inst *instance) error {
 	inst.updating.Lock()
 	defer inst.updating.Unlock()
-	state := &stateStore{q: New(s.writer), module: inst.reg.name, update: true}
-	uctx, cancel := context.WithTimeout(WithState(s.context(ctx, inst, s.writer), state), updateTimeout)
+	uctx, state := s.context(ctx, inst, s.writer, true)
+	uctx, cancel := context.WithTimeout(uctx, updateTimeout)
 	defer cancel()
 	err := inst.reg.update(uctx, inst.module)
 	if ctx.Err() != nil {

@@ -133,9 +133,6 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	return s, nil
 }
 
-// Device is the handler for the device listener.
-func (s *Service) Device() http.Handler { return s.device }
-
 // Admin is the handler for the admin listener.
 func (s *Service) Admin() http.Handler { return s.admin }
 

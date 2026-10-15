@@ -165,7 +165,7 @@ modules:
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)`, `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. Tests build a context with fakes through the same setters.
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)`, `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions.
 
 ## Storage
 
@@ -399,17 +399,17 @@ A long-running Bun process (`renderer/`), started and supervised by the Go servi
 
 | Request | Response |
 | --- | --- |
-| `{"id":1,"op":"describe"}` | every page with its `data` descriptors and bundle hash |
-| `{"id":2,"op":"render","page":"overview","viewport":{...},"props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
+| `{"id":1,"op":"describe"}` | every page with its `data` descriptors |
+| `{"id":2,"op":"render","page":"overview","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
 - **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
 - **Supervision**: Go restarts the process on exit with backoff and applies a timeout per render. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
 
 ### Pipeline
 
-1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle. Durations in params use a `module.Duration` type that decodes `"24h"`-style strings (plain `time.Duration` does not decode from JSON strings); its TypeScript type is a template literal string.
+1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle.
 2. **Resolve**: Go runs the page's queries concurrently with a timeout. One failing query yields an error envelope, not a failed page.
-3. **Render**: Go sends props to the renderer, gets an RGBA PNG.
+3. **Render**: Go sends props to the renderer, gets an RGBA PNG at `props.viewport`.
 4. **Reduce** (Go): rotate if needed, map each pixel to the nearest of 4 gray levels (0, 85, 170, 255) without dithering, which keeps text sharp, and encode a 2-bit PNG. Both models use 4 levels.
 5. **Check**: the PNG must be under 750 KB (both models; firmware limit with PSRAM). A 2-bit image without dithering is far below that (spike: 34 KB at 1872x1404); exceeding it is logged and the previous image is served.
 6. **Name**: `filename` is the PNG's hash plus timestamp (see [Protocol](#protocol)). An unchanged image keeps its filename and the device skips the download. Props include `now` and battery values, so most wakes produce a new image; that is accepted.
@@ -420,7 +420,7 @@ Per-device params: a device can override a page's query params in config (e.g. `
 
 Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
 
-Mapping rules: `time.Time` is a string (RFC 3339), `module.Duration` is `Duration` (a string like `"24h"`), pointers are `T | null`, `[]byte` is a string, maps have string keys. Slices and maps are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default.
+Mapping rules: `time.Time` is a string (RFC 3339), pointers are `T | null`, and exported fields are named by their `json` tag (`omitempty` and `omitzero` make them optional). Slices are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default. Embedded fields, maps, `[]byte`, interfaces, the `,string` option and types with their own JSON encoding are errors; gentypes supports a shape once a query needs it.
 
 Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring `data` from props would otherwise shadow the module's `data` in its own type.
 

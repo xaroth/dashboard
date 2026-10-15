@@ -72,28 +72,6 @@ func orDefault(b, fallback []byte) []byte {
 	return b
 }
 
-// Duration decodes "24h"-style strings; time.Duration does not decode from
-// JSON strings.
-type Duration time.Duration
-
-func (d *Duration) UnmarshalJSON(b []byte) error {
-	if string(b) == "null" {
-		return nil
-	}
-	var s string
-	if err := json.Unmarshal(b, &s); err != nil {
-		return fmt.Errorf("duration must be a string like \"24h\": %w", err)
-	}
-	v, err := time.ParseDuration(s)
-	if err != nil {
-		return err
-	}
-	*d = Duration(v)
-	return nil
-}
-
-func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(time.Duration(d).String()) }
-
 // Result is a query result with the freshness of the module's data.
 type Result struct {
 	Value     any
@@ -103,10 +81,7 @@ type Result struct {
 	Error string
 }
 
-var (
-	ErrUnknownModule = errors.New("unknown module")
-	ErrUnknownQuery  = errors.New("unknown query")
-)
+var ErrUnknownModule = errors.New("unknown module")
 
 // Check reports whether module.query exists and params decode into its params type.
 func (s *Set) Check(module, name string, params map[string]any) error {
@@ -139,7 +114,8 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 	}
 	raw, err := json.Marshal(params)
 	if err == nil {
-		res.Value, err = q.call(s.context(ctx, inst, s.reader), inst.module, raw)
+		qctx, _ := s.context(ctx, inst, s.reader, false)
+		res.Value, err = q.call(qctx, inst.module, raw)
 	}
 	if err != nil {
 		res.Value, res.Error = nil, err.Error()
@@ -154,7 +130,7 @@ func (s *Set) lookup(module, name string) (*instance, query, error) {
 		}
 		q, ok := inst.reg.queries[name]
 		if !ok {
-			return nil, query{}, fmt.Errorf("%w %s.%s (have %s)", ErrUnknownQuery, module, name, strings.Join(inst.reg.queryNames(), ", "))
+			return nil, query{}, fmt.Errorf("unknown query %s.%s (have %s)", module, name, strings.Join(inst.reg.queryNames(), ", "))
 		}
 		return inst, q, nil
 	}

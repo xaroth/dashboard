@@ -15,7 +15,7 @@ type FakeRenderer struct {
 	mu        sync.Mutex
 	pages     []PageInfo
 	err       error
-	lastProps any
+	lastProps Props
 	closed    bool
 }
 
@@ -24,13 +24,13 @@ func NewFakeRenderer(pages ...PageInfo) *FakeRenderer {
 	return &FakeRenderer{pages: pages}
 }
 
-func (f *FakeRenderer) Describe(context.Context) ([]PageInfo, string, error) {
+func (f *FakeRenderer) Describe(context.Context) ([]PageInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.pages), "fake", nil
+	return slices.Clone(f.pages), nil
 }
 
-func (f *FakeRenderer) Render(_ context.Context, _ string, vp Viewport, props any) ([]byte, error) {
+func (f *FakeRenderer) Render(_ context.Context, _ string, props Props) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -38,7 +38,7 @@ func (f *FakeRenderer) Render(_ context.Context, _ string, vp Viewport, props an
 	}
 	f.lastProps = props
 	var buf bytes.Buffer
-	err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, vp.Width, vp.Height)))
+	err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, props.Viewport.Width, props.Viewport.Height)))
 	return buf.Bytes(), err
 }
 
@@ -64,7 +64,7 @@ func (f *FakeRenderer) FailRenders(err error) {
 }
 
 // LastProps returns the props of the last successful render.
-func (f *FakeRenderer) LastProps() any {
+func (f *FakeRenderer) LastProps() Props {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastProps
