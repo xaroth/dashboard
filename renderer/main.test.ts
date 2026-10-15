@@ -18,7 +18,7 @@ test("process answers describe and render over frames", async () => {
   expect(desc!.header.id).toBe(1);
   expect(desc!.header.pages).toContainEqual({ name: "hello", data: {} });
 
-  proc.stdin.write(encodeFrame({ id: 2, op: "render", page: "nope", viewport: { width: 10, height: 10, portrait: false } }));
+  proc.stdin.write(encodeFrame({ id: 2, op: "render", page: "nope", props: {} }));
   proc.stdin.flush();
   expect((await reader.next())!.header).toMatchObject({ id: 2, error: "unknown page nope" });
 
@@ -26,8 +26,14 @@ test("process answers describe and render over frames", async () => {
     id: 3,
     op: "render",
     page: "hello",
-    viewport: { width: 800, height: 480, portrait: false },
-    props: { data: {}, device: { name: "t", model: "m", rotation: 0 }, system: { staleModules: [] }, now: "2026-10-16T05:30:00Z", timezone: "UTC" },
+    props: {
+      data: {},
+      device: { name: "t", model: "m", rotation: 0 },
+      viewport: { width: 800, height: 480, portrait: false },
+      system: { staleModules: [] },
+      now: "2026-10-16T05:30:00Z",
+      timezone: "UTC",
+    },
   }));
   proc.stdin.flush();
   const png = await reader.next();
@@ -45,10 +51,10 @@ test("a throwing page with stray output yields an error frame and the process ke
     stderr: "pipe",
   });
   const reader = new FrameReader(proc.stdout);
-  const vp = { width: 100, height: 100, portrait: false };
+  const props = { viewport: { width: 100, height: 100, portrait: false } };
 
   for (const id of [1, 2]) {
-    proc.stdin.write(encodeFrame({ id, op: "render", page: "broken", viewport: vp, props: {} }));
+    proc.stdin.write(encodeFrame({ id, op: "render", page: "broken", props }));
     proc.stdin.flush();
     expect((await reader.next())!.header).toMatchObject({ id, error: "boom" });
   }

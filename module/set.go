@@ -141,7 +141,8 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		}
 	}
 	for i, inst := range s.instances {
-		if err := inst.reg.initialize(s.context(ctx, inst, o.Writer), inst.module, configs[i]); err != nil {
+		ictx, _ := s.context(ctx, inst, o.Writer, false)
+		if err := inst.reg.initialize(ictx, inst.module, configs[i]); err != nil {
 			inst.log.Error("initialize failed; module off until restart", "err", err)
 			inst.initErr = err
 			inst.phase = PhaseInitFail
@@ -191,16 +192,19 @@ func strictDecode(n *yaml.Node, v any) error {
 	return dec.Decode(v)
 }
 
-// context returns ctx carrying the module's dependencies, with db as its connection.
-func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB) context.Context {
-	ctx = WithDatabase(ctx, db)
-	ctx = WithLogger(ctx, inst.log)
-	ctx = WithHTTPClient(ctx, s.httpClient)
-	ctx = WithClock(ctx, s.now)
-	return WithState(ctx, &stateStore{q: New(db), module: inst.reg.name})
+// context returns ctx carrying the module's dependencies, with db as its
+// connection. Only an update's context can save a snapshot.
+func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB, update bool) (context.Context, *stateStore) {
+	state := &stateStore{q: New(db), module: inst.reg.name, update: update}
+	ctx = context.WithValue(ctx, keyDatabase, db)
+	ctx = context.WithValue(ctx, keyLogger, inst.log)
+	ctx = context.WithValue(ctx, keyHTTPClient, s.httpClient)
+	ctx = context.WithValue(ctx, keyClock, s.now)
+	return context.WithValue(ctx, keyState, state), state
 }
 
-// stateStore reads the stored snapshot; a saved one is held until the update
+// stateStore keeps a module's snapshot: the one document a module like
+// weather produces per update. A saved one is held until the update
 // succeeds, then written with the success record in one statement.
 type stateStore struct {
 	q       *Queries
@@ -209,7 +213,7 @@ type stateStore struct {
 	pending *string
 }
 
-func (s *stateStore) SaveSnapshot(_ context.Context, data []byte) error {
+func (s *stateStore) save(data []byte) error {
 	if !s.update {
 		return errors.New("snapshots are saved from Update")
 	}
@@ -218,7 +222,7 @@ func (s *stateStore) SaveSnapshot(_ context.Context, data []byte) error {
 	return nil
 }
 
-func (s *stateStore) LoadSnapshot(ctx context.Context) ([]byte, error) {
+func (s *stateStore) load(ctx context.Context) ([]byte, error) {
 	st, err := s.q.GetState(ctx, s.module)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && st.Data == nil) {
 		return nil, nil

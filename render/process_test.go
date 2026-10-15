@@ -32,12 +32,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fakeRenderer speaks the frame protocol. Its bundle hash is its pid, so tests
-// can tell whether the process was restarted. Modes: ok, hang (never answers
-// render), crash (exits on the first request), badid.
+// fakeRenderer speaks the frame protocol. Describe reports its pid as a page
+// param, so tests can tell whether the process was restarted. Modes: ok, hang
+// (never answers render), crash (exits on the first request), badid.
 func fakeRenderer(mode string) {
 	in := bufio.NewReader(os.Stdin)
-	hash := fmt.Sprint(os.Getpid())
+	pid := map[string]render.QueryDescriptor{"pid": {Params: map[string]any{"pid": fmt.Sprint(os.Getpid())}}}
 	for {
 		var n [4]byte
 		if _, err := io.ReadFull(in, n[:]); err != nil {
@@ -63,11 +63,11 @@ func fakeRenderer(mode string) {
 		case mode == "badid":
 			req.ID++
 		}
-		resp := map[string]any{"id": req.ID, "hash": hash}
+		resp := map[string]any{"id": req.ID}
 		var body []byte
 		switch {
 		case req.Op == "describe":
-			resp["pages"] = []render.PageInfo{{Name: "hello", Data: map[string]render.QueryDescriptor{}}}
+			resp["pages"] = []render.PageInfo{{Name: "hello", Data: pid}}
 		case req.Page == "nope":
 			resp["error"] = "unknown page nope"
 		default:
@@ -104,6 +104,16 @@ func newFake(tb testing.TB, mode string) (*render.Process, logSignal) {
 	return p, logs
 }
 
+// pid returns the fake renderer's pid, starting it if needed.
+func pid(tb testing.TB, p *render.Process) any {
+	tb.Helper()
+	pages, err := p.Describe(tb.Context())
+	if err != nil {
+		tb.Fatalf("Describe: %v", err)
+	}
+	return pages[0].Data["pid"].Params["pid"]
+}
+
 // waitLog blocks until the renderer logs msg.
 func waitLog(tb testing.TB, logs logSignal, msg string) {
 	tb.Helper()
@@ -123,19 +133,18 @@ func waitLog(tb testing.TB, logs logSignal, msg string) {
 func TestProcessDescribeAndRender(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "ok")
-	pages, hash, err := p.Describe(t.Context())
+	pages, err := p.Describe(t.Context())
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
-	want := []render.PageInfo{{Name: "hello", Data: map[string]render.QueryDescriptor{}}}
+	want := []render.PageInfo{{Name: "hello", Data: map[string]render.QueryDescriptor{
+		"pid": {Params: map[string]any{"pid": pid(t, p)}},
+	}}}
 	if diff := cmp.Diff(want, pages); diff != "" {
 		t.Errorf("pages (-want +got):\n%s", diff)
 	}
-	if p.Hash() != hash {
-		t.Errorf("got Hash %q, want %q", p.Hash(), hash)
-	}
 
-	png, err := p.Render(t.Context(), "hello", render.Viewport{Width: 800, Height: 480}, map[string]any{})
+	png, err := p.Render(t.Context(), "hello", render.Props{Viewport: render.Viewport{Width: 800, Height: 480}})
 	if err != nil || string(png) != "fakepng" {
 		t.Fatalf("got Render %q, %v, want fakepng", png, err)
 	}
@@ -144,52 +153,44 @@ func TestProcessDescribeAndRender(t *testing.T) {
 func TestProcessErrorResponseKeepsProcess(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "ok")
-	if _, err := p.Render(t.Context(), "nope", render.Viewport{}, nil); err == nil || !strings.Contains(err.Error(), "unknown page") {
+	before := pid(t, p)
+	if _, err := p.Render(t.Context(), "nope", render.Props{}); err == nil || !strings.Contains(err.Error(), "unknown page") {
 		t.Errorf("got %v, want unknown page error", err)
 	}
-	before := p.Hash()
-	if _, err := p.Render(t.Context(), "hello", render.Viewport{}, nil); err != nil {
+	if _, err := p.Render(t.Context(), "hello", render.Props{}); err != nil {
 		t.Fatalf("Render after error: %v", err)
 	}
-	if p.Hash() != before {
-		t.Errorf("got pid %s, want %s: renderer restarted", p.Hash(), before)
+	if after := pid(t, p); after != before {
+		t.Errorf("got pid %v, want %v: renderer restarted", after, before)
 	}
 }
 
 func TestProcessBadPropsKeepProcess(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "ok")
-	if _, _, err := p.Describe(t.Context()); err != nil {
-		t.Fatalf("Describe: %v", err)
-	}
-	before := p.Hash()
-	if _, err := p.Render(t.Context(), "hello", render.Viewport{}, map[string]any{"x": func() {}}); err == nil {
+	before := pid(t, p)
+	bad := render.Props{Data: map[string]render.Result{"x": {Value: func() {}}}}
+	if _, err := p.Render(t.Context(), "hello", bad); err == nil {
 		t.Fatal("got nil error for unencodable props, want one")
 	}
-	if _, err := p.Render(t.Context(), "hello", render.Viewport{}, nil); err != nil {
+	if _, err := p.Render(t.Context(), "hello", render.Props{}); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if p.Hash() != before {
-		t.Errorf("got pid %s, want %s: renderer restarted", p.Hash(), before)
+	if after := pid(t, p); after != before {
+		t.Errorf("got pid %v, want %v: renderer restarted", after, before)
 	}
 }
 
 func TestProcessTimeoutRestarts(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "hang")
-	if _, _, err := p.Describe(t.Context()); err != nil {
-		t.Fatalf("Describe: %v", err)
-	}
-	before := p.Hash()
+	before := pid(t, p)
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := p.Render(ctx, "hello", render.Viewport{}, nil); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := p.Render(ctx, "hello", render.Props{}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("got %v, want deadline exceeded", err)
 	}
-	if _, _, err := p.Describe(t.Context()); err != nil {
-		t.Fatalf("Describe after timeout: %v", err)
-	}
-	if p.Hash() == before {
+	if pid(t, p) == before {
 		t.Error("got the same pid after a timeout, want a new process")
 	}
 }
@@ -198,14 +199,14 @@ func TestProcessCrashBacksOff(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "crash")
 	for range 2 {
-		if _, _, err := p.Describe(t.Context()); err == nil {
+		if _, err := p.Describe(t.Context()); err == nil {
 			t.Fatal("got nil error from a crashing renderer, want one")
 		}
 	}
 	// After two failures the next start waits about 1 s, longer than this deadline.
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	if _, _, err := p.Describe(ctx); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "waiting to restart") {
+	if _, err := p.Describe(ctx); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "waiting to restart") {
 		t.Errorf("got %v, want deadline exceeded while waiting to restart", err)
 	}
 }
@@ -213,7 +214,7 @@ func TestProcessCrashBacksOff(t *testing.T) {
 func TestProcessResponseIDMismatch(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "badid")
-	if _, _, err := p.Describe(t.Context()); err == nil || !strings.Contains(err.Error(), "response id") {
+	if _, err := p.Describe(t.Context()); err == nil || !strings.Contains(err.Error(), "response id") {
 		t.Errorf("got %v, want response id error", err)
 	}
 }
@@ -223,7 +224,7 @@ func TestProcessCloseDuringHungRender(t *testing.T) {
 	p, logs := newFake(t, "hang")
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.Render(t.Context(), "hello", render.Viewport{}, nil)
+		_, err := p.Render(t.Context(), "hello", render.Props{})
 		done <- err
 	}()
 	waitLog(t, logs, "hanging")
@@ -236,7 +237,7 @@ func TestProcessCloseDuringHungRender(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Render still blocked after Close")
 	}
-	if _, _, err := p.Describe(t.Context()); !errors.Is(err, render.ErrClosed) {
+	if _, err := p.Describe(t.Context()); !errors.Is(err, render.ErrClosed) {
 		t.Errorf("got %v after Close, want ErrClosed", err)
 	}
 }
@@ -244,12 +245,12 @@ func TestProcessCloseDuringHungRender(t *testing.T) {
 func TestProcessQueuedCallerHonorsContext(t *testing.T) {
 	t.Parallel()
 	p, logs := newFake(t, "hang")
-	go p.Render(t.Context(), "hello", render.Viewport{}, nil)
+	go p.Render(t.Context(), "hello", render.Props{})
 	waitLog(t, logs, "hanging")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	if _, _, err := p.Describe(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := p.Describe(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("got %v, want deadline exceeded", err)
 	}
 }
@@ -261,10 +262,9 @@ func TestProcessConcurrent(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 10 {
-				if _, err := p.Render(t.Context(), "hello", render.Viewport{}, nil); err != nil {
+				if _, err := p.Render(t.Context(), "hello", render.Props{}); err != nil {
 					t.Errorf("Render: %v", err)
 				}
-				p.Hash()
 			}
 		})
 	}
@@ -289,20 +289,20 @@ func TestBunRenderer(t *testing.T) {
 	p := render.NewProcess([]string{bun, "renderer/main.ts", "--pages", "pages"}, root, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { p.Close() })
 
-	pages, _, err := p.Describe(t.Context())
+	pages, err := p.Describe(t.Context())
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
 	if len(pages) == 0 {
 		t.Fatal("got no pages")
 	}
-	vp := render.ViewportFor(render.Panels["reterminal_e1003"], 90)
-	raw, err := p.Render(t.Context(), "hello", vp, map[string]any{
-		"data":     map[string]any{},
-		"device":   map[string]any{"name": "test", "model": "reterminal_e1003", "rotation": 90},
-		"system":   map[string]any{"staleModules": []string{}},
-		"now":      "2026-10-16T05:30:00Z",
-		"timezone": "Europe/Amsterdam",
+	raw, err := p.Render(t.Context(), "hello", render.Props{
+		Data:     map[string]render.Result{},
+		Device:   render.DeviceProps{Name: "test", Model: "reterminal_e1003", Rotation: 90},
+		Viewport: render.ViewportFor(render.Panels["reterminal_e1003"], 90),
+		System:   render.SystemProps{StaleModules: []string{}},
+		Now:      "2026-10-16T05:30:00Z",
+		Timezone: "Europe/Amsterdam",
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)

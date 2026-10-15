@@ -12,8 +12,8 @@ import (
 
 // Renderer is the part of Process the pipeline uses.
 type Renderer interface {
-	Describe(ctx context.Context) ([]PageInfo, string, error)
-	Render(ctx context.Context, page string, vp Viewport, props any) ([]byte, error)
+	Describe(ctx context.Context) ([]PageInfo, error)
+	Render(ctx context.Context, page string, props Props) ([]byte, error)
 }
 
 // Target is who a page is rendered for: a device, or a panel in a preview.
@@ -68,7 +68,6 @@ type Result struct {
 type Image struct {
 	PNG      []byte
 	Filename string
-	Props    Props
 }
 
 var (
@@ -97,14 +96,9 @@ func NewPipeline(r Renderer, res Resolver, loc *time.Location, now func() time.T
 	return &Pipeline{renderer: r, resolver: res, location: loc, now: now}
 }
 
-// PageInfo returns every page with its declared data, as the renderer reports it.
-func (p *Pipeline) PageInfo(ctx context.Context) (map[string]PageInfo, error) {
-	return p.describe(ctx)
-}
-
 // Pages returns the page names, sorted.
 func (p *Pipeline) Pages(ctx context.Context) ([]string, error) {
-	pages, err := p.describe(ctx)
+	pages, err := p.PageInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +107,7 @@ func (p *Pipeline) Pages(ctx context.Context) ([]string, error) {
 
 // Props resolves what page would receive for t.
 func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, error) {
-	pages, err := p.describe(ctx)
+	pages, err := p.PageInfo(ctx)
 	if err != nil {
 		return Props{}, err
 	}
@@ -178,7 +172,7 @@ func (p *Pipeline) Render(ctx context.Context, t Target, page string) (Image, er
 	if err != nil {
 		return Image{}, err
 	}
-	raw, err := p.renderer.Render(ctx, page, props.Viewport, props)
+	raw, err := p.renderer.Render(ctx, page, props)
 	if err != nil {
 		return Image{}, err
 	}
@@ -186,13 +180,14 @@ func (p *Pipeline) Render(ctx context.Context, t Target, page string) (Image, er
 	if err != nil {
 		return Image{}, err
 	}
-	return Image{PNG: png, Filename: Filename(png, p.now()), Props: props}, nil
+	return Image{PNG: png, Filename: Filename(png, p.now())}, nil
 }
 
-// describe asks the renderer for its pages on every use: one small frame, and
-// a watch rebuild is seen by the next request without tracking bundle hashes.
-func (p *Pipeline) describe(ctx context.Context) (map[string]PageInfo, error) {
-	pages, _, err := p.renderer.Describe(ctx)
+// PageInfo returns every page with its declared data, by name. It asks the
+// renderer on every use: one small frame, and a watch rebuild is seen by the
+// next request.
+func (p *Pipeline) PageInfo(ctx context.Context) (map[string]PageInfo, error) {
+	pages, err := p.renderer.Describe(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("describing pages: %w", err)
 	}
