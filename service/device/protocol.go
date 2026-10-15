@@ -1,7 +1,6 @@
 package device
 
 import (
-	"cmp"
 	"encoding/json"
 	"io"
 	"net"
@@ -35,9 +34,11 @@ func (d *Devices) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.mu.Lock()
-	s, ok := d.byMAC[mac]
+	s, ok := d.states(r)[mac]
 	if !ok {
-		d.pending[mac] = d.now()
+		if _, seen := d.pending[mac]; seen || len(d.pending) < maxPending {
+			d.pending[mac] = d.now()
+		}
 		d.mu.Unlock()
 		d.log.Info("setup from unknown device", "mac", mac)
 		// HTTP 200 with status 404: the firmware shows "MAC not registered" and retries.
@@ -67,7 +68,9 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	button := source == "button" || source == "EXT0"
 
 	d.mu.Lock()
-	s.model = cmp.Or(r.Header.Get("Model"), s.model)
+	if model := r.Header.Get("Model"); render.Panels[model] != (render.Panel{}) {
+		s.model = model
+	}
 	s.wake = wakeFrom(r, d.now())
 	if button {
 		s.page = (s.page + 1) % len(s.cfg.Pages)
@@ -100,9 +103,10 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	// Same pixels as last time: keep the name so the device skips the download.
 	if prev != "" && imageHash(prev) == imageHash(filename) {
 		filename = prev
-	} else {
-		d.store.Put(filename, img.PNG)
 	}
+	// Also on reuse: another device's images may have evicted it, and a device
+	// with an empty cache downloads it again.
+	d.store.Put(filename, img.PNG)
 	d.mu.Lock()
 	s.filename = filename
 	d.mu.Unlock()
@@ -161,7 +165,7 @@ func (d *Devices) authenticate(w http.ResponseWriter, r *http.Request) (*state, 
 	token := r.Header.Get("Access-Token")
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	s, ok := d.byMAC[mac]
+	s, ok := d.states(r)[mac]
 	if !ok || token == "" {
 		writeJSON(w, http.StatusNotFound, map[string]any{"status": 404, "message": "device not registered"})
 		return nil, false
@@ -214,4 +218,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func imageHash(filename string) string {
 	hash, _, _ := strings.Cut(filename, "-")
 	return hash
+}
+
+// states returns the real or the simulated device states for r. Called with mu held.
+func (d *Devices) states(r *http.Request) map[string]*state {
+	if r.Header.Get(SimulatorHeader) != "" {
+		return d.simByMAC
+	}
+	return d.byMAC
 }

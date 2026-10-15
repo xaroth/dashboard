@@ -19,11 +19,12 @@ var simulateHTML string
 var simulateTmpl = template.Must(template.New("simulate").Parse(simulateHTML))
 
 func (h *Handler) status(name string) (device.Status, bool) {
-	i := slices.IndexFunc(h.Devices.Statuses(), func(s device.Status) bool { return s.Name == name })
+	statuses := h.Devices.Statuses()
+	i := slices.IndexFunc(statuses, func(s device.Status) bool { return s.Name == name })
 	if i < 0 {
 		return device.Status{}, false
 	}
-	return h.Devices.Statuses()[i], true
+	return statuses[i], true
 }
 
 func (h *Handler) simulatePage(w http.ResponseWriter, r *http.Request) {
@@ -53,7 +54,8 @@ type exchange struct {
 }
 
 // simulateWake plays a device wake against the real device API: setup when
-// no key is known yet, then display with the headers the firmware sends.
+// no key is known yet, then display with the headers the firmware sends. The
+// simulator header gives it separate state, so the real device is untouched.
 func (h *Handler) simulateWake(w http.ResponseWriter, r *http.Request) {
 	st, ok := h.status(r.PathValue("device"))
 	if !ok {
@@ -112,6 +114,7 @@ func (h *Handler) call(r *http.Request, path string, headers map[string]string) 
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	req.Header.Set(device.SimulatorHeader, "1")
 	rec := httptest.NewRecorder()
 	h.DeviceAPI.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()

@@ -52,10 +52,13 @@ type Devices struct {
 	log       *slog.Logger
 	now       func() time.Time
 
-	mu      sync.Mutex
-	byMAC   map[string]*state
-	byName  map[string]*state
-	pending map[string]time.Time
+	mu    sync.Mutex
+	byMAC map[string]*state
+	// Simulator requests get their own state, so they never touch a real
+	// device's key, page or wake.
+	simByMAC map[string]*state
+	byName   map[string]*state
+	pending  map[string]time.Time
 }
 
 type state struct {
@@ -66,6 +69,12 @@ type state struct {
 	page     int
 	filename string
 }
+
+// SimulatorHeader marks a request from the admin simulator.
+const SimulatorHeader = "X-Dashboard-Simulator"
+
+// maxPending caps the unknown MACs remembered, so setup calls cannot grow it without bound.
+const maxPending = 32
 
 // DefaultModel is assumed for a device that has not reported its model yet.
 const DefaultModel = "reterminal_e1001"
@@ -89,16 +98,21 @@ func New(o Options) *Devices {
 		log:       o.Log,
 		now:       o.Now,
 		byMAC:     map[string]*state{},
+		simByMAC:  map[string]*state{},
 		byName:    map[string]*state{},
 		pending:   map[string]time.Time{},
 	}
 	for _, c := range o.Devices {
 		s := &state{cfg: c}
 		d.byMAC[c.MAC] = s
+		d.simByMAC[c.MAC] = &state{cfg: c}
 		d.byName[c.Name] = s
 	}
 	return d
 }
+
+// Store is where rendered images are kept.
+func (d *Devices) Store() *Store { return d.store }
 
 // Target is how the named device is rendered: its reported model and wake.
 func (d *Devices) Target(name string) (render.Target, bool) {

@@ -22,6 +22,7 @@
   <button data-source="button">Button press</button>
   <span id="info"></span>
 </div>
+<p>Simulated wakes run through the device API with their own key and page state; the real device is not affected.</p>
 <div class="layout">
   <img id="screen" alt="no image yet">
   <pre id="log"></pre>
@@ -47,7 +48,6 @@ async function wake(source) {
 for (const b of document.querySelectorAll("button[data-source]")) {
   b.addEventListener("click", () => wake(b.dataset.source));
 }
-wake("timer");
 </script>
 </body>
 </html>

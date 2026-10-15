@@ -3,6 +3,8 @@ package device_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"image/png"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -163,6 +165,10 @@ func TestDisplay(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
 		t.Fatalf("image: got %d %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
+	cfg, err := png.DecodeConfig(rec.Body)
+	if err != nil || cfg.Width != 1872 || cfg.Height != 1404 {
+		t.Errorf("image: got %dx%d (%v), want 1872x1404", cfg.Width, cfg.Height, err)
+	}
 
 	// The wake is recorded and used for later renders.
 	target, _ := e.devices.Target("hallway")
@@ -262,6 +268,84 @@ func TestDisplayAuth(t *testing.T) {
 				t.Error("got JSON status 500, which resets the firmware")
 			}
 		})
+	}
+}
+
+func TestDisplayAdoptedTokenIsBinding(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	if code, _ := e.display(t, "first", "timer"); code != http.StatusOK {
+		t.Fatalf("got %d adopting a token, want 200", code)
+	}
+	if code, _ := e.display(t, "second", "timer"); code != http.StatusUnauthorized {
+		t.Errorf("got %d for a different token, want 401", code)
+	}
+}
+
+func TestDisplayIgnoresUnknownModel(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	key := e.setup(t)
+	code, _ := e.do(t, http.MethodGet, "/api/display", map[string]string{"ID": mac, "Access-Token": key, "Model": "kindle"})
+	if code != http.StatusOK {
+		t.Fatalf("got %d, want 200", code)
+	}
+	if target, _ := e.devices.Target("hallway"); target.Model != device.DefaultModel {
+		t.Errorf("got model %q, want %q", target.Model, device.DefaultModel)
+	}
+}
+
+func TestSimulatorIsSeparate(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	sim := map[string]string{"ID": mac, device.SimulatorHeader: "1"}
+	_, setup := e.do(t, http.MethodGet, "/api/setup", sim)
+	sim["Access-Token"] = setup["api_key"].(string)
+	sim["Model"] = "reterminal_e1003"
+	sim["Update-Source"] = "button"
+	if code, _ := e.do(t, http.MethodGet, "/api/display", sim); code != http.StatusOK {
+		t.Fatalf("simulated display: got %d, want 200", code)
+	}
+
+	// The real device, restarted service: its old token is still adopted and its state is untouched.
+	if target, _ := e.devices.Target("hallway"); target.Wake != nil || target.Model != device.DefaultModel {
+		t.Errorf("got real target %+v after a simulated wake, want untouched", target)
+	}
+	if code, _ := e.display(t, "kept-from-before", "timer"); code != http.StatusOK {
+		t.Errorf("real device with its old token: got %d, want 200", code)
+	}
+}
+
+func TestDisplayReputsEvictedImage(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	key := e.setup(t)
+	_, first := e.display(t, key, "timer")
+	filename := first["filename"].(string)
+	// Evict it: the store keeps 4 images.
+	for i := range 4 {
+		e.devices.Store().Put(fmt.Sprintf("other-%d", i), []byte("x"))
+	}
+	if code, _ := e.do(t, http.MethodGet, "/images/"+filename+".png", nil); code != http.StatusNotFound {
+		t.Fatalf("got %d, want the image evicted", code)
+	}
+	_, second := e.display(t, key, "timer")
+	if second["filename"] != filename {
+		t.Fatalf("got %v, want the unchanged filename %s", second["filename"], filename)
+	}
+	if code, _ := e.do(t, http.MethodGet, "/images/"+filename+".png", nil); code != http.StatusOK {
+		t.Errorf("got %d after the next wake, want the image back", code)
+	}
+}
+
+func TestSetupPendingIsCapped(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	for i := range 100 {
+		e.do(t, http.MethodGet, "/api/setup", map[string]string{"ID": fmt.Sprintf("02:00:00:00:00:%02x", i)})
+	}
+	if got := len(e.devices.Pending()); got > 32 {
+		t.Errorf("got %d pending, want at most 32", got)
 	}
 }
 
