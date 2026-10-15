@@ -223,7 +223,7 @@ func TestProcessCloseDuringHungRender(t *testing.T) {
 	p, logs := newFake(t, "hang")
 	done := make(chan error, 1)
 	go func() {
-		_, err := p.Render(context.Background(), "hello", render.Viewport{}, nil)
+		_, err := p.Render(t.Context(), "hello", render.Viewport{}, nil)
 		done <- err
 	}()
 	waitLog(t, logs, "hanging")

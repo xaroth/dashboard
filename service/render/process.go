@@ -306,5 +306,10 @@ func (p *Process) setCur(c *proc) {
 
 func (c *proc) kill() {
 	c.stdin.Close()
-	syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+	select {
+	case <-c.exited:
+		// Reaped: the pid may already belong to someone else.
+	default:
+		syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+	}
 }

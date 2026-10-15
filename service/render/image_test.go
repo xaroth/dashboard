@@ -114,18 +114,22 @@ func TestViewportFor(t *testing.T) {
 	t.Parallel()
 	panel := render.Panels["reterminal_e1003"]
 	testCases := []struct {
+		name     string
 		rotation int
 		want     render.Viewport
 	}{
-		{0, render.Viewport{Width: 1872, Height: 1404}},
-		{90, render.Viewport{Width: 1404, Height: 1872, Portrait: true}},
-		{180, render.Viewport{Width: 1872, Height: 1404}},
-		{270, render.Viewport{Width: 1404, Height: 1872, Portrait: true}},
+		{"landscape", 0, render.Viewport{Width: 1872, Height: 1404}},
+		{"portrait", 90, render.Viewport{Width: 1404, Height: 1872, Portrait: true}},
+		{"landscape turned", 180, render.Viewport{Width: 1872, Height: 1404}},
+		{"portrait turned", 270, render.Viewport{Width: 1404, Height: 1872, Portrait: true}},
 	}
 	for _, testCase := range testCases {
-		if diff := cmp.Diff(testCase.want, render.ViewportFor(panel, testCase.rotation)); diff != "" {
-			t.Errorf("rotation %d (-want +got):\n%s", testCase.rotation, diff)
-		}
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if diff := cmp.Diff(testCase.want, render.ViewportFor(panel, testCase.rotation)); diff != "" {
+				t.Errorf("(-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
