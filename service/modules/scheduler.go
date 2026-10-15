@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -53,25 +54,14 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		}
 
 		inst.set(PhaseUpdating, time.Time{})
-		state := &stateStore{q: storage.New(s.db.Writer), module: inst.reg.name, update: true}
-		err := s.update(WithState(uctx, state), inst)
+		err := s.runUpdate(ctx, inst)
 		if ctx.Err() != nil {
 			return
 		}
-		at := s.now()
-		q := storage.New(s.db.Writer)
 		if err == nil {
-			if err := q.RecordSuccess(ctx, storage.RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
-				inst.log.Error("recording update", "err", err)
-			}
 			failures = 0
 			phase, delay = PhaseWaiting, inst.interval
 			continue
-		}
-
-		msg := err.Error()
-		if err := q.RecordFailure(ctx, storage.RecordFailureParams{Module: inst.reg.name, At: &at, Error: &msg}); err != nil {
-			inst.log.Error("recording update failure", "err", err)
 		}
 		if errors.Is(err, ErrAuth) {
 			inst.log.Error("credentials rejected; no retries until restart", "err", err)
@@ -84,10 +74,47 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 	}
 }
 
-func (s *Set) update(ctx context.Context, inst *instance) error {
-	ctx, cancel := context.WithTimeout(ctx, updateTimeout)
+// Update runs one update of the named module now and records the result,
+// as the schedule does. It does not ask Enabled.
+func (s *Set) Update(ctx context.Context, name string) error {
+	for _, inst := range s.instances {
+		if inst.reg.name != name {
+			continue
+		}
+		if inst.initErr != nil {
+			return fmt.Errorf("%s: initialize failed: %w", name, inst.initErr)
+		}
+		return s.runUpdate(ctx, inst)
+	}
+	return fmt.Errorf("%w %q", ErrUnknownModule, name)
+}
+
+// runUpdate calls Update with a timeout and records success, with the
+// snapshot it saved, or failure.
+func (s *Set) runUpdate(ctx context.Context, inst *instance) error {
+	inst.updating.Lock()
+	defer inst.updating.Unlock()
+	state := &stateStore{q: storage.New(s.db.Writer), module: inst.reg.name, update: true}
+	uctx, cancel := context.WithTimeout(WithState(s.context(ctx, inst, s.db.Writer), state), updateTimeout)
 	defer cancel()
-	return inst.reg.update(ctx, inst.module)
+	err := inst.reg.update(uctx, inst.module)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	at := s.now()
+	q := storage.New(s.db.Writer)
+	if err == nil {
+		// The update itself worked; a failed write here is not a source failure to back off from.
+		if err := q.RecordSuccess(ctx, storage.RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
+			inst.log.Error("recording update", "err", err)
+		}
+		return nil
+	}
+	msg := err.Error()
+	if rerr := q.RecordFailure(ctx, storage.RecordFailureParams{Module: inst.reg.name, At: &at, Error: &msg}); rerr != nil {
+		inst.log.Error("recording update failure", "err", rerr)
+	}
+	return err
 }
 
 func backoff(failures int) time.Duration {

@@ -55,6 +55,16 @@ func (s *stubPipeline) Render(ctx context.Context, t render.Target, page string)
 
 type stubModules struct{}
 
+func (stubModules) Update(_ context.Context, name string) error {
+	switch name {
+	case "weather":
+		return nil
+	case "car":
+		return errors.New("token refused")
+	}
+	return fmt.Errorf("%w %q", modules.ErrUnknownModule, name)
+}
+
 func (stubModules) Statuses(context.Context) ([]modules.Status, error) {
 	fetched := time.Date(2026, 10, 16, 7, 0, 0, 0, time.UTC)
 	return []modules.Status{
@@ -135,6 +145,29 @@ func TestIndexWithoutDevices(t *testing.T) {
 	rec := get(t, h, "/")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "No devices configured") {
 		t.Errorf("got %d, want 200 with \"No devices configured\"", rec.Code)
+	}
+}
+
+func TestUpdateModule(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		module string
+		want   int
+	}{
+		{"weather", http.StatusSeeOther},
+		{"car", http.StatusSeeOther}, // the failure shows in the table
+		{"nope", http.StatusNotFound},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.module, func(t *testing.T) {
+			t.Parallel()
+			h, _ := newHandler(t)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/modules/"+testCase.module+"/update", nil))
+			if rec.Code != testCase.want {
+				t.Errorf("got %d, want %d", rec.Code, testCase.want)
+			}
+		})
 	}
 }
 

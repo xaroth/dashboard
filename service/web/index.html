@@ -21,7 +21,7 @@
 <h2>Modules</h2>
 {{with .Modules}}
 <table>
-  <tr><th>Module</th><th>State</th><th>Every</th><th>Fetched</th><th>Attempted</th><th>Next</th><th>Error</th></tr>
+  <tr><th>Module</th><th>State</th><th>Every</th><th>Fetched</th><th>Attempted</th><th>Next</th><th>Error</th><th></th></tr>
   {{range .}}
   <tr>
     <td>{{.Name}}</td>
@@ -31,6 +31,7 @@
     <td>{{with .AttemptedAt}}{{.Local.Format "01-02 15:04:05"}}{{else}}-{{end}}</td>
     <td>{{if not .NextRun.IsZero}}{{.NextRun.Local.Format "01-02 15:04:05"}}{{else}}-{{end}}</td>
     <td>{{.Error}}</td>
+    <td><form method="post" action="/modules/{{.Name}}/update"><button>Update now</button></form></td>
   </tr>
   {{end}}
 </table>
