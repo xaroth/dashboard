@@ -61,14 +61,23 @@ func TestOpenPragmas(t *testing.T) {
 
 func TestOpenReopens(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	// Characters that mean something in a URL.
+	dir := filepath.Join(t.TempDir(), "a?b#c%d")
 	for range 2 {
 		db, err := storage.Open(t.Context(), dir)
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
+		var size int
+		if err := db.Reader.QueryRowContext(t.Context(), "PRAGMA page_size").Scan(&size); err != nil {
+			t.Fatalf("page_size: %v", err)
+		}
+		if size != 16384 {
+			t.Errorf("got page size %d, want 16384", size)
+		}
 		db.Close()
 	}
+	// The file is where the path says, not under an escaped name.
 	if _, err := os.Stat(filepath.Join(dir, storage.File)); err != nil {
 		t.Errorf("database file: %v", err)
 	}
@@ -97,12 +106,17 @@ func TestMigrate(t *testing.T) {
 		{"applies", good, "sql/migrations", false},
 		{"bad sql", bad, "sql/migrations", true},
 		{"missing dir", good, "nope", true},
+		{"bad owner", good, "sql/migrations", true},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			db := open(t)
-			err := db.Migrate(t.Context(), "test", testCase.fsys, testCase.dir)
+			owner := "test"
+			if testCase.name == "bad owner" {
+				owner = "x; DROP TABLE module_state"
+			}
+			err := db.Migrate(t.Context(), owner, testCase.fsys, testCase.dir)
 			if (err != nil) != testCase.wantErr {
 				t.Fatalf("got error %v, want error %v", err, testCase.wantErr)
 			}

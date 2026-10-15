@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
@@ -40,6 +41,9 @@ var (
 		"mmap_size(268435456)",
 	}
 )
+
+// Owners name the goose version table.
+var ownerName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 //go:embed sql/migrations/*.sql
 var migrations embed.FS
@@ -88,7 +92,7 @@ func Open(ctx context.Context, dir string) (*DB, error) {
 // pragmas in alphabetical order, so journal_mode would fix the page size
 // before page_size ran; here it runs first and the WAL switch writes it.
 func bootstrap(ctx context.Context, path string) error {
-	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma="+url.QueryEscape(fmt.Sprintf("page_size(%d)", pageSize)))
+	conn, err := sql.Open("sqlite", dsn(path, []string{fmt.Sprintf("page_size(%d)", pageSize)}))
 	if err != nil {
 		return err
 	}
@@ -107,12 +111,16 @@ func dsn(path string, pragmas []string) string {
 	// Times as UTC text SQLite's date functions read, not Go's Time.String.
 	q.Set("_time_format", "sqlite")
 	q.Set("_timezone", "UTC")
-	return "file:" + path + "?" + q.Encode()
+	// Opaque keeps ?, # and % in the path from being read as URL syntax.
+	return (&url.URL{Scheme: "file", Opaque: url.PathEscape(path), RawQuery: q.Encode()}).String()
 }
 
 // Migrate applies owner's goose migrations, the .sql files in dir of fsys,
 // tracking them in the table goose_<owner>.
 func (db *DB) Migrate(ctx context.Context, owner string, fsys fs.FS, dir string) error {
+	if !ownerName.MatchString(owner) {
+		return fmt.Errorf("invalid migration owner %q", owner)
+	}
 	sub, err := fs.Sub(fsys, dir)
 	if err != nil {
 		return fmt.Errorf("migrations for %s: %w", owner, err)
