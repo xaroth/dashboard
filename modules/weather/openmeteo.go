@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xaroth/dashboard/service/modules"
+	"github.com/xaroth/dashboard/module"
 )
 
 // Location is a geocoded place.
@@ -182,7 +182,7 @@ func getJSON(ctx context.Context, u string, v any) error {
 	if err != nil {
 		return err
 	}
-	resp, err := modules.HTTPClient(ctx).Do(req)
+	resp, err := module.HTTPClient(ctx).Do(req)
 	if err != nil {
 		return err
 	}
@@ -191,5 +191,8 @@ func getJSON(ctx context.Context, u string, v any) error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	return json.NewDecoder(resp.Body).Decode(v)
+	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+	return nil
 }

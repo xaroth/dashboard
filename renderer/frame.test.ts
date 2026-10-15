@@ -51,7 +51,7 @@ test("malformed header is an error", async () => {
   }
 });
 
-// Shared with service/render/frame_internal_test.go.
+// Shared with render/frame_internal_test.go.
 const vectorRequest = "000000187b226964223a312c226f70223a226465736372696265227d";
 const vectorResponse = "0000001b7b226964223a322c2268617368223a2268222c22706e67223a337d010203";
 

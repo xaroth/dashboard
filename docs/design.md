@@ -4,7 +4,7 @@ Status: ready, 2026-10-16. Background and data source research: [research.md](re
 
 ## Overview
 
-One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E1003) running TRMNL firmware in BYOS mode. The service owns I/O, storage, scheduling, rendering and the device protocol. Data sources are modules: packages under `modules/` that register themselves, are configured in YAML, and are global to the system (not tied to a device).
+One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E1003) running TRMNL firmware in BYOS mode. The service owns I/O, storage, scheduling, rendering and the device protocol. Data sources are modules: packages under `modules/`, listed in `modules.All` and configured in YAML. They are global to the system (not tied to a device).
 
 ```
              +---------------------------- dashboard -----------------------------+
@@ -22,17 +22,17 @@ One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E10
 ## Code layout
 
 ```
-cmd/dashboard/main.go      entrypoint: load config, build service, run
-cmd/dashboard/config.go    config loading: YAML file, ${ENV} substitution, validation
-service/service.go         the service: wires storage, scheduler, modules, listeners
-service/modules/           registration API and the module contract
-service/storage/           SQLite: connections, migrations, state, series, rollups, devices
-service/storage/sql/       the service's own migrations and queries
-service/scheduler/         module updates, rollups, retention
-service/device/            TRMNL protocol, health, page selection, screen schedule
-service/render/            page pipeline, renderer process, gray reduction, PNG
-service/web/               admin UI, preview, module route mounting
-modules/modules.go         blank-imports every module so it registers
+cmd/dashboard/             entrypoint and the only wiring point: config loading and
+                           validation, storage, modules, renderer, listeners, admin UI
+                           (status, preview, device simulator)
+cmd/gentypes/              generates pages/generated from the module query types
+storage/                   SQLite: connections, per-owner migrations
+module/                    registration API, module contract, scheduler, query dispatch,
+                           module state
+module/sql/                module state migrations and queries
+device/                    TRMNL protocol, health, page selection, screen schedule
+render/                    page pipeline, renderer process, gray reduction, PNG
+modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
 modules/<name>/sql/        the module's migrations and queries
 renderer/                  Bun process: bundles pages, renders with takumi-js
@@ -40,7 +40,17 @@ pages/                     TSX pages, components, CSS modules
 pages/generated/           TypeScript types generated from Go query results
 ```
 
-Everything outside `modules/` is the service. `service/service.go` imports `modules` so all modules are linked in; it only knows them through the registry.
+Packages are one level deep and named for what they do. They do not import each other sideways; `cmd/dashboard` wires them together:
+
+```
+cmd/dashboard  -> storage, module, modules, device, render
+cmd/gentypes   -> module, modules
+modules        -> module, modules/<name>
+modules/<name> -> module
+device         -> render
+```
+
+`module` does not import `storage`: `module.Load` takes the writer and reader connections and a `Migrator`, which `*storage.DB` satisfies.
 
 ## Modules
 
@@ -58,12 +68,12 @@ Device health is a service concern, not a module (see [Devices](#devices)).
 
 ### Registration
 
-Modules register themselves at init, the same pattern as `database/sql` drivers:
+A module exports its registration, built with `module.Define`. `modules.All` lists every module explicitly, and `main` passes that list to `module.Load`; there is no global registry.
 
 ```go
 package weather
 
-import "github.com/xaroth/dashboard/service/modules"
+import "github.com/xaroth/dashboard/module"
 
 type config struct {
 	Location string `yaml:"location"`
@@ -73,44 +83,52 @@ func defaultConfig() *config {
 	return &config{Location: "Uithoorn, The Netherlands"}
 }
 
-type module struct {
+type weather struct {
 	cfg *config
 }
 
-var _ = modules.Register[module, config](
+var Module = module.Define[weather, config](
 	"weather",
 	defaultConfig,
-	modules.WithUpdateInterval(15*time.Minute),
-	modules.WithStaleAfter(2*time.Hour),
+	module.WithUpdateInterval(15*time.Minute),
+	module.WithStaleAfter(2*time.Hour),
 )
 
-func (m *module) Initialize(ctx context.Context, cfg *config) error {
+func (m *weather) Initialize(ctx context.Context, cfg *config) error {
 	m.cfg = cfg
 	return nil
 }
 
-func (m *module) Enabled(ctx context.Context) bool {
+func (m *weather) Enabled(ctx context.Context) bool {
 	return m.cfg.Location != ""
 }
 
-func (m *module) Update(ctx context.Context) error {
-	db := modules.Database(ctx)
+func (m *weather) Update(ctx context.Context) error {
+	db := module.Database(ctx)
 	// on first run, geocode Location through Open-Meteo and cache the coordinates
 	// in the module's table; a changed Location triggers a new lookup.
 	// then fetch the forecast and write state.
 }
 ```
 
-`Register` is generic over the module and config types. A third, inferred type parameter constrains `*M` to the module interface, so a missing method is a compile error:
+`Define` is generic over the module and config types. A third, inferred type parameter constrains `*M` to the module interface, so a missing method is a compile error:
 
 ```go
-func Register[M any, C any, PM interface {
+func Define[M any, C any, PM interface {
 	*M
 	Module[C]
 }](name string, defaults func() *C, opts ...Option) Registration
 ```
 
-The registry is package-level state in `service/modules`, filled before `main` runs; the service reads it once at start.
+```go
+package modules
+
+func All() []module.Registration {
+	return []module.Registration{weather.Module}
+}
+```
+
+Adding a module adds it to that list.
 
 ### Contract
 
@@ -143,11 +161,11 @@ modules:
 ```
 
 - A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. If `Initialize` returns an error, the module is marked failed and stays off until restart.
-- Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until the config changes or the service restarts, and show on the screens. Modules return a typed error for this (`modules.ErrAuth`).
+- Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until the config changes or the service restarts, and show on the screens. Modules return a typed error for this (`module.ErrAuth`).
 
 ### Dependencies
 
-Dependencies come through the context: `modules.Database(ctx)`, `modules.Logger(ctx)`, `modules.HTTPClient(ctx)`, `modules.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. Tests build a context with fakes through the same setters.
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)`, `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. Tests build a context with fakes through the same setters.
 
 ## Storage
 
@@ -158,16 +176,16 @@ One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), n
 SQL lives in `.sql` files next to the code that owns it:
 
 ```
-service/storage/sql/migrations/00001_state.sql
-service/storage/sql/queries.sql
+module/sql/migrations/00001_state.sql
+module/sql/queries.sql
 modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
-- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. The service runs the storage migrations, then each registered module's, before any `Initialize`. A failing migration stops startup.
-- **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`sqlc diff`).
-- **Tables** are prefixed with their owner (`weather_locations`). An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state, and series through `modules.Series(ctx)` for writes (buffered) and reads (bucketed, picking the rollup).
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each module's, before any `Initialize`. A failing migration stops startup.
+- **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
+- **Tables** are prefixed with their owner (`weather_locations`). An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state, and series through `module.Series(ctx)` for writes (buffered) and reads (bucketed, picking the rollup).
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Anything sampled every minute goes through the series buffer, so it lands in the minute flush. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
 - **Times** are `TIMESTAMP` columns in UTC, stored as SQLite date text (driver option `_time_format=sqlite`), so SQLite's date functions work on them. Series use integer Unix seconds to keep rows small.
 
@@ -177,8 +195,8 @@ Registration hands the migrations to the service; `WithMigrations` takes the emb
 //go:embed sql/migrations/*.sql
 var migrations embed.FS
 
-var _ = modules.Register[module, config]("weather", defaultConfig,
-	modules.WithMigrations(migrations),
+var Module = module.Define[weather, config]("weather", defaultConfig,
+	module.WithMigrations(migrations),
 )
 ```
 
@@ -186,7 +204,7 @@ var _ = modules.Register[module, config]("weather", defaultConfig,
 
 - **Page size**: on a new file, a bootstrap connection runs `page_size=16384` and then `journal_mode=WAL`; the WAL switch writes the header with that page size, and after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
 - **Writer**: one connection (`MaxOpenConns(1)`), used by `Update`, the minute flush, rollups and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
-- **Reader**: a pool of 4 opened with `query_only(1)` after migrations, used by query functions. `modules.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
+- **Reader**: a pool of 4 opened with `query_only(1)`, used by query functions. `module.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
 - DSN pragmas apply to every new pooled connection: `journal_mode=WAL` (writer), `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared). Driver options on both: `_time_format=sqlite` and `_timezone=UTC`, so every time is converted to UTC before it is written.
 
 ### Write load
@@ -352,21 +370,21 @@ type powerParams struct {
 	Step  time.Duration `yaml:"step"`
 }
 
-var _ = modules.Register[module, config](
+var Module = module.Define[p1, config](
 	"p1",
 	defaultConfig,
-	modules.WithQuery("power", (*module).power),
+	module.WithQuery("power", (*p1).power),
 )
 
-func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
+func (m *p1) power(ctx context.Context, p powerParams) (Series, error) {
 	// series are service-owned; the service picks the rollup and buckets
-	return modules.Series(ctx).Query(ctx, "p1.power_import", p.Range, p.Step)
+	return module.Series(ctx).Query(ctx, "p1.power_import", p.Range, p.Step)
 }
 ```
 
 - Params are decoded from the page header into the query's own struct; unknown keys and bad values fail at startup, not at render.
 - Results are plain structs that serialize to JSON; TypeScript types for them are generated (see [Types](#types)).
-- Queries read storage only, never the source: their own tables through sqlc on the read-only connection, series through `modules.Series(ctx)`.
+- Queries read storage only, never the source: their own tables through sqlc on the read-only connection, series through `module.Series(ctx)`.
 
 ### Data volume
 
@@ -389,7 +407,7 @@ A long-running Bun process (`renderer/`), started and supervised by the Go servi
 
 ### Pipeline
 
-1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle. Durations in params use a `modules.Duration` type that decodes `"24h"`-style strings (plain `time.Duration` does not decode from JSON strings); its TypeScript type is a template literal string.
+1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle. Durations in params use a `module.Duration` type that decodes `"24h"`-style strings (plain `time.Duration` does not decode from JSON strings); its TypeScript type is a template literal string.
 2. **Resolve**: Go runs the page's queries concurrently with a timeout. One failing query yields an error envelope, not a failed page.
 3. **Render**: Go sends props to the renderer, gets an RGBA PNG.
 4. **Reduce** (Go): rotate if needed, map each pixel to the nearest of 4 gray levels (0, 85, 170, 255) without dithering, which keeps text sharp, and encode a 2-bit PNG. Both models use 4 levels.
@@ -402,7 +420,7 @@ Per-device params: a device can override a page's query params in config (e.g. `
 
 Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
 
-Mapping rules: `time.Time` is a string (RFC 3339), `modules.Duration` is `Duration` (a string like `"24h"`), pointers are `T | null`, `[]byte` is a string, maps have string keys. Slices and maps are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default.
+Mapping rules: `time.Time` is a string (RFC 3339), `module.Duration` is `Duration` (a string like `"24h"`), pointers are `T | null`, `[]byte` is a string, maps have string keys. Slices and maps are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default.
 
 Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring `data` from props would otherwise shadow the module's `data` in its own type.
 

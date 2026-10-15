@@ -1,5 +1,12 @@
-// Package modules links every data source module into the binary. Each
-// module registers itself at init; add a blank import per module.
+// Package modules lists the data source modules linked into the binary.
 package modules
 
-import _ "github.com/xaroth/dashboard/modules/weather"
+import (
+	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/modules/weather"
+)
+
+// All returns every module's registration.
+func All() []module.Registration {
+	return []module.Registration{weather.Module}
+}

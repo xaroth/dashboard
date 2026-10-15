@@ -16,9 +16,9 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/modules/weather"
-	"github.com/xaroth/dashboard/service/modules"
-	"github.com/xaroth/dashboard/service/storage"
+	"github.com/xaroth/dashboard/storage"
 )
 
 // The fixtures were recorded at this moment: 2026-10-16 00:45 in Amsterdam.
@@ -86,24 +86,13 @@ func newFake(tb testing.TB) *fakeOpenMeteo {
 	return f
 }
 
-func registration(tb testing.TB) modules.Registration {
-	tb.Helper()
-	for _, r := range modules.Registered() {
-		if r.Name() == "weather" {
-			return r
-		}
-	}
-	tb.Fatal("weather is not registered")
-	return modules.Registration{}
-}
-
 // load loads the weather module against the fake, with the given extra config keys.
-func load(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string) *modules.Set {
+func load(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string) *module.Set {
 	tb.Helper()
 	return loadAt(tb, dir, fake, extra, fixtureNow)
 }
 
-func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now time.Time) *modules.Set {
+func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now time.Time) *module.Set {
 	tb.Helper()
 	db, err := storage.Open(tb.Context(), dir)
 	if err != nil {
@@ -115,10 +104,12 @@ func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now ti
 	if err := yaml.Unmarshal([]byte(src), &configs); err != nil {
 		tb.Fatalf("config: %v", err)
 	}
-	set, err := modules.Load(tb.Context(), modules.Options{
-		Registrations: []modules.Registration{registration(tb)},
+	set, err := module.Load(tb.Context(), module.Options{
+		Registrations: []module.Registration{weather.Module},
 		Configs:       configs,
-		DB:            db,
+		Migrator:      db,
+		Writer:        db.Writer,
+		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    fake.Client(),
 		Now:           func() time.Time { return now },
@@ -129,7 +120,7 @@ func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now ti
 	return set
 }
 
-func forecast(tb testing.TB, set *modules.Set, params map[string]any) (*weather.Forecast, modules.Result) {
+func forecast(tb testing.TB, set *module.Set, params map[string]any) (*weather.Forecast, module.Result) {
 	tb.Helper()
 	res := set.Resolve(tb.Context(), "weather", "forecast", params)
 	if res.Error != "" {
@@ -276,10 +267,10 @@ func TestConfig(t *testing.T) {
 	testCases := []struct {
 		name  string
 		extra string
-		want  modules.Phase
+		want  module.Phase
 	}{
-		{"default", "", modules.PhaseWaiting},
-		{"too many days", "forecast_days: 17", modules.PhaseInitFail},
+		{"default", "", module.PhaseWaiting},
+		{"too many days", "forecast_days: 17", module.PhaseInitFail},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
