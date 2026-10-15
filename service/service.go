@@ -32,6 +32,12 @@ func New(cfg Config, log *slog.Logger) (*Service, error) {
 	return s, nil
 }
 
+// Device is the handler for the device listener.
+func (s *Service) Device() http.Handler { return s.device }
+
+// Admin is the handler for the admin listener.
+func (s *Service) Admin() http.Handler { return s.admin }
+
 // Run serves both listeners until ctx is cancelled or one of them fails.
 func (s *Service) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
@@ -45,6 +51,10 @@ func (s *Service) serve(ctx context.Context, g *errgroup.Group, name, addr strin
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		// Covers a render on a cold or restarting renderer.
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  2 * time.Minute,
 		// Requests keep their context during the shutdown drain.
 		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}

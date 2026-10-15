@@ -1,89 +1,81 @@
-package service
+package service_test
 
 import (
 	"context"
-	"io"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/xaroth/dashboard/service"
 )
 
-func freeAddr(t *testing.T) string {
+// freeAddr returns an address that was free a moment ago.
+func freeAddr(tb testing.TB) string {
+	tb.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatalf("listening: %v", err)
 	}
 	defer l.Close()
 	return l.Addr().String()
 }
 
-func newTestService(t *testing.T, device, admin string) *Service {
-	cfg := DefaultConfig()
-	cfg.Listen = Listen{Device: device, Admin: admin}
-	s, err := New(cfg, slog.New(slog.DiscardHandler))
+func newService(tb testing.TB, device, admin string) *service.Service {
+	tb.Helper()
+	cfg := service.DefaultConfig()
+	cfg.Listen = service.Listen{Device: device, Admin: admin}
+	s, err := service.New(cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatalf("New: %v", err)
 	}
 	return s
 }
 
 func TestHealthz(t *testing.T) {
-	s := newTestService(t, "", "")
+	t.Parallel()
+	s := newService(t, "", "")
 	rec := httptest.NewRecorder()
-	s.admin.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
-	if rec.Code != 200 || rec.Body.String() != "ok\n" {
-		t.Errorf("got %d %q", rec.Code, rec.Body.String())
+	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
+		t.Errorf("got %d %q, want 200 \"ok\\n\"", rec.Code, rec.Body.String())
 	}
 }
 
 func TestRunStopsOnCancel(t *testing.T) {
-	admin := freeAddr(t)
-	s := newTestService(t, freeAddr(t), admin)
-	ctx, cancel := context.WithCancel(context.Background())
+	t.Parallel()
+	s := newService(t, freeAddr(t), freeAddr(t))
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- s.Run(ctx) }()
-
-	var resp *http.Response
-	var err error
-	for range 50 {
-		if resp, err = http.Get("http://" + admin + "/healthz"); err == nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-
 	cancel()
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Errorf("Run = %v", err)
+			t.Errorf("got %v, want nil", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not return")
+		t.Fatal("Run did not return after cancel")
 	}
 }
 
 func TestRunFailsOnBindError(t *testing.T) {
+	t.Parallel()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("listening: %v", err)
 	}
 	defer l.Close()
-	s := newTestService(t, l.Addr().String(), freeAddr(t))
+	s := newService(t, l.Addr().String(), freeAddr(t))
 	done := make(chan error, 1)
-	go func() { done <- s.Run(context.Background()) }()
+	go func() { done <- s.Run(t.Context()) }()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Error("Run = nil, want bind error")
+		if _, ok := errors.AsType[*net.OpError](err); !ok {
+			t.Errorf("got %v, want a bind error", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return")
@@ -91,18 +83,30 @@ func TestRunFailsOnBindError(t *testing.T) {
 }
 
 func TestNormalizeMAC(t *testing.T) {
-	for in, want := range map[string]string{
-		"aa:bb:cc:dd:ee:ff": "AA:BB:CC:DD:EE:FF",
-		"AA-BB-CC-DD-EE-FF": "AA:BB:CC:DD:EE:FF",
-		"aabb.ccdd.eeff":    "AA:BB:CC:DD:EE:FF",
-	} {
-		if got, err := NormalizeMAC(in); err != nil || got != want {
-			t.Errorf("NormalizeMAC(%q) = %q, %v", in, got, err)
-		}
+	t.Parallel()
+	testCases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"colons", "aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF", false},
+		{"dashes", "AA-BB-CC-DD-EE-FF", "AA:BB:CC:DD:EE:FF", false},
+		{"dots", "aabb.ccdd.eeff", "AA:BB:CC:DD:EE:FF", false},
+		{"empty", "", "", true},
+		{"garbage", "nope", "", true},
+		{"eui-64", "aa:bb:cc:dd:ee:ff:00:11", "", true},
 	}
-	for _, in := range []string{"", "nope", "aa:bb:cc:dd:ee:ff:00:11"} {
-		if _, err := NormalizeMAC(in); err == nil {
-			t.Errorf("NormalizeMAC(%q) succeeded", in)
-		}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := service.NormalizeMAC(testCase.in)
+			if (err != nil) != testCase.wantErr {
+				t.Fatalf("got error %v, want error %v", err, testCase.wantErr)
+			}
+			if got != testCase.want {
+				t.Errorf("got %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
