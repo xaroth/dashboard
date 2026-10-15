@@ -408,6 +408,44 @@ func TestScheduleAuthStops(t *testing.T) {
 	})
 }
 
+func TestManualUpdateResetsBackoff(t *testing.T) {
+	run(t, "test: {key: k, fail: update, fail_until: 2}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		time.Sleep(30 * time.Second) // second failure, retry in 1m
+		synctest.Wait()
+		if err := set.Update(t.Context(), "test"); err != nil {
+			t.Fatalf("manual update: %v", err)
+		}
+		synctest.Wait()
+		got := status(t, set)
+		if got.Phase != module.PhaseWaiting || !got.NextRun.Equal(time.Now().Add(10*time.Minute)) {
+			t.Errorf("got %s next run %v, want waiting a full interval from now %v", got.Phase, got.NextRun, time.Now())
+		}
+	})
+}
+
+func TestManualUpdateResumesAfterAuth(t *testing.T) {
+	run(t, "test: {key: k, fail: auth, fail_until: 1}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		if got := status(t, set).Phase; got != module.PhaseAuth {
+			t.Fatalf("got phase %s, want %s", got, module.PhaseAuth)
+		}
+		if err := set.Update(t.Context(), "test"); err != nil {
+			t.Fatalf("manual update: %v", err)
+		}
+		synctest.Wait()
+		if got := status(t, set); got.Phase != module.PhaseWaiting || got.NextRun.IsZero() {
+			t.Fatalf("got %+v, want the schedule resumed", got)
+		}
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		// The auth failure, the manual update, then the resumed schedule.
+		if diff := cmp.Diff(map[string]int{"updates": 3}, snapshot(t, db)); diff != "" {
+			t.Errorf("snapshot (-want +got):\n%s", diff)
+		}
+	})
+}
+
 func TestModuleState(t *testing.T) {
 	t.Parallel()
 	_, db := loadRegs(t.Context(), t, "", nil)

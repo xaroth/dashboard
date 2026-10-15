@@ -32,17 +32,28 @@ func (s *Set) Run(ctx context.Context) {
 
 // schedule runs one module: jittered start, then Update every interval while
 // enabled. Failures back off exponentially from 30 s, not capped at the
-// interval; ErrAuth stops the schedule.
+// interval; ErrAuth pauses the schedule. A successful manual update resets
+// the backoff and resumes a paused schedule, an interval later.
 func (s *Set) schedule(ctx context.Context, inst *instance) {
 	delay := rand.N(min(inst.interval, maxJitter))
 	failures := 0
 	phase := PhaseWaiting
 	for {
-		inst.set(phase, s.now().Add(delay))
+		var timer <-chan time.Time // nil while paused: wait for a kick
+		if phase == PhaseAuth {
+			inst.set(phase, time.Time{})
+		} else {
+			inst.set(phase, s.now().Add(delay))
+			timer = time.After(delay)
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(delay):
+		case <-inst.kick:
+			failures = 0
+			phase, delay = PhaseWaiting, inst.interval
+			continue
+		case <-timer:
 		}
 
 		uctx, _ := s.context(ctx, inst, s.writer, false)
@@ -66,9 +77,9 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 			continue
 		}
 		if errors.Is(err, ErrAuth) {
-			inst.log.Error("credentials rejected; no retries until restart", "err", err)
-			inst.set(PhaseAuth, time.Time{})
-			return
+			inst.log.Error("credentials rejected; no retries until a manual update succeeds", "err", err)
+			phase = PhaseAuth
+			continue
 		}
 		failures++
 		phase, delay = PhaseFailed, backoff(failures)
@@ -77,7 +88,8 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 }
 
 // Update runs one update of the named module now and records the result,
-// as the schedule does. It does not ask Enabled.
+// as the schedule does. It does not ask Enabled. On success the schedule
+// starts over from it.
 func (s *Set) Update(ctx context.Context, name string) error {
 	for _, inst := range s.instances {
 		if inst.reg.name != name {
@@ -86,7 +98,14 @@ func (s *Set) Update(ctx context.Context, name string) error {
 		if inst.initErr != nil {
 			return fmt.Errorf("%s: initialize failed: %w", name, inst.initErr)
 		}
-		return s.runUpdate(ctx, inst)
+		if err := s.runUpdate(ctx, inst); err != nil {
+			return err
+		}
+		select {
+		case inst.kick <- struct{}{}:
+		default: // a kick is already pending
+		}
+		return nil
 	}
 	return fmt.Errorf("%w %q", ErrUnknownModule, name)
 }

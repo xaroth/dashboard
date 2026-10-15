@@ -25,7 +25,7 @@ type Module[C any] interface {
 }
 
 // ErrAuth marks an update error the source rejected for credentials: retries
-// stop until the service restarts.
+// stop until a manual update succeeds or the service restarts.
 var ErrAuth = errors.New("authentication rejected")
 
 const (
