@@ -14,7 +14,7 @@ One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E10
  Google    --+--> modules/calendar -+--> storage <-- queries --> render ------------+--> device API <-- E1001
  Pleos     --+--> modules/car ------+   (state +        |         (Bun: TSX+Takumi)|               <-- E1003
  Open-Meteo -+--> modules/weather --+    series)        |                           |
-             |          ^                                +--> web UI: preview, module routes (OAuth)
+             |          ^                                +--> web UI: status, preview
              |      scheduler                                                       |
              +--------------------------------------------------------------------+
 ```
@@ -110,22 +110,34 @@ The registry is package-level state in `service/modules`, filled before `main` r
 
 ### Contract
 
-Required:
+Deliberately small; capabilities are added when a module needs them.
 
 | Method | Purpose |
 | --- | --- |
-| `Initialize(ctx, *C) error` | Receive config (defaults overlaid with `modules.<name>` from YAML; unknown keys are an error). Set up clients, run backfill if storage is empty. |
+| `Initialize(ctx, *C) error` | Receive config, set up clients, create the module's own tables. |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
-Optional, detected by interface assertion:
+Options: `WithUpdateInterval`, `WithStaleAfter`, `WithQuery` (see [Queries](#queries)).
 
-| Method | Purpose |
-| --- | --- |
-| `Routes(mux *http.ServeMux)` | Handlers mounted under `/modules/<name>/` on the admin listener: OAuth redirect/callback, login forms, debug pages. |
-
-Options: `WithUpdateInterval`, `WithStaleAfter`, `WithActiveHours` (e.g. car only 06:00-23:00 to spare the Bluelink quota), and `WithQuery` to expose data to pages (see [Queries](#queries)). Config can override the timing options.
+Not in v1, added when a module needs it: HTTP routes (OAuth, login forms), active hours, backfill hooks, a shared key-value store.
 
 Update and queries are split so a slow or failing source never blocks a screen: pages render from the last stored data.
+
+### Configuration and lifecycle
+
+- A module runs only if it has a `modules.<name>` section in the YAML. Registered but unconfigured modules stay off.
+- The section holds the module's own keys, decoded over its defaults; unknown keys are an error. Timing overrides live under a reserved `schedule` key that the service strips before decoding:
+
+```yaml
+modules:
+  p1:
+    url: http://192.168.1.20
+    schedule:
+      update_interval: 1m
+```
+
+- A source being offline never stops the service. If `Initialize` fails, the module is marked failed, shown as such on the screens, and `Initialize` is retried with backoff; `Update` runs only after it succeeds.
+- Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until the config changes or the service restarts, and show on the screens. Modules return a typed error for this (`modules.ErrAuth`).
 
 ### Dependencies
 
@@ -135,29 +147,47 @@ Dependencies come through the context: `modules.Database(ctx)`, `modules.Logger(
 
 One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo.
 
-### Keeping it in memory
+### Write load
 
-Two ways to keep most data in memory with periodic disk writes:
+The concern is many tiny writes wearing the SSD, not losing a minute of data. So:
 
-1. **On-disk SQLite tuned for memory** (chosen): WAL mode, `synchronous=NORMAL`, a large page cache and `mmap_size`, so reads are served from memory. Writes are buffered in the service (e.g. P1 samples) and flushed in one transaction per minute. A crash loses at most the unflushed buffer; the file is always consistent.
-2. **In-memory database** with a periodic snapshot to disk (`VACUUM INTO` or the backup API). Fastest, but a crash loses everything since the last snapshot, and startup loads the snapshot back.
+- Modules write samples into an in-memory buffer; the service flushes it in one transaction per minute. Losing up to a minute on a crash is accepted. Flush on shutdown (SIGTERM).
+- SQLite: WAL mode, `synchronous=NORMAL`, large page cache and `mmap_size` (reads come from memory), `busy_timeout`, one writer connection. WAL checkpoints at the default 1000 pages, so they are infrequent.
+- Rendered PNGs, device health of the current wake and renderer state stay in memory. Health series are written with the minute flush.
+- ZFS: put `/data` on its own dataset with `recordsize=16K` and SQLite `page_size=16384`. ZFS' default 128K records would rewrite 128K for every changed 4K page.
 
-Data volume either way: tens of MB per year.
+Estimate: one flush per minute touching a handful of pages is roughly 100-200 KB per minute including WAL and checkpoint, about 50-100 GB per year. Consumer SSDs are rated for hundreds of TB written. To confirm by measuring once running.
+
+Queries read SQLite only, so buffered samples show up within a minute.
+
+Backups: ZFS snapshots of the `/data` dataset. WAL mode keeps the file crash-consistent, so a snapshot restores like a power loss.
 
 ### State
 
-Latest result per module: a JSON document plus `fetched_at`, `attempted_at` and `error`. Queries return the data with its freshness (age above `stale_after` marks it stale).
+The service keeps, per module, the latest status: `fetched_at`, `attempted_at`, `error`, plus a JSON document for modules whose data is one snapshot (weather, calendar, car). Queries return data with its freshness (age above `stale_after` marks it stale).
+
+Modules that need more (caches, tokens, own tables) create tables prefixed with their name in `Initialize` (`CREATE TABLE IF NOT EXISTS`). Shared migrations come when a second module needs the same thing.
 
 ### Time series
 
 For P1 and solar history graphs and device battery. Schema `series(name, ts, value)` with rollup tables at 5 minutes, 1 hour and 1 day. Retention: raw 7 days, 5-minute 90 days, hourly and daily forever. Queries pick the coarsest resolution that still fills the graph.
 
-Counters (kWh, m³) are stored as meter readings; usage per period is the difference. Rates (W) are averaged in rollups.
+Each series declares a kind, which decides rollups and usage:
+
+| Kind | Example | Rollup | Usage over a period |
+| --- | --- | --- | --- |
+| `rate` | P1 power (W), solar power (W) | time-weighted average; gaps are not filled | average x covered time |
+| `counter` | P1 meter readings (kWh, m³), inverter total Wh | last value | difference; a drop is a reset (meter or inverter replaced): count from the new value |
+| `daily_counter` | S-Miles and DTU "today Wh" | last value | value at end of day; resets at local midnight |
+
+- Gaps (P1 reboots, Wi-Fi drops) stay gaps: a bucket without samples has no value and charts show a break. Counters bridge gaps naturally.
+- Buckets of an hour or longer align to local time (Europe/Amsterdam); a day has 23 or 25 hours on DST dates.
+- Backfill: the P1 dongle's own hour/day/month history can seed the counters on first start. Later, not v1.
 
 ## Scheduler
 
-- Module updates: per-module interval, jitter on start, exponential backoff on errors capped at the interval, optional active hours.
-- Storage jobs: flush buffered writes, rollups, retention.
+- Module updates: per-module interval, jitter on start, backoff as in [Configuration and lifecycle](#configuration-and-lifecycle).
+- Storage jobs: flush buffered writes (every minute), rollups, retention.
 
 ## Devices
 
@@ -167,24 +197,30 @@ Counters (kWh, m³) are stored as meter readings; usage per period is the differ
 devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:FF"
-    model: seeed_e1001
     rotation: 0          # 0, 90, 180, 270
     pages: [overview, energy, car]
 ```
 
+The model and native panel size come from the device's own headers (`Model: reterminal_e1001`, `Width`, `Height`), not from config. Both models get the same 4-gray treatment: the E1003 is rendered at its own resolution but with the E1001's four gray levels, so one set of styles works on both.
+
 ### Screen schedule
 
-Global, overridable per device: active 07:00-01:00, refresh every hour on the hour.
+Global, overridable per device: hourly wakes on the hour from 07:00 up to and including 00:00; the 00:00 wake sleeps until 07:00. 18 timer wakes a day plus button presses.
 
-- **Timer wake**: show the first page. `refresh_rate` is the seconds until the next full hour; after 01:00, until 07:00.
-- **Button wake**: refresh and advance to the next page, wrapping around. `refresh_rate` stays aimed at the next full hour, so the hourly wake returns to the first page. Pages after the first are detail pages.
-- The ESP32 clock drifts during deep sleep; computing `refresh_rate` from the server clock on every wake corrects it.
+`refresh_rate` is computed from the server clock on every request:
 
-Battery use: 18 timer wakes a day plus button presses.
+- **Main page**: seconds until the next wake time. If that is less than 60 s (a device that woke just before the hour), add one hour: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
+- **Detail page** (after a button press): 5 minutes, or until the next wake time if that is sooner. The following timer wake shows the main page.
+
+DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights.
 
 ### Buttons
 
-Every `/api/display` request carries `Update-Source` with the wake reason: `timer`, a GPIO source (`EXT0`, `EXT1`, `gpio`) for a button, `powercycle` after power-on. The firmware does not say which button: any button means "next page". Double-click runs a special function (signaled with a `special_function` header) and a 5-second hold resets Wi-Fi, so those stay out of page logic. To verify on hardware: which buttons wake each model (E1001: green button; E1003: refresh, and whether page up/down wake it) and the exact `Update-Source` values.
+Single click only. A button wake (`Update-Source` is `button` or `EXT0`) refreshes and shows the next page, wrapping around; any other wake (`timer`, `powercycle`) shows the main page. The firmware does not report which button was pressed, and on the ESP32-S3 only one button can wake the unit.
+
+The current page index per device is kept in memory; after a service restart a device starts at the main page.
+
+Firmware hold behavior, outside our control: 1-5 s hold is a special function, more than 5 s resets Wi-Fi, 15 s or more wipes the device's API key and runs setup again. Worth a note near the devices.
 
 ### Orientation
 
@@ -205,16 +241,19 @@ TRMNL BYOS, on the device listener:
 
 | Route | Behavior |
 | --- | --- |
-| `GET /api/setup` | Known MAC: issue and store an API key. Unknown MAC: record as pending (shown in the web UI), return non-200 so the device retries. |
-| `GET /api/display` | Authenticate by `Access-Token`, record health headers, pick the page, render if needed, return `image_url`, `filename` (content hash), `refresh_rate`. |
-| `GET /images/{hash}.png` | Rendered image. |
-| `POST /api/log` | Store device log entries. |
+| `GET /api/setup` | Known MAC: return HTTP 200 with `status: 200`, `api_key`, `friendly_id`. Firmware reruns setup unless it has both. Unknown MAC: HTTP 200 with JSON `status: 404`; the device shows "MAC not registered" and retries every 5 minutes. The MAC is listed as pending in the web UI. |
+| `GET /api/display` | Authenticate by `Access-Token`, record health headers, pick the page, render if needed, return `image_url`, `filename`, `refresh_rate`. |
+| `GET /images/{filename}.png` | Rendered image, from memory. |
+| `POST /api/log` | Store device log entries; kept 30 days. |
 
-Never return JSON `status: 500` from `/api/display`: firmware treats it as a reset and wipes its credentials.
+- `image_url` is absolute: `public_url` in the config is the base the devices can reach.
+- `filename` is at most 31 characters: a 12-hex hash of the rendered PNG plus a Unix timestamp (`3fa9c2e81b07-1792087200`). Longer names are truncated by the firmware; names without a 10-digit timestamp suffix are purged from its cache.
+- Never return JSON `status: 500` from `/api/display`: firmware treats it as a reset and wipes its credentials.
+- When the service is down, devices retry every 5 minutes until it is back. Accepted.
 
 ### Health
 
-Recorded per request: battery voltage (also as a series), charging, RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage per model.
+Recorded per request: battery voltage (also as a series), charging, RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage through a resting-voltage table per model (the firmware measures before Wi-Fi and the display draw current).
 
 Health reaches people through the screens: every page gets a `system` prop with this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
 
@@ -291,24 +330,28 @@ func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
 
 A long-running Bun process (`renderer/`), started and supervised by the Go service. Per-render process start would cost 50-100 ms plus font loading; a resident process renders in ~20 ms (measured, 800x480).
 
-- **Bundling**: at start the renderer bundles `pages/` with `Bun.build` into JS plus CSS. The directory defaults to the copy in the image; `pages_dir` can point it to the config mount, so pages change without rebuilding the image. With `watch` on (preview use), it rebuilds on file changes.
-- **Protocol**: newline-delimited JSON over stdin/stdout, one request at a time.
+- **Bundling**: at start the renderer bundles `pages/` (shipped in the image) with `Bun.build` into JS plus CSS. With `watch` on, for development, it rebuilds on file changes. Pages change through a new image; no pages on the config mount in v1.
+- **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
 
 | Request | Response |
 | --- | --- |
 | `{"id":1,"op":"describe"}` | every page with its `data` descriptors and bundle hash |
-| `{"id":2,"op":"render","page":"overview","viewport":{...},"props":{...}}` | `{"id":2,"png":"<base64>"}` or `{"id":2,"error":"..."}` |
+| `{"id":2,"op":"render","page":"overview","viewport":{...},"props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
-- **Supervision**: Go restarts the process on exit with backoff, applies a timeout per render, and logs its stderr. A failed render keeps the device on its last image.
+- **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
+- **Supervision**: Go restarts the process on exit with backoff and applies a timeout per render. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
 - **Fonts**: loaded once at start.
 
 ### Pipeline
 
-1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle.
+1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle. Durations in params use a `modules.Duration` type that decodes `"24h"`-style strings (plain `time.Duration` does not decode from JSON strings); its TypeScript type is a template literal string.
 2. **Resolve**: Go runs the page's queries concurrently with a timeout. One failing query yields an error envelope, not a failed page.
-3. **Key**: hash of bundle hash, page, viewport and props JSON. Same as last time for this device and page: reuse the PNG, the device skips the redraw.
-4. **Render**: Go sends props to the renderer, gets an RGBA PNG.
-5. **Reduce** (Go): rotate if needed, map to 4 or 16 grays, encode a 2- or 4-bit PNG.
+3. **Render**: Go sends props to the renderer, gets an RGBA PNG.
+4. **Reduce** (Go): rotate if needed, map each pixel to the nearest of 4 gray levels (0, 85, 170, 255) without dithering, which keeps text sharp, and encode a 2-bit PNG. Both models use 4 levels.
+5. **Check**: the PNG must be under 750 KB (both models; firmware limit with PSRAM). A 2-bit image without dithering is far below that (spike: 34 KB at 1872x1404); exceeding it is logged and the previous image is served.
+6. **Name**: `filename` is the PNG's hash plus timestamp (see [Protocol](#protocol)). An unchanged image keeps its filename and the device skips the download. Props include `now` and battery values, so most wakes produce a new image; that is accepted.
+
+Per-device params: a device can override a page's query params in config (e.g. `limit` for the bigger E1003), merged over the page's declared params before resolving.
 
 ### Types
 
@@ -316,7 +359,9 @@ Go query result types are the source of truth. A generator (e.g. `tygo`) writes 
 
 ### Shared code
 
-- `pages/lib/`: `query`, `PageProps`, formatting (Dutch decimal comma, day and month names, Europe/Amsterdam, durations, "updated at" labels). Pure functions.
+- `pages/lib/`: `query`, `PageProps`, formatting (Dutch decimal comma, day and month names, durations, "updated at" labels). Pure functions.
+
+Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the image's ICU data formats Dutch dates as expected.
 - `pages/components/`: `Screen` (frame with device status from `.system`), cards, charts (`LineChart`, `AreaChart`, `BarChart`, `Sparkline` as inline SVG), event list.
 
 ### Testing
@@ -329,7 +374,7 @@ Each step has its own test with no network:
 | Queries | `go test` | seeded storage, `cmp.Diff` on the returned struct |
 | Pipeline | `go test` | fake renderer and queries, including failing and stale ones |
 | Formatting, chart math | `bun test` | table tests on pure functions |
-| Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered and compared to a golden PNG; a mismatch writes a diff image |
+| Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered, reduced to 4 grays, compared to a golden PNG with a small pixel tolerance; a mismatch writes a diff image. Goldens are regenerated deliberately on Takumi or font upgrades. |
 | Types | `tsc --noEmit` | pages against generated types |
 
 Fixtures come from the live service: the preview serves the resolved props as JSON (`/preview/{device}/{page}/props.json`), saved as-is into `pages/testdata/`.
@@ -340,7 +385,7 @@ Bundled in the image, loaded by the renderer.
 
 ## Web UI
 
-On a separate admin listener, so only the device listener faces the IoT network. No authentication in v1.
+On a separate admin listener. No authentication; access is restricted at the network level (bind addresses in config, TrueNAS port mapping, firewall rules).
 
 | Route | Purpose |
 | --- | --- |
@@ -349,7 +394,6 @@ On a separate admin listener, so only the device listener faces the IoT network.
 | `GET /preview/{device}/{page}/props.json` | The props the page received; saved as test fixtures |
 | `GET /preview/page/{page}.png?model=...&rotation=...` | A page on a panel without a device |
 | `GET /queries` | Every registered query with its params and a sample result |
-| `/modules/{name}/...` | Module routes, e.g. `/modules/car/login` |
 | `GET /healthz` | Liveness |
 
 ## Configuration
@@ -358,19 +402,20 @@ One YAML file on a mount. `${VAR}` references are substituted from the environme
 
 ```yaml
 listen:
-  device: ":8080"
-  admin: ":8081"
+  device: "0.0.0.0:8080"
+  admin: "192.168.1.10:8081"   # bind to the trusted interface only
+public_url: http://192.168.1.10:8080   # base for image_url, reachable from the devices
 timezone: Europe/Amsterdam
 data_dir: /data
-pages_dir: /config/pages   # optional; defaults to the pages in the image
 
 schedule:
-  active: "07:00-01:00"
-  refresh: hourly
+  first_wake: "07:00"
+  last_wake: "00:00"
+  detail_timeout: 5m
 
 modules:
   weather:
-    location: "Amsterdam, The Netherlands"   # geocoded once, coordinates cached in state
+    location: "Amsterdam, The Netherlands"   # geocoded once, coordinates cached in the module's table
   p1:
     url: http://192.168.1.20
   calendar:
@@ -382,21 +427,25 @@ modules:
 devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:FF"
-    model: seeed_e1001
+    rotation: 0
     pages: [overview, energy, car]
+    params:                       # optional per-device query param overrides
+      overview.events: {limit: 8}
 ```
 
-Runtime state (OAuth tokens, device API keys) lives in the database, not the config file.
+Runtime state (device API keys, module caches) lives in the database, not the config file.
 
 ## Deployment
 
 - One Docker image, multi-stage: Go service, Bun runtime with the renderer and `node_modules`, pages, fonts. Base is a slim image with Bun (~60-90 MB); the Go binary is static.
 - CI: `go test`, `bun test`, `tsc --noEmit`, generated types up to date.
 - Built by GitHub Actions, pushed to GHCR.
-- Runs on TrueNAS with `/config` (YAML, optional pages) and `/data` (SQLite) mounts.
-- Backup: SQLite online backup or `VACUUM INTO`.
+- Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite, own ZFS dataset, `recordsize=16K`) mounts.
+- Restart policy `unless-stopped` and a Docker health check on `/healthz`.
+- Backup: ZFS snapshots of the `/data` dataset.
 
 ## Open questions
 
-1. Buttons and rotation direction: to verify on hardware.
+1. To verify on hardware: `Update-Source` values for a button wake, which button wakes each model, firmware rotation direction, resting-voltage table for the battery percentage.
 2. Takumi CSS coverage: find limits as pages are built.
+3. Write load: measure actual bytes written per day once running, and compare with the estimate in [Write load](#write-load).

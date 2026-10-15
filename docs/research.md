@@ -7,7 +7,7 @@ Status as of 2026-10-15.
 | | E1001 | E1003 |
 | --- | --- | --- |
 | Panel | 7.5" mono, 4-level gray | 10.3" mono, 16-level gray |
-| Resolution | 800x480 (landscape) | 1404x1872 (portrait) |
+| Resolution | 800x480 (landscape) | 1872x1404 native (landscape; Seeed lists 1404x1872) |
 | Refresh | 2-5 s, partial refresh | 2-3 s, partial refresh |
 | Controller | SPI, `waveshare_epaper` `7.50inv2` | IT8951 T-CON, `it8951` `seeed-reterminal-e1003` |
 | Touch | none | capacitive (GT911), only usable in Seeedash |
@@ -67,7 +67,7 @@ Panel specs (TRMNL model API):
 
 | Model | Size | Grays | PNG | Max size |
 | --- | --- | --- | --- | --- |
-| `seeed_e1001` | 800x480 | 4 | 2-bit | 90 KB |
+| `seeed_e1001` | 800x480 | 4 | 2-bit | 750 KB (TRMNL model API says 90 KB; firmware with PSRAM allows 750 KB) |
 | `seeed_e1003` | 1872x1404 | 16 | 4-bit | 750 KB |
 
 LaraPaper supports both (it syncs models from that API) but is not used: two fixed screens don't justify a PHP app with a browser renderer.
