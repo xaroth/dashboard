@@ -48,39 +48,53 @@ Two modes:
 
 Possible, but rebuilds what TRMNL and ESPHome already provide. Not worth it.
 
-## Requirements per data source
+## Constraints
 
-| Need | Likely source | Notes |
+- Own server available (Docker).
+- No Home Assistant: too much setup and upkeep for this use.
+
+This rules out ESPHome+Puppet and the TRMNL HA add-on. ESPHome can run without HA (`online_image` from any URL), but then it only duplicates what TRMNL firmware already does, with firmware we maintain ourselves.
+
+## Approach
+
+TRMNL firmware on both units, pointed at a self-hosted BYOS server. No license, all local.
+
+The device side is solved: it wakes, calls `/api/display`, downloads an image, sleeps. All work is on the server: fetch data, render a screen per device, serve it.
+
+Server options:
+
+1. **LaraPaper** (PHP, Docker, SQLite). Web UI, TRMNL recipe catalog, polling plugins (JSON URL + template), HTML rendered via Browsershot/puppeteer. Lists E1001; E1003 not listed, needs checking.
+2. **Terminus** (Ruby, TRMNL reference). Same idea, less UI.
+3. **Own service** implementing `/api/setup`, `/api/display`, `/api/log`. Small protocol, full control over rendering and both resolutions, but we write and maintain the renderer.
+
+Preferred: try LaraPaper first; fall back to an own service if E1003 support or custom data sources fight it.
+
+TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation to confirm on device.
+
+## Data sources without Home Assistant
+
+| Need | Source | Notes |
 | --- | --- | --- |
-| Car status | HA integration for the car brand | Brand TBD; most have HA integrations (cloud APIs) |
-| Weather | HA weather integration, or TRMNL plugin | |
-| Calendar | HA calendar (Google/CalDAV), or TRMNL plugin | |
-| Power usage | HA energy (P1 meter / DSMR, solar inverter) | |
+| Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
+| Calendar | ICS / CalDAV URL | Google, iCloud, Nextcloud all expose ICS |
+| Power usage | P1 meter local API (e.g. HomeWizard), inverter API | Depends on hardware |
+| Car status | Manufacturer cloud API | Brand TBD; often OAuth, may need a small adapter service |
 
-All four are easiest through one hub (Home Assistant). Only weather and calendar work without it.
-
-## Recommendation
-
-Use Home Assistant as the single data and rendering hub, then pick the device protocol:
-
-- **ESPHome + Puppet** (preferred if HA is already running): local, free, devices show up in HA, buttons usable, one Lovelace dashboard per device sized to its resolution.
-- **TRMNL BYOS** (alternative): device firmware maintained by TRMNL, simple pull-image protocol, server renders screens; HA data fed via screenshot or API. More moving parts (extra server).
-
-Avoid stock Seeedash and hosted TRMNL: neither reaches LAN data without pushing it to a cloud.
+Weather and calendar fit LaraPaper polling plugins directly. Car and power may need a small adapter on the server that exposes clean JSON.
 
 ## Technical requirements
 
-1. Home Assistant instance reachable on the LAN (add-ons available, or Docker equivalents).
+1. Server running Docker, reachable from both units over LAN (plain HTTP fine; HTTPS via reverse proxy optional).
 2. 2.4 GHz Wi-Fi at both locations.
-3. HA integrations for car, weather, calendar, energy meter.
-4. Puppet add-on (ESPHome path) or a BYOS server container (TRMNL path).
-5. ESPHome >= 2026.7.0; USB-C cable and Chromium browser for initial flash.
+3. Per-source access: calendar ICS URL, P1/inverter on LAN, car API credentials.
+4. USB-C cable and Chromium browser for the initial TRMNL flash. E1001 FW >= 1.6.7, E1003 FW >= 1.8.7.
+5. Keep TRMNL OTA and early-release off; firmware updates managed manually.
 
 ## Open questions
 
-1. Is Home Assistant already running, and how (HAOS, Docker)?
-2. Car brand/model?
-3. Power source: P1 meter, solar, other?
+1. Car brand/model?
+2. Power: which meter/inverter (P1 dongle, solar)?
+3. Calendar provider?
 4. Mounting: wall with USB power, or battery only? Determines refresh interval.
 5. What goes on which screen, per location?
 
@@ -95,4 +109,5 @@ Avoid stock Seeedash and hosted TRMNL: neither reaches LAN data without pushing 
 - TRMNL HA screenshot: https://help.trmnl.com/en/articles/13281388-home-assistant-screenshot
 - TRMNL BYOD license: https://shop.trmnl.com/products/byod
 - Puppet add-on: https://github.com/balloob/home-assistant-addons
+- LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
