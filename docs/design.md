@@ -407,7 +407,8 @@ A long-running Bun process (`renderer/`), started and supervised by the Go servi
 | `{"id":2,"op":"render","page":"overview","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
 - **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
-- **Supervision**: Go restarts the process on exit with backoff and applies a timeout per render. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
+- **Supervision**: Go restarts the process on exit with backoff. Each request has its own timeout, 30 s for a render and 60 s for describe (it may bundle); a process that does not answer in time is killed and restarted, so requests queued behind it are not stuck. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
+- **Callers leaving**: when a caller's context ends (a device disconnects), the caller gets its error at once, while the response is still read in the background, within the same timeout, before the next request uses the process. Only a response that does not arrive in time restarts the process.
 
 ### Pipeline
 
