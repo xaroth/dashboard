@@ -148,6 +148,22 @@ Likely causes, most likely first:
 2. **RS-485 port config**: in the S-Miles Installer app, Toolkit > DTU Information > RS-485 Port Config. "Export control" blocks Modbus TCP; "Remote control" enables it. Note the Modbus address shown there.
 3. **Address mismatch**: ruled out; a sweep of unit IDs 0-255 got no response on any.
 
+### DTU firmware history
+
+Hoymiles publishes no changelog. Updates arrive via S-Miles (installer-authorized). Reconstructed from Photovoltaikforum and ioBroker reports; same version line covers DTU-Pro and DTU-Pro-S:
+
+| Version | Seen | Reports |
+| --- | --- | --- |
+| V00.02.19 | 2023 | Fixed DTU crashes from Modbus polling; Modbus works. Support rolls units back to this. |
+| V00.02.22 | Jan 2024 | Modbus TCP queries time out (multiple users, DTU-Pro-S H09.06.01). |
+| V00.02.23 | 2024 | Modbus reported dead by some, working for others; favoured by HM-1500 owners. |
+| V00.05.02 | 2025 | Energy spikes; HM-1500 issues. |
+| V00.06.05 | Aug 2025 | HM-1500 inverters switch off; some roll back to 2.23. |
+| V00.07.02 | Jan 2026 | No visible change; DTU crashes 2-4x/day under frequent Modbus polling (support: poll less often). |
+| V00.07.04 | 2026 | Minimum for `ha-hoymiles-dtupro`. |
+
+Our DTU (V00.02.22) is ~2.5 years behind. Polling no more than every 60 s is advisable on any version.
+
 No installer access (plant registered by the installer). Workarounds:
 
 1. **S-Miles Cloud with the owner account** (preferred for now). Reverse-engineered API (`/iam/pub/3/auth/login`, v3 login); reference implementation: `homeassistant-hoymiles-cloud` (Python). Gives PV power, today/total energy, per-channel PV. Cloud lags the DTU upload interval, which is fine for screens refreshing every 15-30 min. Risk: unofficial, may break.
@@ -237,5 +253,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 - heise, Hoymiles security update: https://www.heise.de/en/news/PV-inverters-Hoymiles-releases-security-update-11436678.html
 - homeassistant-hoymiles-cloud: https://github.com/Philra94/homeassistant-hoymiles-cloud
 - Hoymiles FAQ (DIY accounts): https://www.hoymiles.com/us/faq_4.html
+- Photovoltaikforum DTU V00.07.02: https://www.photovoltaikforum.com/thread/256328-homiles-dtu-pro-v00-07-02-firmware/
+- Photovoltaikforum DTU 6.05: https://www.photovoltaikforum.com/thread/251113-neues-firmware-update-6-05-f%C3%BCr-dtu-pro-erh%C3%A4ltlich/
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
