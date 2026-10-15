@@ -31,7 +31,7 @@ func parseConfig(raw []byte, lookup func(string) (string, bool)) (service.Config
 	// Substitute in parsed scalars, not raw text, so values with YAML syntax stay values.
 	var missing []string
 	walkScalars(&root, func(n *yaml.Node) {
-		n.Value = envRef.ReplaceAllStringFunc(n.Value, func(ref string) string {
+		v := envRef.ReplaceAllStringFunc(n.Value, func(ref string) string {
 			name := envRef.FindStringSubmatch(ref)[1]
 			v, ok := lookup(name)
 			if !ok {
@@ -39,6 +39,10 @@ func parseConfig(raw []byte, lookup func(string) (string, bool)) (service.Config
 			}
 			return v
 		})
+		if v != n.Value {
+			// Let the substituted value resolve its own type, so ${PORT} can be an int.
+			n.Value, n.Tag, n.Style = v, "", 0
+		}
 	})
 	if len(missing) > 0 {
 		return service.Config{}, fmt.Errorf("environment variables not set: %v", missing)

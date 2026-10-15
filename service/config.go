@@ -34,6 +34,8 @@ type Device struct {
 	MAC      string   `yaml:"mac"`
 	Rotation int      `yaml:"rotation"`
 	Pages    []string `yaml:"pages"`
+	// Params overrides query params per page data key, e.g. "overview.events".
+	Params map[string]map[string]any `yaml:"params"`
 }
 
 // DefaultConfig returns the values used for keys missing from the file.

@@ -45,7 +45,8 @@ func (s *Service) serve(ctx context.Context, g *errgroup.Group, name, addr strin
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+		// Requests keep their context during the shutdown drain.
+		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}
 	g.Go(func() error {
 		s.log.Info("listening", "listener", name, "addr", addr)

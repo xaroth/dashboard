@@ -69,3 +69,14 @@ func TestParseConfigErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestParseConfigEnvTypes(t *testing.T) {
+	y := "public_url: http://x\ndevices:\n  a: {mac: 'aa:bb:cc:dd:ee:ff', rotation: '${ROT}', pages: [p]}\n"
+	cfg, err := parseConfig([]byte(y), env(map[string]string{"ROT": "180"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Devices["a"].Rotation; got != 180 {
+		t.Errorf("rotation = %d, want 180", got)
+	}
+}
