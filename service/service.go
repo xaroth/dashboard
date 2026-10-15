@@ -116,6 +116,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Pipeline:  pipeline,
 		Store:     &device.Store{Max: 16},
 		PublicURL: cfg.PublicURL,
+		Schedule:  cfg.Schedule.device(loc),
 		Log:       log.With("component", "device"),
 		Now:       time.Now,
 	})

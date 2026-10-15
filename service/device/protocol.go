@@ -12,12 +12,7 @@ import (
 	"github.com/xaroth/dashboard/service/render"
 )
 
-const (
-	// Until the screen schedule lands, devices wake on a fixed interval.
-	mainRefresh   = 900
-	detailRefresh = 300
-	maxLogBody    = 64 << 10
-)
+const maxLogBody = 64 << 10
 
 // Register adds the device protocol routes to mux.
 func (d *Devices) Register(mux *http.ServeMux) {
@@ -82,10 +77,7 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	prev := s.filename
 	d.mu.Unlock()
 
-	refresh := mainRefresh
-	if button {
-		refresh = detailRefresh
-	}
+	refresh := d.schedule.refresh(d.now(), button)
 	img, err := d.pipeline.Render(r.Context(), target, page)
 	if err != nil {
 		d.log.Error("rendering for device", "device", target.Name, "page", page, "err", err)

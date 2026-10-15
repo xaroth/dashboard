@@ -32,7 +32,17 @@ type env struct {
 	clock   *atomic.Int64
 }
 
+// hourly wakes on the hour from 07:00 up to and including 00:00.
+func hourly(loc *time.Location) device.Schedule {
+	return device.Schedule{First: 7 * time.Hour, Last: 0, Interval: time.Hour, Detail: 5 * time.Minute, Location: loc}
+}
+
 func newEnv(tb testing.TB) *env {
+	tb.Helper()
+	return newEnvSchedule(tb, hourly(time.UTC))
+}
+
+func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
 	tb.Helper()
 	fake := render.NewFakeRenderer(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"})
 	clock := &atomic.Int64{}
@@ -43,6 +53,7 @@ func newEnv(tb testing.TB) *env {
 		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(nil), time.UTC, now),
 		Store:     &device.Store{Max: 4},
 		PublicURL: "http://dash:8080/",
+		Schedule:  schedule,
 		Log:       slog.New(slog.DiscardHandler),
 		Now:       now,
 	})
@@ -145,7 +156,7 @@ func TestDisplay(t *testing.T) {
 		"status":           float64(0),
 		"image_url":        "http://dash:8080/images/" + filename + ".png",
 		"filename":         filename,
-		"refresh_rate":     float64(900),
+		"refresh_rate":     float64(3600),
 		"reset_firmware":   false,
 		"update_firmware":  false,
 		"firmware_url":     nil,
@@ -190,11 +201,11 @@ func TestDisplayPages(t *testing.T) {
 		wantPage    string
 		wantRefresh float64
 	}{
-		{"timer", "main", 900},
+		{"timer", "main", 3600},
 		{"button", "detail", 300},
 		{"EXT0", "main", 300}, // wraps around
 		{"button", "detail", 300},
-		{"powercycle", "main", 900},
+		{"powercycle", "main", 3600},
 	}
 	// Sequential: each wake depends on the one before.
 	for _, testCase := range testCases {
@@ -205,6 +216,47 @@ func TestDisplayPages(t *testing.T) {
 		if got := e.devices.Statuses()[0].Page; got != testCase.wantPage {
 			t.Errorf("%s: got page %q, want %q", testCase.source, got, testCase.wantPage)
 		}
+	}
+}
+
+func TestDisplayRefresh(t *testing.T) {
+	t.Parallel()
+	amsterdam, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testCases := []struct {
+		name     string
+		schedule device.Schedule
+		at       string // local time
+		source   string
+		want     float64
+	}{
+		{"on the hour", hourly(amsterdam), "2026-10-15 18:00:00", "timer", 3600},
+		{"just before the hour", hourly(amsterdam), "2026-10-15 17:59:30", "timer", 3630},
+		{"last wake of the day", hourly(amsterdam), "2026-10-15 23:30:00", "timer", 1800},
+		{"night sleep", hourly(amsterdam), "2026-10-16 00:00:00", "timer", 7 * 3600},
+		{"woken at night", hourly(amsterdam), "2026-10-16 03:00:00", "powercycle", 4 * 3600},
+		{"night sleep on DST end", hourly(amsterdam), "2026-10-25 00:00:00", "timer", 8 * 3600},
+		{"detail", hourly(amsterdam), "2026-10-15 18:30:00", "button", 300},
+		{"detail cut short by wake", hourly(amsterdam), "2026-10-15 18:58:00", "button", 120},
+		{"half-hourly", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Interval: 30 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 18:00:00", "timer", 1800},
+		{"two-hourly skips past last", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Interval: 2 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 21:00:00", "timer", 10 * 3600},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			at, err := time.ParseInLocation(time.DateTime, testCase.at, amsterdam)
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := newEnvSchedule(t, testCase.schedule)
+			e.clock.Store(at.Unix())
+			_, body := e.display(t, e.setup(t), testCase.source)
+			if body["refresh_rate"] != testCase.want {
+				t.Errorf("got refresh_rate %v, want %v", body["refresh_rate"], testCase.want)
+			}
+		})
 	}
 }
 

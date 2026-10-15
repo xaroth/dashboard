@@ -84,6 +84,7 @@ func newHandler(tb testing.TB, devices ...device.Config) (http.Handler, *stubPip
 		Pipeline:  stub,
 		Store:     &device.Store{Max: 4},
 		PublicURL: "http://dash",
+		Schedule:  device.Schedule{First: 7 * time.Hour, Interval: time.Hour, Detail: 5 * time.Minute, Location: time.UTC},
 		Log:       slog.New(slog.DiscardHandler),
 		Now:       func() time.Time { return time.Unix(1792087200, 0) },
 	})
