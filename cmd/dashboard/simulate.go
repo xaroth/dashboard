@@ -50,7 +50,7 @@ type exchange struct {
 
 // simulateWake plays a device wake against the real device API: setup when
 // no key is known yet, then display with the headers the firmware sends. The
-// simulator header gives it separate state, so the real device is untouched.
+// simulator's own devices keep the real device untouched.
 func (h *adminHandler) simulateWake(w http.ResponseWriter, r *http.Request) {
 	st, ok := h.status(r.PathValue("device"))
 	if !ok {
@@ -109,9 +109,8 @@ func (h *adminHandler) call(r *http.Request, path string, headers map[string]str
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	req.Header.Set(device.SimulatorHeader, "1")
 	rec := httptest.NewRecorder()
-	h.DeviceAPI.ServeHTTP(rec, req)
+	h.Simulator.ServeHTTP(rec, req)
 	body := rec.Body.Bytes()
 	if !json.Valid(body) {
 		body, _ = json.Marshal(rec.Body.String())

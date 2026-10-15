@@ -35,8 +35,9 @@ type adminHandler struct {
 	Pipeline Pipeline
 	Devices  *device.Devices
 	Modules  Modules
-	// DeviceAPI serves the device protocol; the simulator calls it in-process.
-	DeviceAPI http.Handler
+	// Simulator serves the device protocol for simulated wakes, in-process,
+	// on devices of its own; never the device listener's.
+	Simulator http.Handler
 	Log       *slog.Logger
 
 	simMu   sync.Mutex
@@ -48,7 +49,7 @@ func (h *adminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /modules/{module}/update", h.updateModule)
 	mux.HandleFunc("GET /simulate/{device}", h.simulatePage)
 	mux.HandleFunc("POST /simulate/{device}/wake", h.simulateWake)
-	mux.Handle("GET /images/{file}", h.DeviceAPI)
+	mux.Handle("GET /images/{file}", h.Simulator)
 	mux.HandleFunc("GET /preview/page/{layout}/{file}", h.previewPage)
 	mux.HandleFunc("GET /preview/{device}/{layout}/{file}", h.previewDevice)
 	mux.HandleFunc("GET /preview/{device}/{layout}/{page}/props.json", h.previewProps)

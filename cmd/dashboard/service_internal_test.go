@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"image/png"
 	"log/slog"
@@ -119,6 +120,32 @@ func TestDevicePreview(t *testing.T) {
 	}
 	if cfg.Width != 1872 || cfg.Height != 1404 {
 		t.Errorf("got %dx%d, want 1872x1404", cfg.Width, cfg.Height)
+	}
+}
+
+func TestSimulatorIsSeparate(t *testing.T) {
+	t.Parallel()
+	s, _ := newService(t, testConfig(t, "", ""))
+	rec := httptest.NewRecorder()
+	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/simulate/hallway/wake?source=button&model=reterminal_e1003", nil))
+	var log []struct {
+		Response map[string]any `json:"response"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &log); err != nil || len(log) != 2 {
+		t.Fatalf("simulated wake: got %d %s", rec.Code, rec.Body)
+	}
+	image := "/images/" + log[1].Response["filename"].(string) + ".png"
+	if rec := get(t, s.Admin(), image); rec.Code != http.StatusOK {
+		t.Errorf("admin listener: got %d for the simulated image, want 200", rec.Code)
+	}
+	// The device listener has its own image store; the simulator never reaches it.
+	if rec := get(t, s.device, image); rec.Code != http.StatusNotFound {
+		t.Errorf("device listener: got %d for the simulated image, want 404", rec.Code)
+	}
+
+	// The real device still has no reported model or wake.
+	if body := get(t, s.Admin(), "/").Body.String(); !strings.Contains(body, "AA:BB:CC:DD:EE:FF · reterminal_e1001") {
+		t.Error("the simulated wake changed the real device's model")
 	}
 }
 

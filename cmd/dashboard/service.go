@@ -111,22 +111,40 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		mac, _ := device.NormalizeMAC(d.MAC) // validated with the config
 		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.pages(), Params: d.params()})
 	}
-	devices := device.New(device.Options{
+	deviceOpts := device.Options{
 		Devices:   configs,
 		Pipeline:  pipeline,
 		Store:     &device.Store{Max: 16},
+		DB:        s.db.Writer,
+		Migrator:  s.db,
 		PublicURL: cfg.PublicURL,
 		Schedule:  cfg.Schedule.device(loc),
 		Log:       log.With("component", "device"),
 		Now:       time.Now,
-	})
+	}
+	devices, err := device.Load(ctx, deviceOpts)
+	if err != nil {
+		return nil, err
+	}
 	devices.Register(s.device)
+
+	// The simulator plays devices against its own instance, on the admin
+	// listener only: separate page, wake and image state. It shares the keys,
+	// which identify a MAC, not its state.
+	deviceOpts.Store = &device.Store{Max: 4}
+	deviceOpts.Log = log.With("component", "simulator")
+	simulated, err := device.Load(ctx, deviceOpts)
+	if err != nil {
+		return nil, err
+	}
+	simulator := http.NewServeMux()
+	simulated.Register(simulator)
 
 	ui := &adminHandler{
 		Pipeline:  pipeline,
 		Devices:   devices,
 		Modules:   s.modules,
-		DeviceAPI: s.device,
+		Simulator: simulator,
 		Log:       log.With("component", "web"),
 	}
 	ui.Register(s.admin)
