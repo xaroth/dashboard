@@ -471,7 +471,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 
 ## Configuration
 
-One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values.
+One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values. A substituted value takes its YAML type (`${PORT}` can be a number), except null: an empty, `null` or `~` value is that string, not a missing key that falls back to the default.
 
 ```yaml
 listen:

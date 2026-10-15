@@ -129,8 +129,12 @@ func parseConfig(raw []byte, lookup func(string) (string, bool)) (Config, error)
 			return v
 		})
 		if v != n.Value {
-			// Let the substituted value resolve its own type, so ${PORT} can be an int.
+			// Let the substituted value resolve its own type, so ${PORT} can be an
+			// int, but not to null: that would silently keep the default.
 			n.Value, n.Tag, n.Style = v, "", 0
+			if n.ShortTag() == "!!null" {
+				n.Tag = "!!str"
+			}
 		}
 	})
 	if len(missing) > 0 {
