@@ -53,6 +53,10 @@ type instance struct {
 	staleAfter time.Duration
 	log        *slog.Logger
 
+	// updating serializes scheduled and manual updates; modules are not
+	// required to be safe for concurrent Update calls.
+	updating sync.Mutex
+
 	mu      sync.Mutex
 	initErr error
 	phase   Phase

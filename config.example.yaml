@@ -13,3 +13,7 @@ devices:
 
 renderer:
   watch: true   # rebuild pages on change; reload the browser to see them
+
+modules:
+  weather:
+    location: "Uithoorn, The Netherlands"   # geocoded once, coordinates cached
