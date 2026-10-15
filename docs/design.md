@@ -321,7 +321,9 @@ export const data = {
   events:  query("calendar.upcoming", { limit: 5 }),
 };
 
-export default function Overview({ data, device, viewport, system, now }: PageProps<typeof data>) {
+type Data = typeof data;
+
+export default function Overview({ data, device, viewport, system, now }: PageProps<Data>) {
   return (
     <Screen device={device} system={system}>
       <div className={styles.grid}>
@@ -335,7 +337,7 @@ export default function Overview({ data, device, viewport, system, now }: PagePr
 
 - `data` is static: `query()` only builds a descriptor (`{module, query, params}`). Components never fetch; everything arrives as props.
 - Each `data.<key>` is a result envelope: `{value, fetchedAt, stale, error}`. Components decide how to show stale or failed data; shared components (`Screen`, cards) give a default.
-- `PageProps<typeof data>` types each key from the generated query types.
+- `PageProps<Data>` types each key from the generated query types.
 - CSS modules: `import styles from "./x.module.css"`; Bun's bundler scopes class names and emits one CSS file. Takumi supports a CSS subset: class selectors, flexbox and grid, borders, fonts. Complex selectors and some properties may not render.
 - Inline `<svg>` works (verified): charts are components that emit SVG.
 
@@ -398,7 +400,11 @@ Per-device params: a device can override a page's query params in config (e.g. `
 
 ### Types
 
-Go query result types are the source of truth. A generator (e.g. `tygo`) writes them to `pages/generated/` as TypeScript, together with the query registry (`"p1.power" -> Series`, params type). `query()` and `PageProps` use it, so a typo in a query name or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). Generated files are committed; CI checks they are up to date.
+Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
+
+Mapping rules: `time.Time` is a string (RFC 3339), `modules.Duration` is `Duration` (a string like `"24h"`), pointers are `T | null`, `[]byte` is a string, maps have string keys. Slices and maps are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default.
+
+Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring `data` from props would otherwise shadow the module's `data` in its own type.
 
 ### Shared code
 

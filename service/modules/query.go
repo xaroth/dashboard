@@ -160,3 +160,20 @@ func (s *Set) lookup(module, name string) (*instance, query, error) {
 	}
 	return nil, query{}, fmt.Errorf("%w %q", ErrUnknownModule, module)
 }
+
+// QueryType describes a query's params and result types, for code generation.
+type QueryType struct {
+	Name   string
+	Params reflect.Type
+	Result reflect.Type
+}
+
+// QueryTypes returns the registration's queries, sorted by name.
+func (r Registration) QueryTypes() []QueryType {
+	out := make([]QueryType, 0, len(r.queries))
+	for _, name := range r.queryNames() {
+		q := r.queries[name]
+		out = append(out, QueryType{Name: name, Params: q.params, Result: q.result})
+	}
+	return out
+}

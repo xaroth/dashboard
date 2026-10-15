@@ -1,6 +1,6 @@
 import { query } from "../../../pages/lib/page";
 
-export const data = { power: query("p1.power", { range: "24h" }) };
+export const data = { forecast: query("weather.forecast", { hours: 2 }) };
 
 export default function Broken() {
   process.stdout.write("stray output\n");
