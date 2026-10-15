@@ -35,7 +35,7 @@ type Schedule struct {
 // RendererConfig is how the Bun render process is started.
 type RendererConfig struct {
 	Bun string `yaml:"bun"`
-	// Dir holds renderer/, pages/, fonts/ and node_modules.
+	// Dir holds renderer/, pages/ and node_modules.
 	Dir string `yaml:"dir"`
 	// Watch rebuilds pages on change, for development.
 	Watch bool `yaml:"watch"`

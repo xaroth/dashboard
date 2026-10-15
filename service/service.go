@@ -91,7 +91,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		return nil, err
 	}
 	if s.renderer == nil {
-		cmd := []string{cfg.Renderer.Bun, "renderer/main.ts", "--pages", "pages", "--fonts", "fonts"}
+		cmd := []string{cfg.Renderer.Bun, "renderer/main.ts", "--pages", "pages"}
 		if cfg.Renderer.Watch {
 			cmd = append(cmd, "--watch")
 		}

@@ -286,7 +286,7 @@ func TestBunRenderer(t *testing.T) {
 	if !exists(filepath.Join(root, "node_modules")) {
 		t.Skip("node_modules missing; run bun install")
 	}
-	p := render.NewProcess([]string{bun, "renderer/main.ts", "--pages", "pages", "--fonts", "fonts"}, root, slog.New(slog.DiscardHandler))
+	p := render.NewProcess([]string{bun, "renderer/main.ts", "--pages", "pages"}, root, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { p.Close() })
 
 	pages, _, err := p.Describe(t.Context())
