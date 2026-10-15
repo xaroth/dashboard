@@ -11,8 +11,8 @@ One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E10
              |                                                                    |
  P1 dongle --+--> modules/p1 -------+                                             |
  S-Miles   --+--> modules/solar ----+                                             |
- Google    --+--> modules/calendar -+--> storage <-- pages (templates) --> render --+--> device API <-- E1001
- Pleos     --+--> modules/car ------+   (state +        |                  (Takumi) |               <-- E1003
+ Google    --+--> modules/calendar -+--> storage <-- queries --> render ------------+--> device API <-- E1001
+ Pleos     --+--> modules/car ------+   (state +        |         (Bun: TSX+Takumi)|               <-- E1003
  Open-Meteo -+--> modules/weather --+    series)        |                           |
              |          ^                                +--> web UI: preview, module routes (OAuth)
              |      scheduler                                                       |
@@ -29,12 +29,13 @@ service/modules/           registration API and the module contract
 service/storage/           SQLite: state, series, rollups, devices
 service/scheduler/         module updates, rollups, retention
 service/device/            TRMNL protocol, health, page selection, screen schedule
-service/render/            template pipeline, Takumi subprocess, gray reduction, PNG
+service/render/            page pipeline, renderer process, gray reduction, PNG
 service/web/               admin UI, preview, module route mounting
 modules/modules.go         blank-imports every module so it registers
 modules/<name>/            one module per data source
-renderer/                  Rust CLI around Takumi
-templates/                 pages, partials, CSS (embedded, overridable)
+renderer/                  Bun process: bundles pages, renders with takumi-js
+pages/                     TSX pages, components, CSS modules
+pages/generated/           TypeScript types generated from Go query results
 fonts/
 ```
 
@@ -145,7 +146,7 @@ Data volume either way: tens of MB per year.
 
 ### State
 
-Latest result per module: a JSON document plus `fetched_at`, `attempted_at` and `error`. Templates get the data plus freshness (age above `stale_after` marks it stale).
+Latest result per module: a JSON document plus `fetched_at`, `attempted_at` and `error`. Queries return the data with its freshness (age above `stale_after` marks it stale).
 
 ### Time series
 
@@ -196,7 +197,7 @@ The firmware does not report orientation. It does rotate automatically: a PNG wi
 | 180 | native size, image turned 180° | landscape, upside down mount |
 | 270 | swapped size, image turned 180° | portrait, other direction |
 
-Templates get the resulting viewport (`.Viewport.Width`, `.Viewport.Height`, `.Viewport.Portrait`). The firmware's rotation direction is to confirm on hardware.
+Pages get the resulting viewport as a prop (`viewport.width`, `viewport.height`, `viewport.portrait`). The firmware's rotation direction is to confirm on hardware.
 
 ### Protocol
 
@@ -215,33 +216,50 @@ Never return JSON `status: 500` from `/api/display`: firmware treats it as a res
 
 Recorded per request: battery voltage (also as a series), charging, RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage per model.
 
-Health reaches people through the screens: every page gets `.System` with this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
+Health reaches people through the screens: every page gets a `system` prop with this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
 
 ## Rendering
 
 ### Page files
 
-A page is one file: a YAML header declaring the data it needs, then the template. The template only presents; it never fetches.
+Pages are React components in TSX, styled with CSS modules, rendered by Takumi through `takumi-js` (no browser). A page exports the data it needs and a default component that receives the results as props:
 
-```html
----
-data:
-  weather: weather.forecast {days: 3}
-  power:   p1.power         {range: 24h, step: 5m}
-  solar:   solar.production {range: 24h, step: 5m}
-  events:  calendar.upcoming {limit: 5}
----
-<div class="screen">
-  {{ with .Data.weather }}{{ .Value.Current.Temperature | temp }}{{ end }}
-  {{ chart "area" .Data.power.Value .Viewport.Width 200 }}
-</div>
+```tsx
+// pages/overview.tsx
+import { query, type PageProps } from "./lib/page";
+import { Screen } from "./components/Screen";
+import { AreaChart } from "./components/AreaChart";
+import { EventList } from "./components/EventList";
+import styles from "./overview.module.css";
+
+export const data = {
+  weather: query("weather.forecast", { days: 3 }),
+  power:   query("p1.power", { range: "24h", step: "5m" }),
+  solar:   query("solar.production", { range: "24h", step: "5m" }),
+  events:  query("calendar.upcoming", { limit: 5 }),
+};
+
+export default function Overview({ data, device, viewport, system, now }: PageProps<typeof data>) {
+  return (
+    <Screen device={device} system={system}>
+      <div className={styles.grid}>
+        <AreaChart series={[data.power, data.solar]} width={viewport.width} height={200} />
+        <EventList result={data.events} now={now} />
+      </div>
+    </Screen>
+  );
+}
 ```
 
-Each `data` entry is `<key>: <module>.<query> {params}`. The header shows a reader, human or agent, exactly what the page depends on.
+- `data` is static: `query()` only builds a descriptor (`{module, query, params}`). Components never fetch; everything arrives as props.
+- Each `data.<key>` is a result envelope: `{value, fetchedAt, stale, error}`. Components decide how to show stale or failed data; shared components (`Screen`, cards) give a default.
+- `PageProps<typeof data>` types each key from the generated query types.
+- CSS modules: `import styles from "./x.module.css"`; Bun's bundler scopes class names and emits one CSS file. Takumi supports a CSS subset: class selectors, flexbox and grid, borders, fonts. Complex selectors and some properties may not render.
+- Inline `<svg>` works (verified): charts are components that emit SVG.
 
 ### Queries
 
-Modules expose named, typed queries; this is how stored data reaches templates.
+Modules expose named, typed queries; this is how stored data reaches pages.
 
 ```go
 type powerParams struct {
@@ -262,47 +280,63 @@ func (m *module) power(ctx context.Context, p powerParams) (Series, error) {
 ```
 
 - Params are decoded from the page header into the query's own struct; unknown keys and bad values fail at startup, not at render.
-- Results are plain structs that serialize to JSON. No methods are needed in templates.
+- Results are plain structs that serialize to JSON; TypeScript types for them are generated (see [Types](#types)).
 - Queries read storage only, never the source.
 
 ### Data volume
 
-24 hours of one-minute samples is 1,440 points per series; P1 import, P1 export and solar together are ~4,300. The E1001 is 800 pixels wide, so more points than pixels add nothing. Series queries take a `step` and bucket in SQL (average for power, last value for meter readings): 5 minutes gives 288 points per series. Rollup tables serve longer ranges. A chart helper given more points than its pixel width buckets again, so the SVG stays small whatever the query returns.
+24 hours of one-minute samples is 1,440 points per series; P1 import, P1 export and solar together are ~4,300. The E1001 is 800 pixels wide, so more points than pixels add nothing. Series queries take a `step` and bucket in SQL (average for power, last value for meter readings): 5 minutes gives 288 points per series. Rollup tables serve longer ranges. Chart components bucket again when given more points than their pixel width.
+
+### Renderer process
+
+A long-running Bun process (`renderer/`), started and supervised by the Go service. Per-render process start would cost 50-100 ms plus font loading; a resident process renders in ~20 ms (measured, 800x480).
+
+- **Bundling**: at start the renderer bundles `pages/` with `Bun.build` into JS plus CSS. The directory defaults to the copy in the image; `pages_dir` can point it to the config mount, so pages change without rebuilding the image. With `watch` on (preview use), it rebuilds on file changes.
+- **Protocol**: newline-delimited JSON over stdin/stdout, one request at a time.
+
+| Request | Response |
+| --- | --- |
+| `{"id":1,"op":"describe"}` | every page with its `data` descriptors and bundle hash |
+| `{"id":2,"op":"render","page":"overview","viewport":{...},"props":{...}}` | `{"id":2,"png":"<base64>"}` or `{"id":2,"error":"..."}` |
+
+- **Supervision**: Go restarts the process on exit with backoff, applies a timeout per render, and logs its stderr. A failed render keeps the device on its last image.
+- **Fonts**: loaded once at start.
 
 ### Pipeline
 
-1. **Load** (startup, and per request in preview): parse page files, resolve each `module.query`, decode params. Errors stop startup.
-2. **Resolve**: run the page's queries concurrently with a timeout. Each result is `{Value, FetchedAt, Stale, Error}`; one failing query yields an error entry, not a failed page.
-3. **Execute**: `html/template` with `.Data`, `.Device`, `.Viewport`, `.System`, `.Now`.
-4. **Hash**: hash the HTML. Same as last time for this device and page: reuse the PNG; the device skips the redraw.
-5. **Render**: Takumi CLI (subprocess, spike in commit `8da478f`: 12-35 ms) at the viewport size.
-6. **Reduce**: rotate if needed, map to 4 or 16 grays, encode a 2- or 4-bit PNG.
+1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle.
+2. **Resolve**: Go runs the page's queries concurrently with a timeout. One failing query yields an error envelope, not a failed page.
+3. **Key**: hash of bundle hash, page, viewport and props JSON. Same as last time for this device and page: reuse the PNG, the device skips the redraw.
+4. **Render**: Go sends props to the renderer, gets an RGBA PNG.
+5. **Reduce** (Go): rotate if needed, map to 4 or 16 grays, encode a 2- or 4-bit PNG.
 
-### Helpers
+### Types
 
-Pure functions, data in and string out: formatting (Dutch decimal comma, day and month names, Europe/Amsterdam, durations, "updated at" labels) and charts (`line`, `area`, `bar`, `sparkline` as inline SVG). Takumi's support for inline `<svg>` versus an `<img>` data URI is to verify.
+Go query result types are the source of truth. A generator (e.g. `tygo`) writes them to `pages/generated/` as TypeScript, together with the query registry (`"p1.power" -> Series`, params type). `query()` and `PageProps` use it, so a typo in a query name or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). Generated files are committed; CI checks they are up to date.
+
+### Shared code
+
+- `pages/lib/`: `query`, `PageProps`, formatting (Dutch decimal comma, day and month names, Europe/Amsterdam, durations, "updated at" labels). Pure functions.
+- `pages/components/`: `Screen` (frame with device status from `.system`), cards, charts (`LineChart`, `AreaChart`, `BarChart`, `Sparkline` as inline SVG), event list.
 
 ### Testing
 
 Each step has its own test with no network:
 
-| What | How |
-| --- | --- |
-| Module `Update` | `httptest` fake of the source, assert on stored state and series |
-| Queries | seeded storage, `cmp.Diff` on the returned struct |
-| Chart and format helpers | table tests, golden SVG |
-| Pages | fixture data (`testdata/<page>.json`) through execute + render, compared to a golden PNG |
-| Pipeline | fake queries, including failing and stale ones |
+| What | Tool | How |
+| --- | --- | --- |
+| Module `Update` | `go test` | `httptest` fake of the source, assert on stored state and series |
+| Queries | `go test` | seeded storage, `cmp.Diff` on the returned struct |
+| Pipeline | `go test` | fake renderer and queries, including failing and stale ones |
+| Formatting, chart math | `bun test` | table tests on pure functions |
+| Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered and compared to a golden PNG; a mismatch writes a diff image |
+| Types | `tsc --noEmit` | pages against generated types |
 
-Fixtures come from the live service: the preview serves the resolved data as JSON (`/preview/{device}/{page}/data.json`), saved as-is into `testdata/`. A golden PNG test fails with the path of a diff image.
-
-### Templates on disk
-
-Embedded in the binary as defaults (`embed.FS`), overridable per file by a `templates_dir` on the config mount. Preview requests reload from disk.
+Fixtures come from the live service: the preview serves the resolved props as JSON (`/preview/{device}/{page}/props.json`), saved as-is into `pages/testdata/`.
 
 ### Fonts
 
-Bundled in the image.
+Bundled in the image, loaded by the renderer.
 
 ## Web UI
 
@@ -312,8 +346,7 @@ On a separate admin listener, so only the device listener faces the IoT network.
 | --- | --- |
 | `GET /` | Devices, pages, module status (last update, errors), pending devices |
 | `GET /preview/{device}/{page}.png` | Exactly what the device gets |
-| `GET /preview/{device}/{page}.html` | The HTML fed to the renderer (browser rendering may differ from Takumi) |
-| `GET /preview/{device}/{page}/data.json` | The resolved query results, as fed to the template; saved as test fixtures |
+| `GET /preview/{device}/{page}/props.json` | The props the page received; saved as test fixtures |
 | `GET /preview/page/{page}.png?model=...&rotation=...` | A page on a panel without a device |
 | `GET /queries` | Every registered query with its params and a sample result |
 | `/modules/{name}/...` | Module routes, e.g. `/modules/car/login` |
@@ -329,7 +362,7 @@ listen:
   admin: ":8081"
 timezone: Europe/Amsterdam
 data_dir: /data
-templates_dir: /config/templates   # optional overrides
+pages_dir: /config/pages   # optional; defaults to the pages in the image
 
 schedule:
   active: "07:00-01:00"
@@ -357,12 +390,13 @@ Runtime state (OAuth tokens, device API keys) lives in the database, not the con
 
 ## Deployment
 
-- One Docker image, multi-stage: Rust renderer, Go service, fonts and default templates, distroless base.
+- One Docker image, multi-stage: Go service, Bun runtime with the renderer and `node_modules`, pages, fonts. Base is a slim image with Bun (~60-90 MB); the Go binary is static.
+- CI: `go test`, `bun test`, `tsc --noEmit`, generated types up to date.
 - Built by GitHub Actions, pushed to GHCR.
-- Runs on TrueNAS with `/config` (YAML, template overrides) and `/data` (SQLite) mounts.
+- Runs on TrueNAS with `/config` (YAML, optional pages) and `/data` (SQLite) mounts.
 - Backup: SQLite online backup or `VACUUM INTO`.
 
 ## Open questions
 
 1. Buttons and rotation direction: to verify on hardware.
-2. Takumi: inline `<svg>` support.
+2. Takumi CSS coverage: find limits as pages are built.
