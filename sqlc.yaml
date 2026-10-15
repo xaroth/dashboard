@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - &owner
+    engine: sqlite
+    schema: service/storage/sql/migrations
+    queries: service/storage/sql/queries.sql
+    gen:
+      go: &go
+        package: storage
+        out: service/storage
+        emit_json_tags: true
+        json_tags_case_style: camel
+        emit_pointers_for_null_types: true
+        omit_unused_structs: true
+        output_db_file_name: sqlc_db.go
+        output_models_file_name: sqlc_models.go
+        output_files_suffix: _sqlc

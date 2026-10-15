@@ -27,3 +27,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bunx tsc --noEmit
+
+  sqlc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.31.1"
+      - run: sqlc diff

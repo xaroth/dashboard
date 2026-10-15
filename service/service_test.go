@@ -8,12 +8,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/xaroth/dashboard/service"
 	"github.com/xaroth/dashboard/service/render"
+	"github.com/xaroth/dashboard/service/storage"
 )
 
 // freeAddr returns an address that was free a moment ago.
@@ -27,8 +30,10 @@ func freeAddr(tb testing.TB) string {
 	return l.Addr().String()
 }
 
-func testConfig(device, admin string) service.Config {
+func testConfig(tb testing.TB, device, admin string) service.Config {
+	tb.Helper()
 	cfg := service.DefaultConfig()
+	cfg.DataDir = tb.TempDir()
 	cfg.Listen = service.Listen{Device: device, Admin: admin}
 	cfg.Devices = map[string]service.Device{"hallway": {MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello"}}}
 	return cfg
@@ -46,7 +51,7 @@ func newService(tb testing.TB, cfg service.Config) (*service.Service, *render.Fa
 
 func TestNewRejectsUnknownPage(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig("", "")
+	cfg := testConfig(t, "", "")
 	cfg.Devices["hallway"] = service.Device{MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello", "nope"}}
 	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
 	_, err := service.New(t.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub))
@@ -58,9 +63,35 @@ func TestNewRejectsUnknownPage(t *testing.T) {
 	}
 }
 
+func TestNewCreatesDatabase(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t, "", "")
+	newService(t, cfg)
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, storage.File)); err != nil {
+		t.Errorf("database file: %v", err)
+	}
+}
+
+func TestNewFailsOnUnusableDataDir(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig(t, "", "")
+	// A file where the data directory should be.
+	cfg.DataDir = filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(cfg.DataDir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
+	if _, err := service.New(t.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub)); err == nil {
+		t.Error("got nil error, want one")
+	}
+	if !stub.Closed() {
+		t.Error("renderer not closed after failed New")
+	}
+}
+
 func TestDevicePreview(t *testing.T) {
 	t.Parallel()
-	s, _ := newService(t, testConfig("", ""))
+	s, _ := newService(t, testConfig(t, "", ""))
 	rec := httptest.NewRecorder()
 	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/preview/hallway/hello.png?model=reterminal_e1003", nil))
 	if rec.Code != http.StatusOK {
@@ -77,7 +108,7 @@ func TestDevicePreview(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	t.Parallel()
-	s, _ := newService(t, testConfig("", ""))
+	s, _ := newService(t, testConfig(t, "", ""))
 	rec := httptest.NewRecorder()
 	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
@@ -87,7 +118,7 @@ func TestHealthz(t *testing.T) {
 
 func TestRunStopsOnCancel(t *testing.T) {
 	t.Parallel()
-	s, stub := newService(t, testConfig(freeAddr(t), freeAddr(t)))
+	s, stub := newService(t, testConfig(t, freeAddr(t), freeAddr(t)))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- s.Run(ctx) }()
@@ -112,7 +143,7 @@ func TestRunFailsOnBindError(t *testing.T) {
 		t.Fatalf("listening: %v", err)
 	}
 	defer l.Close()
-	s, _ := newService(t, testConfig(l.Addr().String(), freeAddr(t)))
+	s, _ := newService(t, testConfig(t, l.Addr().String(), freeAddr(t)))
 	done := make(chan error, 1)
 	go func() { done <- s.Run(t.Context()) }()
 	select {
