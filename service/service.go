@@ -16,6 +16,7 @@ import (
 
 	"github.com/xaroth/dashboard/service/device"
 	"github.com/xaroth/dashboard/service/render"
+	"github.com/xaroth/dashboard/service/storage"
 	"github.com/xaroth/dashboard/service/web"
 )
 
@@ -29,6 +30,7 @@ type Service struct {
 	cfg      Config
 	log      *slog.Logger
 	renderer Renderer
+	db       *storage.DB
 	device   *http.ServeMux
 	admin    *http.ServeMux
 }
@@ -40,9 +42,9 @@ func WithRenderer(r Renderer) Option {
 	return func(s *Service) { s.renderer = r }
 }
 
-// New builds the service and loads the page bundle. Pages named by devices
-// must exist.
-func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (*Service, error) {
+// New opens storage, builds the service and loads the page bundle. Pages
+// named by devices must exist.
+func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *Service, err error) {
 	s := &Service{
 		cfg:    cfg,
 		log:    log,
@@ -56,6 +58,14 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (*Se
 	for _, opt := range opts {
 		opt(s)
 	}
+	defer func() {
+		if err != nil {
+			s.close()
+		}
+	}()
+	if s.db, err = storage.Open(ctx, cfg.DataDir); err != nil {
+		return nil, fmt.Errorf("opening storage: %w", err)
+	}
 	if s.renderer == nil {
 		cmd := []string{cfg.Renderer.Bun, "renderer/main.ts", "--pages", "pages", "--fonts", "fonts"}
 		if cfg.Renderer.Watch {
@@ -67,13 +77,11 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (*Se
 	pipeline := render.NewPipeline(s.renderer, loc, time.Now)
 	pages, err := pipeline.Pages(ctx)
 	if err != nil {
-		s.renderer.Close()
 		return nil, err
 	}
 	for name, d := range cfg.Devices {
 		for _, page := range d.Pages {
 			if !slices.Contains(pages, page) {
-				s.renderer.Close()
 				return nil, fmt.Errorf("devices.%s: page %q does not exist (have %v)", name, page, pages)
 			}
 		}
@@ -114,13 +122,22 @@ func (s *Service) Device() http.Handler { return s.device }
 func (s *Service) Admin() http.Handler { return s.admin }
 
 // Run serves both listeners until ctx is cancelled or one of them fails, then
-// stops the renderer.
+// stops the renderer and closes storage.
 func (s *Service) Run(ctx context.Context) error {
-	defer s.renderer.Close()
+	defer s.close()
 	g, ctx := errgroup.WithContext(ctx)
 	s.serve(ctx, g, "device", s.cfg.Listen.Device, s.device)
 	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.admin)
 	return g.Wait()
+}
+
+func (s *Service) close() {
+	if s.renderer != nil {
+		s.renderer.Close()
+	}
+	if s.db != nil {
+		s.db.Close()
+	}
 }
 
 func (s *Service) serve(ctx context.Context, g *errgroup.Group, name, addr string, h http.Handler) {
