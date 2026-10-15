@@ -19,3 +19,8 @@ VALUES (@module, @at, @error)
 ON CONFLICT (module) DO UPDATE SET
     attempted_at = excluded.attempted_at,
     error        = excluded.error;
+
+-- name: SaveSnapshot :exec
+INSERT INTO module_state (module, data)
+VALUES (@module, @data)
+ON CONFLICT (module) DO UPDATE SET data = excluded.data;

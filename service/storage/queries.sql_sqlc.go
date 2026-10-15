@@ -99,3 +99,19 @@ func (q *Queries) RecordSuccess(ctx context.Context, arg RecordSuccessParams) er
 	_, err := q.db.ExecContext(ctx, recordSuccess, arg.Module, arg.At, arg.Data)
 	return err
 }
+
+const saveSnapshot = `-- name: SaveSnapshot :exec
+INSERT INTO module_state (module, data)
+VALUES (?1, ?2)
+ON CONFLICT (module) DO UPDATE SET data = excluded.data
+`
+
+type SaveSnapshotParams struct {
+	Module string  `json:"module"`
+	Data   *string `json:"data"`
+}
+
+func (q *Queries) SaveSnapshot(ctx context.Context, arg SaveSnapshotParams) error {
+	_, err := q.db.ExecContext(ctx, saveSnapshot, arg.Module, arg.Data)
+	return err
+}
