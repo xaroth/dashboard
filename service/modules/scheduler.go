@@ -53,14 +53,15 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		}
 
 		inst.set(PhaseUpdating, time.Time{})
-		err := s.update(uctx, inst)
+		state := &stateStore{q: storage.New(s.db.Writer), module: inst.reg.name, update: true}
+		err := s.update(WithState(uctx, state), inst)
 		if ctx.Err() != nil {
 			return
 		}
 		at := s.now()
 		q := storage.New(s.db.Writer)
 		if err == nil {
-			if err := q.RecordSuccess(ctx, storage.RecordSuccessParams{Module: inst.reg.name, At: &at}); err != nil {
+			if err := q.RecordSuccess(ctx, storage.RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
 				inst.log.Error("recording update", "err", err)
 			}
 			failures = 0

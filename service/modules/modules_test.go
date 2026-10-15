@@ -2,6 +2,7 @@ package modules_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,10 @@ type testConfig struct {
 	Key string `yaml:"key"`
 	// Fail makes Initialize ("init") or Update ("update", "auth") fail.
 	Fail string `yaml:"fail"`
+	// FailAfter makes updates fail after this many successes.
+	FailAfter int `yaml:"fail_after"`
+	// SkipSave makes updates succeed without saving a snapshot.
+	SkipSave bool `yaml:"skip_save"`
 }
 
 type testModule struct {
@@ -42,8 +47,13 @@ func (m *testModule) Enabled(context.Context) bool { return m.cfg.Key != "" }
 
 func (m *testModule) Update(ctx context.Context) error {
 	m.updates++
-	if err := modules.SaveSnapshot(ctx, map[string]int{"updates": m.updates}); err != nil {
-		return err
+	if !m.cfg.SkipSave || m.updates == 1 {
+		if err := modules.SaveSnapshot(ctx, map[string]int{"updates": m.updates}); err != nil {
+			return err
+		}
+	}
+	if m.cfg.FailAfter > 0 && m.updates > m.cfg.FailAfter {
+		return errors.New("source down")
 	}
 	switch m.cfg.Fail {
 	case "update":
@@ -74,7 +84,7 @@ func parse(tb testing.TB, src string) map[string]yaml.Node {
 	return out
 }
 
-func load(tb testing.TB, ctx context.Context, src string) (*modules.Set, *storage.DB) {
+func load(ctx context.Context, tb testing.TB, src string) (*modules.Set, *storage.DB) {
 	tb.Helper()
 	db, err := storage.Open(ctx, tb.TempDir())
 	if err != nil {
@@ -97,7 +107,7 @@ func load(tb testing.TB, ctx context.Context, src string) (*modules.Set, *storag
 
 func status(tb testing.TB, set *modules.Set) modules.Status {
 	tb.Helper()
-	st, err := set.Statuses(context.Background())
+	st, err := set.Statuses(tb.Context())
 	if err != nil || len(st) != 1 {
 		tb.Fatalf("Statuses: %v, %v", st, err)
 	}
@@ -116,6 +126,8 @@ func TestLoadErrors(t *testing.T) {
 		{"not a mapping", "test: [1]", "mapping"},
 		{"bad schedule", "test: {schedule: {update_interval: soon}}", "schedule"},
 		{"unknown schedule key", "test: {schedule: {every: 1m}}", "every"},
+		{"negative interval", "test: {schedule: {update_interval: -1m}}", "positive"},
+		{"negative stale after", "test: {schedule: {stale_after: -1m}}", "positive"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -141,7 +153,7 @@ func TestLoadErrors(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	t.Parallel()
-	set, db := load(t, t.Context(), "test: {key: k, schedule: {update_interval: 1m}}")
+	set, db := load(t.Context(), t, "test: {key: k, schedule: {update_interval: 1m}}")
 	if got := status(t, set).Interval; got != time.Minute {
 		t.Errorf("got interval %v, want the schedule override 1m", got)
 	}
@@ -151,9 +163,27 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadEmptySection(t *testing.T) {
+	t.Parallel()
+	set, _ := load(t.Context(), t, "test:")
+	if got := status(t, set); got.Phase != modules.PhaseWaiting || got.Interval != 10*time.Minute {
+		t.Errorf("got %+v, want defaults", got)
+	}
+}
+
+func TestDefineRejectsZeroInterval(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Error("Define accepted a zero update interval")
+		}
+	}()
+	modules.Define[testModule, testConfig]("zero", func() *testConfig { return &testConfig{} }, modules.WithUpdateInterval(0))
+}
+
 func TestLoadInitializeFailure(t *testing.T) {
 	t.Parallel()
-	set, _ := load(t, t.Context(), "test: {key: k, fail: init}")
+	set, _ := load(t.Context(), t, "test: {key: k, fail: init}")
 	got := status(t, set)
 	if got.Phase != modules.PhaseInitFail || got.Error != "bad init" {
 		t.Errorf("got %s %q, want %s \"bad init\"", got.Phase, got.Error, modules.PhaseInitFail)
@@ -163,36 +193,46 @@ func TestLoadInitializeFailure(t *testing.T) {
 }
 
 // run starts the schedule in a synctest bubble and stops it at the end.
-func run(t *testing.T, src string, check func(set *modules.Set, db *storage.DB)) {
+func run(t *testing.T, src string, check func(t *testing.T, set *modules.Set, db *storage.DB)) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		set, db := load(t, ctx, src)
+		set, db := load(ctx, t, src)
 		done := make(chan struct{})
 		go func() {
 			set.Run(ctx)
 			close(done)
 		}()
-		check(set, db)
+		check(t, set, db)
 		cancel()
 		<-done
 	})
 }
 
+// waitFirstAttempt advances the fake clock in 1 s steps until the first
+// update ran, so the start jitter does not matter.
+func waitFirstAttempt(t *testing.T, set *modules.Set) {
+	t.Helper()
+	for status(t, set).AttemptedAt == nil {
+		time.Sleep(time.Second)
+		synctest.Wait()
+	}
+}
+
 func snapshot(tb testing.TB, db *storage.DB) map[string]int {
 	tb.Helper()
-	st, err := storage.New(db.Reader).GetState(context.Background(), "test")
+	st, err := storage.New(db.Reader).GetState(tb.Context(), "test")
 	if err != nil {
 		tb.Fatalf("GetState: %v", err)
 	}
 	var out map[string]int
-	if err := yaml.Unmarshal([]byte(*st.Data), &out); err != nil {
+	if err := json.Unmarshal([]byte(*st.Data), &out); err != nil {
 		tb.Fatalf("snapshot: %v", err)
 	}
 	return out
 }
 
 func TestScheduleSuccess(t *testing.T) {
-	run(t, "test: {key: k}", func(set *modules.Set, db *storage.DB) {
+	run(t, "test: {key: k}", func(t *testing.T, set *modules.Set, db *storage.DB) {
 		time.Sleep(31 * time.Second) // past the start jitter
 		synctest.Wait()
 		got := status(t, set)
@@ -211,7 +251,7 @@ func TestScheduleSuccess(t *testing.T) {
 }
 
 func TestScheduleDisabled(t *testing.T) {
-	run(t, "test: {}", func(set *modules.Set, db *storage.DB) {
+	run(t, "test: {}", func(t *testing.T, set *modules.Set, db *storage.DB) {
 		time.Sleep(31 * time.Second)
 		synctest.Wait()
 		got := status(t, set)
@@ -222,9 +262,8 @@ func TestScheduleDisabled(t *testing.T) {
 }
 
 func TestScheduleBackoff(t *testing.T) {
-	run(t, "test: {key: k, fail: update}", func(set *modules.Set, db *storage.DB) {
-		time.Sleep(31 * time.Second)
-		synctest.Wait()
+	run(t, "test: {key: k, fail: update}", func(t *testing.T, set *modules.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
 		got := status(t, set)
 		if got.Phase != modules.PhaseFailed || got.Error != "source down" || got.FetchedAt != nil {
 			t.Fatalf("after first failure: got %+v", got)
@@ -238,24 +277,69 @@ func TestScheduleBackoff(t *testing.T) {
 		if d := got.NextRun.Sub(*got.AttemptedAt); d != time.Minute {
 			t.Errorf("got second retry in %v, want 1m", d)
 		}
-		if n := snapshot(t, db)["updates"]; n != 2 {
-			t.Errorf("got %d updates, want 2", n)
+		if got.Error != "source down" || got.FetchedAt != nil {
+			t.Errorf("got %+v, want still failing, never fetched", got)
+		}
+	})
+}
+
+func TestScheduleRecovers(t *testing.T) {
+	// Fails from the second update on; then fail_after is the only knob, so
+	// recovery is shown by the snapshot of the first update surviving.
+	run(t, "test: {key: k, fail_after: 1}", func(t *testing.T, set *modules.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		first := status(t, set)
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		got := status(t, set)
+		if got.Phase != modules.PhaseFailed || !got.FetchedAt.Equal(*first.FetchedAt) {
+			t.Errorf("got %+v, want failed with the first fetch time", got)
+		}
+		// The failed update's snapshot is dropped; the first one stays.
+		if diff := cmp.Diff(map[string]int{"updates": 1}, snapshot(t, db)); diff != "" {
+			t.Errorf("snapshot (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestScheduleKeepsSnapshotWhenNotSaved(t *testing.T) {
+	run(t, "test: {key: k, skip_save: true}", func(t *testing.T, set *modules.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		if diff := cmp.Diff(map[string]int{"updates": 1}, snapshot(t, db)); diff != "" {
+			t.Errorf("snapshot (-want +got):\n%s", diff)
+		}
+		if got := status(t, set); got.Error != "" || got.Phase != modules.PhaseWaiting {
+			t.Errorf("got %+v, want a clean second update", got)
+		}
+	})
+}
+
+func TestBackoffCap(t *testing.T) {
+	run(t, "test: {key: k, fail: update}", func(t *testing.T, set *modules.Set, db *storage.DB) {
+		// 30s, 1m, 2m, ... reaches the 6h cap after 11 failures.
+		time.Sleep(48 * time.Hour)
+		synctest.Wait()
+		got := status(t, set)
+		if d := got.NextRun.Sub(*got.AttemptedAt); d != 6*time.Hour {
+			t.Errorf("got retry in %v, want the 6h cap", d)
 		}
 	})
 }
 
 func TestScheduleAuthStops(t *testing.T) {
-	run(t, "test: {key: k, fail: auth}", func(set *modules.Set, db *storage.DB) {
-		time.Sleep(31 * time.Second)
-		synctest.Wait()
+	run(t, "test: {key: k, fail: auth}", func(t *testing.T, set *modules.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		first := *status(t, set).AttemptedAt
 		time.Sleep(24 * time.Hour)
 		synctest.Wait()
 		got := status(t, set)
 		if got.Phase != modules.PhaseAuth || !strings.Contains(got.Error, "token refused") {
 			t.Errorf("got %+v, want auth phase with the error", got)
 		}
-		if n := snapshot(t, db)["updates"]; n != 1 {
-			t.Errorf("got %d updates, want 1: no retries after an auth error", n)
+		if !got.AttemptedAt.Equal(first) {
+			t.Errorf("got attempt at %v, want only the first at %v: no retries after an auth error", got.AttemptedAt, first)
 		}
 	})
 }

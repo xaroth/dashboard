@@ -87,30 +87,41 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	}
 
 	s := &Set{db: o.DB, log: o.Log, httpClient: o.HTTPClient, now: o.Now}
-	for _, r := range regs {
+	// Three passes, so a config error stops startup before any migration, and
+	// every module's tables exist before any Initialize.
+	configs := make([]any, len(regs))
+	for i, r := range regs {
 		cfg, sched, err := decodeConfig(r, o.Configs[r.name])
 		if err != nil {
 			return nil, fmt.Errorf("modules.%s: %w", r.name, err)
 		}
-		if r.migrations != nil {
-			if err := o.DB.Migrate(ctx, r.name, r.migrations, "sql/migrations"); err != nil {
-				return nil, err
-			}
+		if sched.UpdateInterval < 0 || sched.StaleAfter < 0 {
+			return nil, fmt.Errorf("modules.%s.schedule: durations must be positive", r.name)
 		}
-		inst := &instance{
+		configs[i] = cfg
+		s.instances = append(s.instances, &instance{
 			reg:        r,
 			module:     r.newModule(),
 			interval:   cmp.Or(sched.UpdateInterval, r.interval),
 			staleAfter: cmp.Or(sched.StaleAfter, r.staleAfter),
 			log:        o.Log.With("module", r.name),
 			phase:      PhaseWaiting,
+		})
+	}
+	for _, r := range regs {
+		if r.migrations == nil {
+			continue
 		}
-		if err := r.initialize(s.context(ctx, inst, o.DB.Writer), inst.module, cfg); err != nil {
+		if err := o.DB.Migrate(ctx, r.name, r.migrations, "sql/migrations"); err != nil {
+			return nil, err
+		}
+	}
+	for i, inst := range s.instances {
+		if err := inst.reg.initialize(s.context(ctx, inst, o.DB.Writer), inst.module, configs[i]); err != nil {
 			inst.log.Error("initialize failed; module off until restart", "err", err)
 			inst.initErr = err
 			inst.phase = PhaseInitFail
 		}
-		s.instances = append(s.instances, inst)
 	}
 	return s, nil
 }
@@ -119,7 +130,8 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 func decodeConfig(r Registration, node yaml.Node) (any, Schedule, error) {
 	cfg := r.newConfig()
 	var sched Schedule
-	if node.Kind == 0 {
+	// Absent, or present without keys ("weather:"): defaults.
+	if node.Kind == 0 || (node.Kind == yaml.ScalarNode && node.Tag == "!!null") {
 		return cfg, sched, nil
 	}
 	if node.Kind != yaml.MappingNode {
@@ -161,20 +173,28 @@ func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB) context.C
 	ctx = WithLogger(ctx, inst.log)
 	ctx = WithHTTPClient(ctx, s.httpClient)
 	ctx = WithClock(ctx, s.now)
-	return WithState(ctx, stateStore{q: storage.New(db), module: inst.reg.name})
+	return WithState(ctx, &stateStore{q: storage.New(db), module: inst.reg.name})
 }
 
+// stateStore reads the stored snapshot; a saved one is held until the update
+// succeeds, then written with the success record in one statement.
 type stateStore struct {
-	q      *storage.Queries
-	module string
+	q       *storage.Queries
+	module  string
+	update  bool
+	pending *string
 }
 
-func (s stateStore) SaveSnapshot(ctx context.Context, data []byte) error {
+func (s *stateStore) SaveSnapshot(_ context.Context, data []byte) error {
+	if !s.update {
+		return errors.New("snapshots are saved from Update")
+	}
 	str := string(data)
-	return s.q.SaveSnapshot(ctx, storage.SaveSnapshotParams{Module: s.module, Data: &str})
+	s.pending = &str
+	return nil
 }
 
-func (s stateStore) LoadSnapshot(ctx context.Context) ([]byte, error) {
+func (s *stateStore) LoadSnapshot(ctx context.Context) ([]byte, error) {
 	st, err := s.q.GetState(ctx, s.module)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && st.Data == nil) {
 		return nil, nil

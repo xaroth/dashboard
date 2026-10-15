@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"reflect"
 	"regexp"
 	"sync"
 	"time"
@@ -41,7 +40,6 @@ type Registration struct {
 	interval   time.Duration
 	staleAfter time.Duration
 	migrations fs.FS
-	moduleType reflect.Type
 	initialize func(ctx context.Context, m any, cfg any) error
 	enabled    func(ctx context.Context, m any) bool
 	update     func(ctx context.Context, m any) error
@@ -83,13 +81,15 @@ func Define[M any, C any, PM interface {
 		newConfig:  func() any { return defaults() },
 		interval:   defaultInterval,
 		staleAfter: defaultStaleAfter,
-		moduleType: reflect.TypeFor[*M](),
 		initialize: func(ctx context.Context, m any, cfg any) error { return m.(PM).Initialize(ctx, cfg.(*C)) },
 		enabled:    func(ctx context.Context, m any) bool { return m.(PM).Enabled(ctx) },
 		update:     func(ctx context.Context, m any) error { return m.(PM).Update(ctx) },
 	}
 	for _, opt := range opts {
 		opt(&r)
+	}
+	if r.interval <= 0 || r.staleAfter <= 0 {
+		panic(fmt.Sprintf("modules: %s: update interval and stale after must be positive", name))
 	}
 	return r
 }
