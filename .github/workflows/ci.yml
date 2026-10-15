@@ -13,6 +13,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # For the renderer integration test in service/render.
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
       - run: go vet ./...
       - run: go test ./...
 
