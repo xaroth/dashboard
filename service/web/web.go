@@ -34,6 +34,7 @@ type Devices interface {
 
 type Modules interface {
 	Statuses(ctx context.Context) ([]modules.Status, error)
+	Update(ctx context.Context, name string) error
 }
 
 type Handler struct {
@@ -50,6 +51,7 @@ type Handler struct {
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", h.index)
+	mux.HandleFunc("POST /modules/{module}/update", h.updateModule)
 	mux.HandleFunc("GET /simulate/{device}", h.simulatePage)
 	mux.HandleFunc("POST /simulate/{device}/wake", h.simulateWake)
 	mux.Handle("GET /images/{file}", h.DeviceAPI)
@@ -191,4 +193,18 @@ func (h *Handler) fail(w http.ResponseWriter, err error) {
 		h.Log.Warn("preview failed", "err", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// updateModule runs one update now and returns to the index. The outcome
+// shows in the module table.
+func (h *Handler) updateModule(w http.ResponseWriter, r *http.Request) {
+	err := h.Modules.Update(r.Context(), r.PathValue("module"))
+	if errors.Is(err, modules.ErrUnknownModule) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.Log.Warn("manual update failed", "module", r.PathValue("module"), "err", err)
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

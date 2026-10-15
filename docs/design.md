@@ -161,7 +161,7 @@ SQL lives in `.sql` files next to the code that owns it:
 ```
 service/storage/sql/migrations/00001_state.sql
 service/storage/sql/queries.sql
-modules/weather/sql/migrations/00001_init.sql
+modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
