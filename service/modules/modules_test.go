@@ -86,13 +86,18 @@ func parse(tb testing.TB, src string) map[string]yaml.Node {
 
 func load(ctx context.Context, tb testing.TB, src string) (*modules.Set, *storage.DB) {
 	tb.Helper()
+	return loadRegs(ctx, tb, src, []modules.Registration{registration()})
+}
+
+func loadRegs(ctx context.Context, tb testing.TB, src string, regs []modules.Registration) (*modules.Set, *storage.DB) {
+	tb.Helper()
 	db, err := storage.Open(ctx, tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
 	set, err := modules.Load(ctx, modules.Options{
-		Registrations: []modules.Registration{registration()},
+		Registrations: regs,
 		Configs:       parse(tb, src),
 		DB:            db,
 		Log:           slog.New(slog.DiscardHandler),

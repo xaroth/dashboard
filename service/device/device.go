@@ -21,6 +21,8 @@ type Config struct {
 	MAC      string // normalized: upper case with colons
 	Rotation int
 	Pages    []string
+	// Params overrides query params by "page.key".
+	Params map[string]map[string]any
 }
 
 // Pipeline renders pages; *render.Pipeline in production.
@@ -156,7 +158,7 @@ func (d *Devices) Pending() []Pending {
 }
 
 func (s *state) target() render.Target {
-	return render.Target{Name: s.cfg.Name, Model: cmp.Or(s.model, DefaultModel), Rotation: s.cfg.Rotation, Wake: s.wake}
+	return render.Target{Name: s.cfg.Name, Model: cmp.Or(s.model, DefaultModel), Rotation: s.cfg.Rotation, Wake: s.wake, Params: s.cfg.Params}
 }
 
 func newAPIKey() string {

@@ -3,13 +3,16 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -95,17 +98,9 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		s.renderer = render.NewProcess(cmd, cfg.Renderer.Dir, log.With("component", "renderer"))
 	}
 
-	pipeline := render.NewPipeline(s.renderer, loc, time.Now)
-	pages, err := pipeline.Pages(ctx)
-	if err != nil {
+	pipeline := render.NewPipeline(s.renderer, resolver{set: s.modules, loc: loc}, loc, time.Now)
+	if err := s.checkPages(ctx, pipeline); err != nil {
 		return nil, err
-	}
-	for name, d := range cfg.Devices {
-		for _, page := range d.Pages {
-			if !slices.Contains(pages, page) {
-				return nil, fmt.Errorf("devices.%s: page %q does not exist (have %v)", name, page, pages)
-			}
-		}
 	}
 
 	s.admin.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +109,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	var configs []device.Config
 	for name, d := range cfg.Devices {
 		mac, _ := NormalizeMAC(d.MAC) // validated with the config
-		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.Pages})
+		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.Pages, Params: d.Params})
 	}
 	devices := device.New(device.Options{
 		Devices:   configs,
@@ -155,6 +150,69 @@ func (s *Service) Run(ctx context.Context) error {
 	s.serve(ctx, g, "device", s.cfg.Listen.Device, s.device)
 	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.admin)
 	return g.Wait()
+}
+
+// checkPages validates what pages and devices ask for: pages exist, every
+// declared query exists and its params decode, also with each device's
+// overrides. Mistakes stop startup instead of showing up at render.
+func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) error {
+	pages, err := pipeline.PageInfo(ctx)
+	if err != nil {
+		return err
+	}
+	names := slices.Sorted(maps.Keys(pages))
+	for _, page := range names {
+		for key, q := range pages[page].Data {
+			if err := s.modules.Check(q.Module, q.Query, q.Params); err != nil {
+				return fmt.Errorf("page %s, data %s: %w", page, key, err)
+			}
+		}
+	}
+	for name, d := range s.cfg.Devices {
+		for _, page := range d.Pages {
+			if _, ok := pages[page]; !ok {
+				return fmt.Errorf("devices.%s: page %q does not exist (have %v)", name, page, names)
+			}
+		}
+		for ref, override := range d.Params {
+			page, key, _ := strings.Cut(ref, ".")
+			q, ok := pages[page].Data[key]
+			if !ok {
+				return fmt.Errorf("devices.%s.params: %q is not a page data key (page.key)", name, ref)
+			}
+			if err := s.modules.Check(q.Module, q.Query, render.MergeParams(q.Params, override)); err != nil {
+				return fmt.Errorf("devices.%s.params.%s: %w", name, ref, err)
+			}
+		}
+	}
+	return nil
+}
+
+// resolver runs page queries on the module set and shapes the results for pages.
+type resolver struct {
+	set *modules.Set
+	loc *time.Location
+}
+
+func (r resolver) Resolve(ctx context.Context, q render.QueryDescriptor) render.Result {
+	res := r.set.Resolve(ctx, q.Module, q.Query, q.Params)
+	// A value JSON cannot encode (NaN) would fail the whole render; fail this key only.
+	if _, err := json.Marshal(res.Value); err != nil {
+		res.Value, res.Error = nil, fmt.Sprintf("encoding result: %v", err)
+	}
+	out := render.Result{Value: res.Value, Stale: res.Stale}
+	if res.FetchedAt != nil {
+		at := res.FetchedAt.In(r.loc).Format(time.RFC3339)
+		out.FetchedAt = &at
+	}
+	if res.Error != "" {
+		out.Error = &res.Error
+	}
+	return out
+}
+
+func (r resolver) StaleModules(ctx context.Context) ([]string, error) {
+	return r.set.StaleModules(ctx)
 }
 
 func (s *Service) close() {
