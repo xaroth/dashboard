@@ -1,0 +1,12 @@
+listen:
+  device: "0.0.0.0:8080"
+  admin: "127.0.0.1:8081"   # bind to a trusted interface only
+public_url: http://127.0.0.1:8080   # base for image_url, reachable from the devices
+timezone: Europe/Amsterdam
+data_dir: ./data
+
+devices:
+  hallway:
+    mac: "AA:BB:CC:DD:EE:01"
+    rotation: 0
+    pages: [hello]
