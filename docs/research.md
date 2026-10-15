@@ -77,10 +77,26 @@ TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation
 | --- | --- | --- |
 | Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
 | Calendar | ICS / CalDAV URL | Google, iCloud, Nextcloud all expose ICS |
-| Power usage | P1 meter local API (e.g. HomeWizard), inverter API | Depends on hardware |
+| Power usage | Smartstuff P1 dongle, DSMR-API firmware, local HTTP | No adapter needed, see below |
 | Car status | Hyundai Bluelink EU cloud API | Kona 2024; needs adapter, see below |
 
 Weather and calendar fit LaraPaper polling plugins directly. Car and power may need a small adapter on the server that exposes clean JSON.
+
+## Power: Smartstuff P1 dongle (DSMR-API v5)
+
+Local HTTP JSON, no cloud, no adapter needed. Dashboard server polls it directly. Basic Auth applies if set in the dongle UI.
+
+| Endpoint | Use |
+| --- | --- |
+| `/api/v2/sm/actual` | Live values: power delivered/returned, per-phase, meter readings, gas |
+| `/api/v2/hist/hours`, `/days`, `/months` | History for today/week/month graphs; requires local storage enabled |
+| `/api/v2/dash/live` | Combined live values incl. production/battery |
+| `/api/v2/gen` | Solar production, if an inverter is linked (`active:false` otherwise) |
+| `/api/v1/data` | HomeWizard-compatible, if reusing HomeWizard tooling |
+
+Also available: MQTT push, WebSocket on `:81/ws` (max 3 clients), raw telegram on TCP port 82. Not needed for a dashboard that refreshes every few minutes.
+
+Give the dongle a fixed IP or DHCP reservation.
 
 ## Car: Hyundai Kona 2024 (Bluelink EU)
 
@@ -102,13 +118,13 @@ Risks:
 
 1. Server running Docker, reachable from both units over LAN (plain HTTP fine; HTTPS via reverse proxy optional).
 2. 2.4 GHz Wi-Fi at both locations.
-3. Per-source access: calendar ICS URL, P1/inverter on LAN, car API credentials.
+3. Per-source access: calendar ICS URL, P1 dongle on LAN with local history enabled, Bluelink credentials.
 4. USB-C cable and Chromium browser for the initial TRMNL flash. E1001 FW >= 1.6.7, E1003 FW >= 1.8.7.
 5. Keep TRMNL OTA and early-release off; firmware updates managed manually.
 
 ## Open questions
 
-1. Power: which meter/inverter (P1 dongle, solar)?
+1. Solar inverter present? (`/api/v2/gen`)
 2. Calendar provider?
 3. Mounting: wall with USB power, or battery only? Determines refresh interval.
 4. What goes on which screen, per location?
@@ -127,5 +143,6 @@ Risks:
 - hyundai_kia_connect_api: https://github.com/Hyundai-Kia-Connect/hyundai_kia_connect_api
 - Hyundai EU login issue: https://github.com/Hyundai-Kia-Connect/kia_uvo/issues/1927
 - openHAB Bluelink (refresh/limits notes): https://www.openhab.org/addons/bindings/bluelink/
+- Smartstuff DSMR-API endpoints: https://docs.smart-stuff.nl/dsmr-api/geavanceerd/api-overzicht
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
