@@ -1,0 +1,14 @@
+.screen { display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; color: #000; font-family: Inter; padding: 0.8em; gap: 0.6em; }
+.e1001 { font-size: 20px; }
+.e1003 { font-size: 40px; }
+.row { display: flex; flex-direction: row; gap: 0.6em; flex: 1; }
+.card { display: flex; flex-direction: column; flex: 1; border: 3px solid #000; border-radius: 0.5em; padding: 0.6em; gap: 0.2em; }
+.label { font-size: 0.8em; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.05em; }
+.big { font-size: 3em; font-weight: 700; line-height: 1; }
+.mid { font-size: 1.4em; font-weight: 600; }
+.small { font-size: 0.9em; color: #333; }
+.bar { display: flex; height: 0.8em; border: 2px solid #000; border-radius: 0.4em; overflow: hidden; }
+.fill { background: #000; }
+.event { display: flex; flex-direction: row; gap: 0.6em; }
+.time { width: 4.5em; font-weight: 600; }
+.footer { display: flex; justify-content: space-between; font-size: 0.7em; color: #555; }

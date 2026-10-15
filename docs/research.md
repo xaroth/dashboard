@@ -59,19 +59,22 @@ This rules out ESPHome+Puppet and the TRMNL HA add-on. ESPHome can run without H
 
 ## Approach
 
-TRMNL firmware on both units, pointed at a self-hosted BYOS server. No license, all local.
+TRMNL firmware on both units, pointed at our own BYOS server. No license, all local.
 
-The device side is solved: it wakes, calls `/api/display`, downloads an image, sleeps. All work is on the server: fetch data, render a screen per device, serve it.
+The device protocol is small: `/api/setup` (MAC in, `api_key` out), `/api/display` (returns `image_url`, `filename` as cache key, `refresh_rate` in seconds), the PNG itself, optional `/api/log`. Never return JSON `status: 500` from `/api/display`: the firmware treats it as a reset and wipes its credentials. Reference: `scripts/mock_server.py` in `usetrmnl/trmnl-firmware`.
 
-Server options:
+Panel specs (TRMNL model API):
 
-1. **LaraPaper** (PHP, Docker, SQLite). Web UI, TRMNL recipe catalog, polling plugins (JSON URL + template), HTML rendered via Browsershot/puppeteer. Lists E1001; E1003 not listed, needs checking.
-2. **Terminus** (Ruby, TRMNL reference). Same idea, less UI.
-3. **Own service** implementing `/api/setup`, `/api/display`, `/api/log`. Small protocol, full control over rendering and both resolutions, but we write and maintain the renderer.
+| Model | Size | Grays | PNG | Max size |
+| --- | --- | --- | --- | --- |
+| `seeed_e1001` | 800x480 | 4 | 2-bit | 90 KB |
+| `seeed_e1003` | 1872x1404 | 16 | 4-bit | 750 KB |
 
-Preferred: try LaraPaper first; fall back to an own service if E1003 support or custom data sources fight it.
+LaraPaper supports both (it syncs models from that API) but is not used: two fixed screens don't justify a PHP app with a browser renderer.
 
-TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation to confirm on device.
+Server: one Go service that fetches data, renders and serves the device protocol.
+
+Rendering: HTML templates + CSS rendered by Takumi (Rust, no browser) through a small CLI in `renderer/`, called as a subprocess (`render/`). Go reduces the output to the panel's grays and encodes the PNG. Switch to cgo if subprocess overhead ever matters. Spike results: 12 ms / 7.6 KB for E1001, 35 ms / 34 KB for E1003, including process start.
 
 ## Data sources without Home Assistant
 
