@@ -247,14 +247,16 @@ The model and native panel size come from the device's own headers (`Model: rete
 
 ### Screen schedule
 
-Global, overridable per device: hourly wakes on the hour from 07:00 up to and including 00:00; the 00:00 wake sleeps until 07:00. 18 timer wakes a day plus button presses.
+Global: a wake every `interval` from `first_wake` up to and including `last_wake`, in local time; the last wake sleeps until the first. The default is hourly from 07:00 to 00:00: 18 timer wakes a day plus button presses. A `last_wake` at or before `first_wake` is on the next day.
 
 `refresh_rate` is computed from the server clock on every request:
 
-- **Main page**: seconds until the next wake time. If that is less than 60 s (a device that woke just before the hour), add one hour: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
-- **Detail page** (after a button press): 5 minutes, or until the next wake time if that is sooner. The following timer wake shows the main page.
+- **Main page**: seconds until the next wake time. If that is 60 s or less (a device that woke just before a wake time), use the wake after it: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
+- **Detail page** (after a button press): `detail_timeout` (5 minutes), or until the next wake time if that is sooner. The following timer wake shows the main page.
 
-DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights.
+DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights. Wakes in a skipped hour are dropped; in a repeated hour they happen once, on the second pass.
+
+`interval` is whole minutes, from 1m to 24h.
 
 ### Buttons
 
@@ -459,6 +461,7 @@ data_dir: /data
 schedule:
   first_wake: "07:00"
   last_wake: "00:00"
+  interval: 1h
   detail_timeout: 5m
 
 modules:

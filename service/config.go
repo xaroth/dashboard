@@ -3,10 +3,11 @@ package service
 import (
 	"fmt"
 	"net/url"
-	"regexp"
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/xaroth/dashboard/service/device"
 )
 
 // Config is the service configuration, decoded from the YAML file.
@@ -26,9 +27,12 @@ type Listen struct {
 	Admin  string `yaml:"admin"`
 }
 
+// Schedule is when devices wake: every Interval from FirstWake up to and
+// including LastWake.
 type Schedule struct {
 	FirstWake     string        `yaml:"first_wake"`
 	LastWake      string        `yaml:"last_wake"`
+	Interval      time.Duration `yaml:"interval"`
 	DetailTimeout time.Duration `yaml:"detail_timeout"`
 }
 
@@ -41,24 +45,13 @@ type RendererConfig struct {
 	Watch bool `yaml:"watch"`
 }
 
-type Device struct {
-	MAC      string   `yaml:"mac"`
-	Rotation int      `yaml:"rotation"`
-	Pages    []string `yaml:"pages"`
-	// Params overrides query params per page data key, e.g. "overview.events".
-	Params map[string]map[string]any `yaml:"params"`
-}
-
-// Device names appear in URL paths.
-var deviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-
 // DefaultConfig returns the values used for keys missing from the file.
 func DefaultConfig() Config {
 	return Config{
 		Listen:   Listen{Device: ":8080", Admin: "127.0.0.1:8081"},
 		Timezone: "Europe/Amsterdam",
 		DataDir:  "/data",
-		Schedule: Schedule{FirstWake: "07:00", LastWake: "00:00", DetailTimeout: 5 * time.Minute},
+		Schedule: Schedule{FirstWake: "07:00", LastWake: "00:00", Interval: time.Hour, DetailTimeout: 5 * time.Minute},
 		Renderer: RendererConfig{Bun: "bun", Dir: "."},
 	}
 }
@@ -79,31 +72,27 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("schedule: %q is not HH:MM", s)
 		}
 	}
-	macs := map[string]string{}
-	for name, d := range c.Devices {
-		if !deviceName.MatchString(name) {
-			return fmt.Errorf("devices.%s: name may only contain letters, digits, - and _", name)
-		}
-		if name == "page" {
-			// Taken by the admin route /preview/page/{page}.png.
-			return fmt.Errorf("devices.page: the name page is reserved")
-		}
-		mac, err := NormalizeMAC(d.MAC)
-		if err != nil {
-			return fmt.Errorf("devices.%s: %w", name, err)
-		}
-		if other, ok := macs[mac]; ok {
-			return fmt.Errorf("devices.%s: mac %s already used by %s", name, mac, other)
-		}
-		macs[mac] = name
-		switch d.Rotation {
-		case 0, 90, 180, 270:
-		default:
-			return fmt.Errorf("devices.%s: rotation must be 0, 90, 180 or 270", name)
-		}
-		if len(d.Pages) == 0 {
-			return fmt.Errorf("devices.%s: pages is empty", name)
-		}
+	if i := c.Schedule.Interval; i < time.Minute || i > 24*time.Hour || i%time.Minute != 0 {
+		return fmt.Errorf("schedule: interval must be whole minutes from 1m to 24h")
 	}
-	return nil
+	if c.Schedule.DetailTimeout <= 0 {
+		return fmt.Errorf("schedule: detail_timeout must be positive")
+	}
+	return validateDevices(c.Devices)
+}
+
+// device converts the schedule for the device package. Call after Validate.
+func (s Schedule) device(loc *time.Location) device.Schedule {
+	return device.Schedule{
+		First:    sinceMidnight(s.FirstWake),
+		Last:     sinceMidnight(s.LastWake),
+		Interval: s.Interval,
+		Detail:   s.DetailTimeout,
+		Location: loc,
+	}
+}
+
+func sinceMidnight(hhmm string) time.Duration {
+	t, _ := time.Parse("15:04", hhmm)
+	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
 }
