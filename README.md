@@ -10,3 +10,17 @@ Content: car status, weather, calendar, power usage, solar production.
 - [docs/design.md](docs/design.md): service design
 - [docs/research.md](docs/research.md): firmware options, data sources, requirements
 - `tools/dtu_read.py`: read-only Modbus check against the Hoymiles DTU
+
+## Development
+
+Needs Go and Bun.
+
+```sh
+bun install
+cp config.example.yaml config.yaml
+go run ./cmd/dashboard -config config.yaml
+```
+
+Open http://127.0.0.1:8081/ for previews of every page per device and panel. With `renderer.watch`, page edits rebuild on save; reload the browser.
+
+Tests: `go test -race ./...`, `bun test`, `bunx tsc --noEmit`.

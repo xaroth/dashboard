@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dashboard</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; background: #eee; color: #111; }
+  h2 { margin-top: 32px; }
+  .row { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+  figure { margin: 0; }
+  figcaption { margin-top: 4px; }
+  img { display: block; background: #fff; border: 8px solid #222; border-radius: 6px; max-width: 480px; max-height: 480px; }
+</style>
+</head>
+<body>
+<h1>dashboard</h1>
+
+<h2>Devices</h2>
+{{range .Devices}}{{$d := .}}
+<h3>{{.Name}} <small>rotation {{.Rotation}}</small></h3>
+<div class="row">
+  {{range .Pages}}
+  <figure>
+    <a href="/preview/{{$d.Name}}/{{.}}.png"><img src="/preview/{{$d.Name}}/{{.}}.png" alt="{{.}}"></a>
+    <figcaption>{{.}} · <a href="/preview/{{$d.Name}}/{{.}}/props.json">props.json</a></figcaption>
+  </figure>
+  {{end}}
+</div>
+{{else}}
+<p>No devices configured.</p>
+{{end}}
+
+<h2>Pages</h2>
+{{range $page := .Pages}}
+<h3>{{$page}}</h3>
+<div class="row">
+  {{range $.Panels}}
+  <figure>
+    <a href="/preview/page/{{$page}}.png?model={{.Model}}&rotation={{.Rotation}}"><img src="/preview/page/{{$page}}.png?model={{.Model}}&rotation={{.Rotation}}" alt="{{$page}}"></a>
+    <figcaption>{{.Model}}, rotation {{.Rotation}}</figcaption>
+  </figure>
+  {{end}}
+</div>
+{{end}}
+</body>
+</html>
