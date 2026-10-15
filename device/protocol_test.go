@@ -28,6 +28,7 @@ const (
 type env struct {
 	mux     *http.ServeMux
 	devices *device.Devices
+	store   *device.Store
 	fake    *render.FakeRenderer
 	clock   *atomic.Int64
 }
@@ -48,10 +49,11 @@ func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
 	clock := &atomic.Int64{}
 	clock.Store(time.Unix(1792087200, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	store := &device.Store{Max: 4}
 	devices := device.New(device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
 		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(nil), time.UTC, now),
-		Store:     &device.Store{Max: 4},
+		Store:     store,
 		PublicURL: "http://dash:8080/",
 		Schedule:  schedule,
 		Log:       slog.New(slog.DiscardHandler),
@@ -59,7 +61,7 @@ func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
 	})
 	mux := http.NewServeMux()
 	devices.Register(mux)
-	return &env{mux: mux, devices: devices, fake: fake, clock: clock}
+	return &env{mux: mux, devices: devices, store: store, fake: fake, clock: clock}
 }
 
 func (e *env) do(tb testing.TB, method, path string, headers map[string]string) (int, map[string]any) {
@@ -381,7 +383,7 @@ func TestDisplayReputsEvictedImage(t *testing.T) {
 	filename := first["filename"].(string)
 	// Evict it: the store keeps 4 images.
 	for i := range 4 {
-		e.devices.Store().Put(fmt.Sprintf("other-%d", i), []byte("x"))
+		e.store.Put(fmt.Sprintf("other-%d", i), []byte("x"))
 	}
 	if code, _ := e.do(t, http.MethodGet, "/images/"+filename+".png", nil); code != http.StatusNotFound {
 		t.Fatalf("got %d, want the image evicted", code)

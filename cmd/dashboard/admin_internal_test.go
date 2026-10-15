@@ -46,11 +46,10 @@ func (s *stubPipeline) Props(_ context.Context, t render.Target, page string) (r
 }
 
 func (s *stubPipeline) Render(ctx context.Context, t render.Target, page string) (render.Image, error) {
-	props, err := s.Props(ctx, t, page)
-	if err != nil {
+	if _, err := s.Props(ctx, t, page); err != nil {
 		return render.Image{}, err
 	}
-	return render.Image{PNG: []byte("png"), Filename: "f", Props: props}, nil
+	return render.Image{PNG: []byte("png"), Filename: "f"}, nil
 }
 
 type stubModules struct{}

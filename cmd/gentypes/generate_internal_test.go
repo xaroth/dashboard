@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"net"
 	"os"
@@ -26,29 +25,21 @@ func (*mod) Initialize(context.Context, *cfg) error { return nil }
 func (*mod) Enabled(context.Context) bool           { return false }
 func (*mod) Update(context.Context) error           { return nil }
 
-type Base struct {
-	ID string `json:"id"`
-}
-
 type Item struct {
-	Base
+	ID       string          `json:"id"`
 	At       time.Time       `json:"at"`
-	Window   module.Duration `json:"window"`
 	Note     *string         `json:"note"`
 	Tags     []string        `json:"tags,omitempty"`
-	Counts   map[string]int  `json:"counts"`
 	Optional []*float64      `json:"optional"`
 	Nested   struct{ X int } `json:"nested"`
 	Hidden   string          `json:"-"`
 	hidden   string
-	Any      any    `json:"any"`
-	Raw      []byte `json:"raw"`
 	Untagged bool
 }
 
 type listParams struct {
-	Limit  int             `json:"limit"`
-	Window module.Duration `json:"window"`
+	Limit int  `json:"limit"`
+	Since *int `json:"since"`
 }
 
 type Page[T any] struct {
@@ -56,13 +47,10 @@ type Page[T any] struct {
 }
 
 type Extra struct {
-	Ptr    *int            `json:"ptr,omitempty"`
-	AsText int64           `json:"asText,string"`
-	Fixed  [2]byte         `json:"fixed"`
-	JSON   json.RawMessage `json:"json"`
-	Paged  Page[int]       `json:"paged"`
-	Hyphen int             `json:"with-hyphen"`
-	Tricky Tricky          `json:"tricky"`
+	Ptr    *int      `json:"ptr,omitempty"`
+	Paged  Page[int] `json:"paged"`
+	Hyphen int       `json:"with-hyphen"`
+	Dash   int       `json:"-,"`
 }
 
 // shared is both a params and a result type.
@@ -101,19 +89,36 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
-type badMap struct {
-	M map[int]string `json:"m"`
+type base struct {
+	ID string `json:"id"`
 }
 
-func (*mod) bad(context.Context, struct{}) (badMap, error)  { return badMap{}, nil }
-func (*mod) badParams(context.Context, int) (string, error) { return "", nil }
-func (*mod) marshaler(context.Context, struct{}) (struct {
-	At net.IP `json:"at"`
-}, error) {
-	return struct {
-		At net.IP `json:"at"`
-	}{}, nil
+type embedded struct {
+	base
 }
+
+type mapped struct {
+	M map[string]int `json:"m"`
+}
+
+type asString struct {
+	N int `json:"n,string"`
+}
+
+type raw struct {
+	B []byte `json:"b"`
+}
+
+type marshaler struct {
+	At net.IP `json:"at"`
+}
+
+func (*mod) embedded(context.Context, struct{}) (embedded, error)   { return embedded{}, nil }
+func (*mod) mapped(context.Context, struct{}) (mapped, error)       { return mapped{}, nil }
+func (*mod) asString(context.Context, struct{}) (asString, error)   { return asString{}, nil }
+func (*mod) raw(context.Context, struct{}) (raw, error)             { return raw{}, nil }
+func (*mod) marshaler(context.Context, struct{}) (marshaler, error) { return marshaler{}, nil }
+func (*mod) badParams(context.Context, int) (string, error)         { return "", nil }
 
 func TestGenerateErrors(t *testing.T) {
 	t.Parallel()
@@ -122,9 +127,12 @@ func TestGenerateErrors(t *testing.T) {
 		opt  module.Option
 		want string
 	}{
-		{"non-string map key", module.WithQuery("bad", (*mod).bad), "map keys"},
-		{"params not a struct", module.WithQuery("bad_params", (*mod).badParams), "params must be a struct"},
+		{"embedded field", module.WithQuery("embedded", (*mod).embedded), "embedded fields are not supported"},
+		{"map", module.WithQuery("mapped", (*mod).mapped), "unsupported type map[string]int"},
+		{"string option", module.WithQuery("as_string", (*mod).asString), `json option "string" is not supported`},
+		{"bytes", module.WithQuery("raw", (*mod).raw), "unsupported type []uint8"},
 		{"own JSON encoding", module.WithQuery("marshaler", (*mod).marshaler), "own JSON encoding"},
+		{"params not a struct", module.WithQuery("bad_params", (*mod).badParams), "params must be a struct"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

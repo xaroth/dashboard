@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -54,7 +53,6 @@ type Process struct {
 	turn      chan struct{} // held by the one request in flight; select-able unlike a mutex
 	closing   chan struct{}
 	closeOnce sync.Once
-	hash      atomic.Pointer[string]
 
 	// Guarded by turn.
 	nextID   int64
@@ -86,22 +84,22 @@ func NewProcess(command []string, dir string, log *slog.Logger) *Process {
 	}
 }
 
-// Describe returns the bundled pages and the bundle hash.
-func (p *Process) Describe(ctx context.Context) ([]PageInfo, string, error) {
+// Describe returns the bundled pages.
+func (p *Process) Describe(ctx context.Context) ([]PageInfo, error) {
 	resp, _, err := p.call(ctx, map[string]any{"op": "describe"})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	var pages []PageInfo
 	if err := json.Unmarshal(resp.Pages, &pages); err != nil {
-		return nil, "", fmt.Errorf("decoding describe: %w", err)
+		return nil, fmt.Errorf("decoding describe: %w", err)
 	}
-	return pages, resp.Hash, nil
+	return pages, nil
 }
 
-// Render renders page with props and returns the renderer's PNG.
-func (p *Process) Render(ctx context.Context, page string, vp Viewport, props any) ([]byte, error) {
-	_, body, err := p.call(ctx, map[string]any{"op": "render", "page": page, "viewport": vp, "props": props})
+// Render renders page with props, at props.Viewport, and returns the renderer's PNG.
+func (p *Process) Render(ctx context.Context, page string, props Props) ([]byte, error) {
+	_, body, err := p.call(ctx, map[string]any{"op": "render", "page": page, "props": props})
 	if err != nil {
 		return nil, err
 	}
@@ -109,14 +107,6 @@ func (p *Process) Render(ctx context.Context, page string, vp Viewport, props an
 		return nil, errors.New("render response without png")
 	}
 	return body, nil
-}
-
-// Hash is the bundle hash from the latest response; it changes after a rebuild.
-func (p *Process) Hash() string {
-	if h := p.hash.Load(); h != nil {
-		return *h
-	}
-	return ""
 }
 
 // Close stops the process, also while a request is in flight; later calls fail.
@@ -196,9 +186,6 @@ func (p *Process) call(ctx context.Context, req map[string]any) (response, []byt
 			return response{}, nil, fmt.Errorf("renderer: response id %d, want %d", r.resp.ID, id)
 		}
 		p.failures = 0
-		if r.resp.Hash != "" {
-			p.hash.Store(&r.resp.Hash)
-		}
 		if r.resp.Error != "" {
 			return r.resp, nil, fmt.Errorf("renderer: %s", r.resp.Error)
 		}

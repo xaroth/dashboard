@@ -7,15 +7,15 @@ import { renderPage } from "./render";
 const root = join(import.meta.dir, "..");
 
 test("bundles and renders the hello page", async () => {
-  const bundle = await bundlePages(join(root, "pages"));
-  expect(bundle.hash).toMatch(/^[0-9a-f]{12}$/);
-  const hello = bundle.pages.get("hello")!;
+  const pages = await bundlePages(join(root, "pages"));
+  const hello = pages.get("hello")!;
   expect(hello.css).toContain("font-size");
 
   const renderer = new Renderer();
-  const png = await renderPage(renderer, hello, { width: 800, height: 480, portrait: false }, {
+  const png = await renderPage(renderer, hello, {
     data: {},
     device: { name: "test", model: "reterminal_e1001", rotation: 0 },
+    viewport: { width: 800, height: 480, portrait: false },
     system: { staleModules: [] },
     now: "2026-10-16T05:30:00Z",
     timezone: "Europe/Amsterdam",

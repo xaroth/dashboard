@@ -16,8 +16,8 @@ import (
 const (
 	// encodeFrame({id: 1, op: "describe"})
 	vectorRequest = "000000187b226964223a312c226f70223a226465736372696265227d"
-	// encodeFrame({id: 2, hash: "h"}, [1, 2, 3])
-	vectorResponse = "0000001b7b226964223a322c2268617368223a2268222c22706e67223a337d010203"
+	// encodeFrame({id: 2}, [1, 2, 3])
+	vectorResponse = "000000107b226964223a322c22706e67223a337d010203"
 )
 
 func TestFrameRequestVector(t *testing.T) {

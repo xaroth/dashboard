@@ -23,7 +23,6 @@ type response struct {
 	ID    int64           `json:"id"`
 	Error string          `json:"error"`
 	PNG   *int            `json:"png"`
-	Hash  string          `json:"hash"`
 	Pages json.RawMessage `json:"pages"`
 }
 

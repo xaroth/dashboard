@@ -3,7 +3,7 @@
 import { Renderer } from "@takumi-rs/core";
 import { watch } from "node:fs";
 import { parseArgs } from "node:util";
-import { bundlePages, type Bundle } from "./bundle";
+import { bundlePages, type Page } from "./bundle";
 import { encodeFrame, FrameReader } from "./frame";
 import { renderPage } from "./render";
 
@@ -19,8 +19,8 @@ const { values: args } = parseArgs({
 });
 
 const renderer = new Renderer();
-let bundle: Bundle = await bundlePages(args.pages!);
-console.error(`renderer: bundled ${bundle.pages.size} pages, hash ${bundle.hash}`);
+let pages: Map<string, Page> = await bundlePages(args.pages!);
+console.error(`renderer: bundled ${pages.size} pages`);
 
 if (args.watch) {
   let timer: Timer | undefined;
@@ -31,8 +31,8 @@ if (args.watch) {
     if (building) return void (again = true);
     building = true;
     try {
-      bundle = await bundlePages(args.pages!);
-      console.error(`renderer: rebuilt, hash ${bundle.hash}`);
+      pages = await bundlePages(args.pages!);
+      console.error(`renderer: rebuilt ${pages.size} pages`);
     } catch (e) {
       console.error(`renderer: rebuild failed, keeping previous bundle: ${e}`);
     } finally {
@@ -56,24 +56,21 @@ function write(header: Record<string, unknown>, body?: Uint8Array) {
 }
 
 async function handle(req: Record<string, any>): Promise<void> {
-  // The bundle as of the request start, so the hash matches what was rendered.
-  const b = bundle;
   const id = req.id;
-  const send = (header: Record<string, unknown>, body?: Uint8Array) => write({ ...header, hash: b.hash }, body);
   switch (req.op) {
     case "describe":
-      return send({
+      return write({
         id,
-        pages: [...b.pages.values()].map((p) => ({ name: p.name, data: p.data })),
+        pages: [...pages.values()].map((p) => ({ name: p.name, data: p.data })),
       });
     case "render": {
-      const page = b.pages.get(req.page);
-      if (!page) return send({ id, error: `unknown page ${req.page}` });
-      const png = await renderPage(renderer, page, req.viewport, req.props ?? {});
-      return send({ id }, png);
+      const page = pages.get(req.page);
+      if (!page) return write({ id, error: `unknown page ${req.page}` });
+      const png = await renderPage(renderer, page, req.props);
+      return write({ id }, png);
     }
     default:
-      return send({ id, error: `unknown op ${req.op}` });
+      return write({ id, error: `unknown op ${req.op}` });
   }
 }
 
@@ -82,7 +79,7 @@ for (let frame; (frame = await reader.next()); ) {
   try {
     await handle(frame.header);
   } catch (e) {
-    write({ id: frame.header.id, hash: bundle.hash, error: String(e instanceof Error ? e.message : e) });
+    write({ id: frame.header.id, error: String(e instanceof Error ? e.message : e) });
   }
 }
 // stdin closed: the Go side is gone. Exit even if the page watcher is running.
