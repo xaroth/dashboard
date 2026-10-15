@@ -1,6 +1,6 @@
 # Design: dashboard service
 
-Draft, 2026-10-15. Background and data source research: [research.md](research.md).
+Status: ready, 2026-10-16. Background and data source research: [research.md](research.md).
 
 ## Overview
 
