@@ -169,7 +169,13 @@ func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) err
 	for name, d := range s.cfg.Devices {
 		for _, page := range d.Pages {
 			if _, ok := pages[d.Layout+"/"+page]; !ok {
-				return fmt.Errorf("devices.%s: page %q does not exist in layout %s (have %v)", name, page, d.Layout, names)
+				var have []string
+				for _, n := range names {
+					if p, ok := strings.CutPrefix(n, d.Layout+"/"); ok {
+						have = append(have, p)
+					}
+				}
+				return fmt.Errorf("devices.%s: page %q does not exist in layout %s (have %v)", name, page, d.Layout, have)
 			}
 		}
 		for ref, override := range d.Params {
