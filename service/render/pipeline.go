@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,8 @@ type Target struct {
 	Model    string
 	Rotation int
 	Wake     *Wake
+	// Params overrides query params by "page.key", merged over the page's own.
+	Params map[string]map[string]any
 }
 
 // Wake is what the device reported on its latest request.
@@ -73,15 +76,30 @@ var (
 	ErrUnknownModel = errors.New("unknown model")
 )
 
+// Resolver runs the queries pages declare.
+type Resolver interface {
+	// Resolve never fails: errors are in the result.
+	Resolve(ctx context.Context, q QueryDescriptor) Result
+	StaleModules(ctx context.Context) ([]string, error)
+}
+
+const resolveTimeout = 10 * time.Second
+
 // Pipeline turns a page and a target into a device-ready image.
 type Pipeline struct {
 	renderer Renderer
+	resolver Resolver
 	location *time.Location
 	now      func() time.Time
 }
 
-func NewPipeline(r Renderer, loc *time.Location, now func() time.Time) *Pipeline {
-	return &Pipeline{renderer: r, location: loc, now: now}
+func NewPipeline(r Renderer, res Resolver, loc *time.Location, now func() time.Time) *Pipeline {
+	return &Pipeline{renderer: r, resolver: res, location: loc, now: now}
+}
+
+// PageInfo returns every page with its declared data, as the renderer reports it.
+func (p *Pipeline) PageInfo(ctx context.Context) (map[string]PageInfo, error) {
+	return p.describe(ctx)
 }
 
 // Pages returns the page names, sorted.
@@ -108,20 +126,50 @@ func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, err
 		return Props{}, fmt.Errorf("%w %q", ErrUnknownModel, t.Model)
 	}
 
-	data := make(map[string]Result, len(info.Data))
-	for key, q := range info.Data {
-		// Queries arrive with the module registry; until then every key is an error envelope.
-		msg := fmt.Sprintf("module %s not available", q.Module)
-		data[key] = Result{Stale: true, Error: &msg}
+	// Like a failing query, unreadable module states must not fail the page.
+	stale, err := p.resolver.StaleModules(ctx)
+	if err != nil {
+		stale = []string{}
 	}
 	return Props{
-		Data:     data,
+		Data:     p.resolve(ctx, t, page, info),
 		Device:   DeviceProps{Name: t.Name, Model: t.Model, Rotation: t.Rotation, Wake: t.Wake},
 		Viewport: ViewportFor(panel, t.Rotation),
-		System:   SystemProps{StaleModules: []string{}},
+		System:   SystemProps{StaleModules: stale},
 		Now:      p.now().In(p.location).Format(time.RFC3339),
 		Timezone: p.location.String(),
 	}, nil
+}
+
+// resolve runs the page's queries concurrently, with the target's param
+// overrides merged in.
+func (p *Pipeline) resolve(ctx context.Context, t Target, page string, info PageInfo) map[string]Result {
+	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	data := make(map[string]Result, len(info.Data))
+	for key, q := range info.Data {
+		q.Params = MergeParams(q.Params, t.Params[page+"."+key])
+		wg.Go(func() {
+			r := p.resolver.Resolve(ctx, q)
+			mu.Lock()
+			data[key] = r
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	return data
+}
+
+// MergeParams returns base with override's keys replacing its own.
+func MergeParams(base, override map[string]any) map[string]any {
+	out := maps.Clone(base)
+	if out == nil {
+		out = map[string]any{}
+	}
+	maps.Copy(out, override)
+	return out
 }
 
 // Render resolves props, renders and finishes the image for t.

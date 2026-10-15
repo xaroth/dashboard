@@ -40,7 +40,7 @@ func newEnv(tb testing.TB) *env {
 	now := func() time.Time { return time.Unix(clock.Load(), 0) }
 	devices := device.New(device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
-		Pipeline:  render.NewPipeline(fake, time.UTC, now),
+		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(nil), time.UTC, now),
 		Store:     &device.Store{Max: 4},
 		PublicURL: "http://dash:8080/",
 		Log:       slog.New(slog.DiscardHandler),
