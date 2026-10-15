@@ -148,7 +148,16 @@ Likely causes, most likely first:
 2. **RS-485 port config**: in the S-Miles Installer app, Toolkit > DTU Information > RS-485 Port Config. "Export control" blocks Modbus TCP; "Remote control" enables it. Note the Modbus address shown there.
 3. **Address mismatch**: unlikely; a sweep of all unit IDs 0-255 is the check.
 
-If Modbus stays dead: S-Miles Cloud (unofficial API). OpenDTU is a weak fallback: drops S-Miles, reported gaps for HMT 3-phase data, and Hoymiles' Aug 2026 inverter security firmware blocks OpenDTU/AhoyDTU on updated inverters.
+No installer access (plant registered by the installer). Workarounds:
+
+1. **S-Miles Cloud with the owner account** (preferred for now). Reverse-engineered API (`/iam/pub/3/auth/login`, v3 login); reference implementation: `homeassistant-hoymiles-cloud` (Python). Gives PV power, today/total energy, per-channel PV. Cloud lags the DTU upload interval, which is fine for screens refreshing every 15-30 min. Risk: unofficial, may break.
+2. **Installer** changes RS-485 port config to Remote control and updates firmware, or transfers installer rights.
+3. **Hoymiles support** as owner: report Modbus TCP timeouts on DTU-Pro-S V00.02.22, ask for a working firmware (they have reflashed units remotely before).
+4. **DIY account** in the S-Miles Installer app (beta, NL supported). Unverified whether it can access a plant registered by another installer.
+
+OpenDTU is a weak fallback: drops S-Miles, reported gaps for HMT 3-phase data, and Hoymiles' Aug 2026 inverter security firmware blocks OpenDTU/AhoyDTU on updated inverters.
+
+Plan: build against S-Miles Cloud behind the same adapter interface as Modbus; switch to Modbus once it answers.
 
 ## Car: Hyundai Kona Electric 2024 (Bluelink EU)
 
@@ -193,7 +202,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 
 ## Open questions
 
-1. DTU: RS-485 port config (Remote control?) and Modbus address in S-Miles Installer.
+1. DTU Modbus: via installer or Hoymiles support (see Solar workarounds).
 2. iCal address of the shared calendar (likely available).
 3. Does the Pleos API return data for the Kona Electric 2024?
 4. Content, layout and placement per screen (deferred).
@@ -226,5 +235,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 - ha-hoymiles-dtupro: https://github.com/netnic0/ha-hoymiles-dtupro
 - Photovoltaikforum DTU firmware 2.22: https://www.photovoltaikforum.com/thread/221261-neues-firmware-update-2-22-f%C3%BCr-dtu-pro-erh%C3%A4ltlich/
 - heise, Hoymiles security update: https://www.heise.de/en/news/PV-inverters-Hoymiles-releases-security-update-11436678.html
+- homeassistant-hoymiles-cloud: https://github.com/Philra94/homeassistant-hoymiles-cloud
+- Hoymiles FAQ (DIY accounts): https://www.hoymiles.com/us/faq_4.html
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
