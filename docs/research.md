@@ -109,8 +109,8 @@ Risks:
 ## Open questions
 
 1. Power: which meter/inverter (P1 dongle, solar)?
-3. Calendar provider?
-4. Mounting: wall with USB power, or battery only? Determines refresh interval.
+2. Calendar provider?
+3. Mounting: wall with USB power, or battery only? Determines refresh interval.
 4. What goes on which screen, per location?
 
 ## Sources
