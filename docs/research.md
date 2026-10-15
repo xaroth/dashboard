@@ -150,7 +150,7 @@ Likely causes, most likely first:
 
 ### DTU firmware history
 
-Hoymiles publishes no changelog. Updates arrive via S-Miles (installer-authorized). Reconstructed from Photovoltaikforum and ioBroker reports; same version line covers DTU-Pro and DTU-Pro-S:
+Hoymiles publishes no changelog. Installers update remotely: S-Miles Cloud web portal > plant > device list > DTU > Device Maintenance > Upgrade, pick target version, confirm. Installer accounts can upgrade DTUs but not microinverters (needs Hoymiles support). Hoymiles' Aug 2026 security rollout notifies owners in the S-Miles Home app and applies within ten working days after the owner authorizes. Reconstructed from Photovoltaikforum and ioBroker reports; same version line covers DTU-Pro and DTU-Pro-S:
 
 | Version | Seen | Reports |
 | --- | --- | --- |
@@ -255,5 +255,6 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 - Hoymiles FAQ (DIY accounts): https://www.hoymiles.com/us/faq_4.html
 - Photovoltaikforum DTU V00.07.02: https://www.photovoltaikforum.com/thread/256328-homiles-dtu-pro-v00-07-02-firmware/
 - Photovoltaikforum DTU 6.05: https://www.photovoltaikforum.com/thread/251113-neues-firmware-update-6-05-f%C3%BCr-dtu-pro-erh%C3%A4ltlich/
+- S-Miles Cloud user guide: https://static.hoymiles.com/cfs/doc/S-miles%20Cloud%20User%20Guide%20V.06.pdf
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
