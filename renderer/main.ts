@@ -85,3 +85,5 @@ for (let frame; (frame = await reader.next()); ) {
     write({ id: frame.header.id, hash: bundle.hash, error: String(e instanceof Error ? e.message : e) });
   }
 }
+// stdin closed: the Go side is gone. Exit even if the page watcher is running.
+process.exit(0);
