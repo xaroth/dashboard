@@ -132,6 +132,8 @@ Options, in order of preference:
 3. **S-Miles Cloud** (unofficial API). Works for any DTU, but cloud-dependent and coarse (DTU uploads every ~15 min).
 4. **OpenDTU** (replace DTU with ESP32 + radio: nRF24 for HM series, CMT2300A for HMS). Local REST/MQTT, but drops S-Miles Cloud. Only if 1 and 2 fail.
 
+Known issue (2026-10-15): one inverter reports Hardware Error Code 308, "INV overcurrent or overvoltage protection failure" (OpenDTU alarm table). 3xx codes are inverter hardware faults; if persistent, a warranty case through the installer. The dashboard should surface per-inverter alarms and an inverter producing much less than its siblings.
+
 Consumption = P1 import - P1 export + solar production; needed for a self-consumption figure on screen.
 
 DTU at `192.168.1.21`, wired Ethernet. Read-only test script: `tools/dtu_read.py <host>`.
@@ -256,5 +258,6 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 - Photovoltaikforum DTU V00.07.02: https://www.photovoltaikforum.com/thread/256328-homiles-dtu-pro-v00-07-02-firmware/
 - Photovoltaikforum DTU 6.05: https://www.photovoltaikforum.com/thread/251113-neues-firmware-update-6-05-f%C3%BCr-dtu-pro-erh%C3%A4ltlich/
 - S-Miles Cloud user guide: https://static.hoymiles.com/cfs/doc/S-miles%20Cloud%20User%20Guide%20V.06.pdf
+- OpenDTU alarm codes: https://github.com/tbnobody/OpenDTU/blob/master/lib/Hoymiles/src/parser/AlarmLogParser.cpp
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
