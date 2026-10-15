@@ -1,17 +1,14 @@
 package service_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"image"
 	"image/png"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,26 +27,6 @@ func freeAddr(tb testing.TB) string {
 	return l.Addr().String()
 }
 
-// stubRenderer has one page, hello, and renders a white image.
-type stubRenderer struct{ closed atomic.Bool }
-
-func (s *stubRenderer) Describe(context.Context) ([]render.PageInfo, string, error) {
-	return []render.PageInfo{{Name: "hello"}}, "v1", nil
-}
-
-func (s *stubRenderer) Render(_ context.Context, _ string, vp render.Viewport, _ any) ([]byte, error) {
-	var buf bytes.Buffer
-	err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, vp.Width, vp.Height)))
-	return buf.Bytes(), err
-}
-
-func (s *stubRenderer) Hash() string { return "v1" }
-
-func (s *stubRenderer) Close() error {
-	s.closed.Store(true)
-	return nil
-}
-
 func testConfig(device, admin string) service.Config {
 	cfg := service.DefaultConfig()
 	cfg.Listen = service.Listen{Device: device, Admin: admin}
@@ -57,9 +34,9 @@ func testConfig(device, admin string) service.Config {
 	return cfg
 }
 
-func newService(tb testing.TB, cfg service.Config) (*service.Service, *stubRenderer) {
+func newService(tb testing.TB, cfg service.Config) (*service.Service, *render.FakeRenderer) {
 	tb.Helper()
-	stub := &stubRenderer{}
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
 	s, err := service.New(tb.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub))
 	if err != nil {
 		tb.Fatalf("New: %v", err)
@@ -71,12 +48,12 @@ func TestNewRejectsUnknownPage(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig("", "")
 	cfg.Devices["hallway"] = service.Device{MAC: "aa:bb:cc:dd:ee:ff", Pages: []string{"hello", "nope"}}
-	stub := &stubRenderer{}
+	stub := render.NewFakeRenderer(render.PageInfo{Name: "hello"})
 	_, err := service.New(t.Context(), cfg, slog.New(slog.DiscardHandler), service.WithRenderer(stub))
 	if err == nil || !strings.Contains(err.Error(), `"nope"`) {
 		t.Errorf("got %v, want error naming the missing page", err)
 	}
-	if !stub.closed.Load() {
+	if !stub.Closed() {
 		t.Error("renderer not closed after failed New")
 	}
 }
@@ -120,7 +97,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
 		}
-		if !stub.closed.Load() {
+		if !stub.Closed() {
 			t.Error("renderer not closed after Run")
 		}
 	case <-time.After(5 * time.Second):

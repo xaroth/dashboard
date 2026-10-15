@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -23,7 +24,7 @@ type Device struct {
 }
 
 type Pipeline interface {
-	Pages() []string
+	Pages(ctx context.Context) ([]string, error)
 	Props(ctx context.Context, t render.Target, page string) (render.Props, error)
 	Render(ctx context.Context, t render.Target, page string) (render.Image, error)
 }
@@ -68,10 +69,15 @@ func (h *Handler) index(w http.ResponseWriter, r *http.Request) {
 			panels = append(panels, panelView{m, rot})
 		}
 	}
+	pages, err := h.Pipeline.Pages(r.Context())
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	err := indexTmpl.Execute(w, map[string]any{
+	err = indexTmpl.Execute(w, map[string]any{
 		"Devices": h.Devices,
-		"Pages":   h.Pipeline.Pages(),
+		"Pages":   pages,
 		"Panels":  panels,
 	})
 	if err != nil {
@@ -123,7 +129,7 @@ func (h *Handler) previewProps(w http.ResponseWriter, r *http.Request) {
 	}
 	props, err := h.Pipeline.Props(r.Context(), t, r.PathValue("page"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.fail(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -147,11 +153,24 @@ func (h *Handler) target(r *http.Request) (render.Target, bool) {
 func (h *Handler) servePNG(w http.ResponseWriter, r *http.Request, t render.Target, page string) {
 	img, err := h.Pipeline.Render(r.Context(), t, page)
 	if err != nil {
-		h.Log.Warn("preview failed", "target", t.Name, "page", page, "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.fail(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(img.PNG)
+}
+
+// fail maps pipeline errors to a status: the caller's mistakes are 4xx, the
+// renderer's are 500 and logged.
+func (h *Handler) fail(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, render.ErrUnknownPage):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, render.ErrUnknownModel):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	default:
+		h.Log.Warn("preview failed", "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

@@ -77,6 +77,10 @@ func (c *Config) Validate() error {
 	}
 	macs := map[string]string{}
 	for name, d := range c.Devices {
+		if name == "page" {
+			// Taken by the admin route /preview/page/{page}.png.
+			return fmt.Errorf("devices.page: the name page is reserved")
+		}
 		mac, err := NormalizeMAC(d.MAC)
 		if err != nil {
 			return fmt.Errorf("devices.%s: %w", name, err)

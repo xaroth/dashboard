@@ -49,6 +49,10 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (*Se
 		device: http.NewServeMux(),
 		admin:  http.NewServeMux(),
 	}
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("loading timezone: %w", err)
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -60,16 +64,12 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (*Se
 		s.renderer = render.NewProcess(cmd, cfg.Renderer.Dir, log.With("component", "renderer"))
 	}
 
-	loc, err := time.LoadLocation(cfg.Timezone)
-	if err != nil {
-		return nil, fmt.Errorf("loading timezone: %w", err)
-	}
 	pipeline := render.NewPipeline(s.renderer, loc, time.Now)
-	if err := pipeline.Load(ctx); err != nil {
+	pages, err := pipeline.Pages(ctx)
+	if err != nil {
 		s.renderer.Close()
 		return nil, err
 	}
-	pages := pipeline.Pages()
 	for name, d := range cfg.Devices {
 		for _, page := range d.Pages {
 			if !slices.Contains(pages, page) {
@@ -126,6 +126,7 @@ func (s *Service) Run(ctx context.Context) error {
 	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.admin)
 	return g.Wait()
 }
+
 func (s *Service) serve(ctx context.Context, g *errgroup.Group, name, addr string, h http.Handler) {
 	srv := &http.Server{
 		Addr:              addr,

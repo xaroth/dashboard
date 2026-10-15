@@ -2,10 +2,10 @@ package render
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -13,7 +13,6 @@ import (
 type Renderer interface {
 	Describe(ctx context.Context) ([]PageInfo, string, error)
 	Render(ctx context.Context, page string, vp Viewport, props any) ([]byte, error)
-	Hash() string
 }
 
 // Target is who a page is rendered for: a device, or a panel in a preview.
@@ -69,61 +68,44 @@ type Image struct {
 	Props    Props
 }
 
+var (
+	ErrUnknownPage  = errors.New("unknown page")
+	ErrUnknownModel = errors.New("unknown model")
+)
+
 // Pipeline turns a page and a target into a device-ready image.
 type Pipeline struct {
 	renderer Renderer
 	location *time.Location
 	now      func() time.Time
-
-	mu    sync.Mutex
-	pages map[string]PageInfo
-	hash  string
 }
 
-// NewPipeline returns a pipeline that renders through r, with times in loc.
-// Call Load before use.
 func NewPipeline(r Renderer, loc *time.Location, now func() time.Time) *Pipeline {
 	return &Pipeline{renderer: r, location: loc, now: now}
 }
 
-// Load asks the renderer for its pages. Called at start and again when the
-// bundle hash changes.
-func (p *Pipeline) Load(ctx context.Context) error {
-	pages, hash, err := p.renderer.Describe(ctx)
-	if err != nil {
-		return fmt.Errorf("describing pages: %w", err)
-	}
-	m := make(map[string]PageInfo, len(pages))
-	for _, pg := range pages {
-		m[pg.Name] = pg
-	}
-	p.mu.Lock()
-	p.pages, p.hash = m, hash
-	p.mu.Unlock()
-	return nil
-}
-
 // Pages returns the page names, sorted.
-func (p *Pipeline) Pages() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.Sorted(maps.Keys(p.pages))
+func (p *Pipeline) Pages(ctx context.Context) ([]string, error) {
+	pages, err := p.describe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Sorted(maps.Keys(pages)), nil
 }
 
 // Props resolves what page would receive for t.
 func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, error) {
-	if err := p.refresh(ctx); err != nil {
+	pages, err := p.describe(ctx)
+	if err != nil {
 		return Props{}, err
 	}
-	p.mu.Lock()
-	info, ok := p.pages[page]
-	p.mu.Unlock()
+	info, ok := pages[page]
 	if !ok {
-		return Props{}, fmt.Errorf("unknown page %q", page)
+		return Props{}, fmt.Errorf("%w %q", ErrUnknownPage, page)
 	}
 	panel, ok := Panels[t.Model]
 	if !ok {
-		return Props{}, fmt.Errorf("unknown model %q", t.Model)
+		return Props{}, fmt.Errorf("%w %q", ErrUnknownModel, t.Model)
 	}
 
 	data := make(map[string]Result, len(info.Data))
@@ -159,13 +141,16 @@ func (p *Pipeline) Render(ctx context.Context, t Target, page string) (Image, er
 	return Image{PNG: png, Filename: Filename(png, p.now()), Props: props}, nil
 }
 
-// refresh reloads the page list after the renderer rebuilt its bundle.
-func (p *Pipeline) refresh(ctx context.Context) error {
-	p.mu.Lock()
-	stale := p.pages == nil || p.renderer.Hash() != p.hash
-	p.mu.Unlock()
-	if !stale {
-		return nil
+// describe asks the renderer for its pages on every use: one small frame, and
+// a watch rebuild is seen by the next request without tracking bundle hashes.
+func (p *Pipeline) describe(ctx context.Context) (map[string]PageInfo, error) {
+	pages, _, err := p.renderer.Describe(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("describing pages: %w", err)
 	}
-	return p.Load(ctx)
+	m := make(map[string]PageInfo, len(pages))
+	for _, pg := range pages {
+		m[pg.Name] = pg
+	}
+	return m, nil
 }

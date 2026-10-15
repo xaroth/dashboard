@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,20 +18,26 @@ import (
 	"github.com/xaroth/dashboard/service/web"
 )
 
-// stubPipeline records the target it was asked for and fails for page "broken".
+// stubPipeline records the target it was asked for. Page "nope" does not
+// exist, model "kindle" is unknown and page "broken" fails to render.
 type stubPipeline struct {
 	mu     sync.Mutex
 	target render.Target
 }
 
-func (s *stubPipeline) Pages() []string { return []string{"hello"} }
+func (s *stubPipeline) Pages(context.Context) ([]string, error) { return []string{"hello"}, nil }
 
 func (s *stubPipeline) Props(_ context.Context, t render.Target, page string) (render.Props, error) {
 	s.mu.Lock()
 	s.target = t
 	s.mu.Unlock()
-	if page == "broken" {
-		return render.Props{}, errors.New(`unknown page "broken"`)
+	switch {
+	case page == "nope":
+		return render.Props{}, fmt.Errorf("%w %q", render.ErrUnknownPage, page)
+	case t.Model == "kindle":
+		return render.Props{}, fmt.Errorf("%w %q", render.ErrUnknownModel, t.Model)
+	case page == "broken":
+		return render.Props{}, errors.New("renderer: boom")
 	}
 	return render.Props{Device: render.DeviceProps{Name: t.Name, Model: t.Model, Rotation: t.Rotation}, Now: "now"}, nil
 }
@@ -43,12 +50,15 @@ func (s *stubPipeline) Render(ctx context.Context, t render.Target, page string)
 	return render.Image{PNG: []byte("png"), Filename: "f", Props: props}, nil
 }
 
-func newHandler(tb testing.TB) (http.Handler, *stubPipeline) {
+func newHandler(tb testing.TB, devices ...web.Device) (http.Handler, *stubPipeline) {
 	tb.Helper()
+	if devices == nil {
+		devices = []web.Device{{Name: "hallway", Pages: []string{"hello"}, Rotation: 90}}
+	}
 	stub := &stubPipeline{}
 	h := &web.Handler{
 		Pipeline: stub,
-		Devices:  []web.Device{{Name: "hallway", Pages: []string{"hello"}, Rotation: 90}},
+		Devices:  devices,
 		Target: func(name string) (render.Target, bool) {
 			if name != "hallway" {
 				return render.Target{}, false
@@ -87,6 +97,24 @@ func TestIndex(t *testing.T) {
 	}
 }
 
+func TestIndexEscapesNames(t *testing.T) {
+	t.Parallel()
+	h, _ := newHandler(t, web.Device{Name: `<script>x</script>`, Pages: []string{"hello"}})
+	body := get(t, h, "/").Body.String()
+	if strings.Contains(body, "<script>x") {
+		t.Error("device name rendered unescaped")
+	}
+}
+
+func TestIndexWithoutDevices(t *testing.T) {
+	t.Parallel()
+	h, _ := newHandler(t, []web.Device{}...)
+	rec := get(t, h, "/")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "No devices configured") {
+		t.Errorf("got %d, want 200 with \"No devices configured\"", rec.Code)
+	}
+}
+
 func TestPreviewPNG(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -102,6 +130,8 @@ func TestPreviewPNG(t *testing.T) {
 		{"unknown device", "/preview/garage/hello.png", http.StatusNotFound, render.Target{}},
 		{"not png", "/preview/hallway/hello.jpg", http.StatusNotFound, render.Target{}},
 		{"bad rotation", "/preview/page/hello.png?rotation=45", http.StatusBadRequest, render.Target{}},
+		{"unknown page", "/preview/page/nope.png", http.StatusNotFound, render.Target{Name: "preview", Model: "reterminal_e1001"}},
+		{"unknown model", "/preview/hallway/hello.png?model=kindle", http.StatusBadRequest, render.Target{Name: "hallway", Model: "kindle", Rotation: 90}},
 		{"render error", "/preview/page/broken.png", http.StatusInternalServerError, render.Target{Name: "preview", Model: "reterminal_e1001"}},
 	}
 	for _, testCase := range testCases {
@@ -135,7 +165,8 @@ func TestPreviewProps(t *testing.T) {
 			Now:    "now",
 		}},
 		{"unknown device", "/preview/garage/hello/props.json", http.StatusNotFound, nil},
-		{"unknown page", "/preview/hallway/broken/props.json", http.StatusBadRequest, nil},
+		{"unknown page", "/preview/hallway/nope/props.json", http.StatusNotFound, nil},
+		{"render error", "/preview/hallway/broken/props.json", http.StatusInternalServerError, nil},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
