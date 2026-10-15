@@ -3,7 +3,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -49,7 +51,28 @@ type listParams struct {
 	Window modules.Duration `json:"window"`
 }
 
+type Page[T any] struct {
+	Items []T `json:"items"`
+}
+
+type Extra struct {
+	Ptr    *int            `json:"ptr,omitempty"`
+	AsText int64           `json:"asText,string"`
+	Fixed  [2]byte         `json:"fixed"`
+	JSON   json.RawMessage `json:"json"`
+	Paged  Page[int]       `json:"paged"`
+	Hyphen int             `json:"with-hyphen"`
+	Tricky Tricky          `json:"tricky"`
+}
+
+// shared is both a params and a result type.
+type shared struct {
+	V int `json:"v"`
+}
+
 func (*mod) list(context.Context, listParams) ([]Item, error) { return nil, nil }
+func (*mod) extra(context.Context, struct{}) (Extra, error)   { return Extra{}, nil }
+func (*mod) echo(context.Context, shared) (shared, error)     { return shared{}, nil }
 func (*mod) one(context.Context, struct{}) (*Item, error)     { return nil, nil }
 
 func TestGenerate(t *testing.T) {
@@ -57,6 +80,8 @@ func TestGenerate(t *testing.T) {
 	reg := modules.Define[mod, cfg]("demo_mod", func() *cfg { return &cfg{} },
 		modules.WithQuery("list", (*mod).list),
 		modules.WithQuery("one", (*mod).one),
+		modules.WithQuery("extra", (*mod).extra),
+		modules.WithQuery("echo", (*mod).echo),
 	)
 	got, err := generate([]modules.Registration{reg})
 	if err != nil {
@@ -82,6 +107,13 @@ type badMap struct {
 
 func (*mod) bad(context.Context, struct{}) (badMap, error)  { return badMap{}, nil }
 func (*mod) badParams(context.Context, int) (string, error) { return "", nil }
+func (*mod) marshaler(context.Context, struct{}) (struct {
+	At net.IP `json:"at"`
+}, error) {
+	return struct {
+		At net.IP `json:"at"`
+	}{}, nil
+}
 
 func TestGenerateErrors(t *testing.T) {
 	t.Parallel()
@@ -92,6 +124,7 @@ func TestGenerateErrors(t *testing.T) {
 	}{
 		{"non-string map key", modules.WithQuery("bad", (*mod).bad), "map keys"},
 		{"params not a struct", modules.WithQuery("bad_params", (*mod).badParams), "params must be a struct"},
+		{"own JSON encoding", modules.WithQuery("marshaler", (*mod).marshaler), "own JSON encoding"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

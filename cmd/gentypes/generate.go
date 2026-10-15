@@ -3,9 +3,13 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"encoding"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -15,13 +19,23 @@ import (
 )
 
 var (
-	timeType     = reflect.TypeFor[time.Time]()
-	durationType = reflect.TypeFor[modules.Duration]()
+	timeType          = reflect.TypeFor[time.Time]()
+	durationType      = reflect.TypeFor[modules.Duration]()
+	rawMessageType    = reflect.TypeFor[json.RawMessage]()
+	jsonMarshaler     = reflect.TypeFor[json.Marshaler]()
+	textMarshaler     = reflect.TypeFor[encoding.TextMarshaler]()
+	identifier        = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
+	nonIdentifierRune = regexp.MustCompile(`[^A-Za-z0-9_$]`)
 )
+
+type declKey struct {
+	t        reflect.Type
+	optional bool
+}
 
 // generator collects named TypeScript interfaces while walking Go types.
 type generator struct {
-	names map[reflect.Type]string
+	names map[declKey]string
 	decls map[string]string
 	// prefix names the module whose types are being walked.
 	prefix string
@@ -29,7 +43,7 @@ type generator struct {
 
 func generate(regs []modules.Registration) ([]byte, error) {
 	regs = slices.SortedFunc(slices.Values(regs), func(a, b modules.Registration) int { return cmp.Compare(a.Name(), b.Name()) })
-	g := &generator{names: map[reflect.Type]string{}, decls: map[string]string{}}
+	g := &generator{names: map[declKey]string{}, decls: map[string]string{}}
 	var entries []string
 	for _, r := range regs {
 		g.prefix = pascal(r.Name())
@@ -79,6 +93,11 @@ func (g *generator) typeOf(t reflect.Type, hint string) (string, error) {
 		return "string", nil
 	case t == durationType:
 		return "Duration", nil
+	case t == rawMessageType:
+		return "unknown", nil
+	case implements(t, jsonMarshaler) || implements(t, textMarshaler):
+		// Its JSON is whatever the method writes; the kind says nothing.
+		return "", fmt.Errorf("%s has its own JSON encoding; add it to gentypes", t)
 	}
 	switch t.Kind() {
 	case reflect.Pointer:
@@ -93,7 +112,7 @@ func (g *generator) typeOf(t reflect.Type, hint string) (string, error) {
 	case reflect.String:
 		return "string", nil
 	case reflect.Slice, reflect.Array:
-		if t.Elem().Kind() == reflect.Uint8 {
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 {
 			return "string", nil // encoding/json writes bytes as base64
 		}
 		// Typed as arrays, not T[] | null: queries return non-nil slices.
@@ -111,7 +130,8 @@ func (g *generator) typeOf(t reflect.Type, hint string) (string, error) {
 	case reflect.Struct:
 		name := hint
 		if t.Name() != "" {
-			name = g.prefix + pascal(t.Name())
+			// Generic instantiations are named like Page[int]; keep the identifier characters.
+			name = g.prefix + pascal(nonIdentifierRune.ReplaceAllString(t.Name(), "_"))
 		}
 		return g.declare(t, name, false)
 	case reflect.Interface:
@@ -120,15 +140,17 @@ func (g *generator) typeOf(t reflect.Type, hint string) (string, error) {
 	return "", fmt.Errorf("unsupported type %s", t)
 }
 
-// declare emits an interface for struct t once and returns its name.
+// declare emits an interface for struct t once per use (params fields are
+// optional, results are not) and returns its name.
 func (g *generator) declare(t reflect.Type, name string, optional bool) (string, error) {
-	if n, ok := g.names[t]; ok {
+	key := declKey{t, optional}
+	if n, ok := g.names[key]; ok {
 		return n, nil
 	}
 	if _, taken := g.decls[name]; taken {
 		return "", fmt.Errorf("two types map to %s", name)
 	}
-	g.names[t] = name
+	g.names[key] = name
 	var b strings.Builder
 	fmt.Fprintf(&b, "export interface %s {\n", name)
 	if err := g.fields(&b, t, optional); err != nil {
@@ -140,36 +162,132 @@ func (g *generator) declare(t reflect.Type, name string, optional bool) (string,
 }
 
 func (g *generator) fields(b *strings.Builder, t reflect.Type, optional bool) error {
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		tag := f.Tag.Get("json")
-		if tag == "-" {
-			continue
-		}
-		name, opts, _ := strings.Cut(tag, ",")
-		if f.Anonymous && name == "" && f.Type.Kind() == reflect.Struct {
-			if err := g.fields(b, f.Type, optional); err != nil {
-				return err
-			}
-			continue
-		}
-		if name == "" {
-			name = f.Name
-		}
-		ts, err := g.typeOf(f.Type, g.prefix+pascal(f.Name))
+	for _, f := range jsonFields(t) {
+		ts, err := g.typeOf(f.typ, g.prefix+pascal(f.goName))
 		if err != nil {
-			return fmt.Errorf("%s.%s: %w", t, f.Name, err)
+			return fmt.Errorf("%s.%s: %w", t, f.goName, err)
+		}
+		omit := f.has("omitempty") || f.has("omitzero")
+		if omit && f.typ.Kind() == reflect.Pointer {
+			// Omitted when nil, so never null when present.
+			ts = strings.TrimSuffix(ts, " | null")
+		}
+		if f.has("string") {
+			switch f.typ.Kind() {
+			case reflect.Bool, reflect.String,
+				reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+				reflect.Float32, reflect.Float64:
+				ts = "string"
+			}
 		}
 		mark := ""
-		if optional || strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero") {
+		if optional || omit {
 			mark = "?"
+		}
+		name := f.name
+		if !identifier.MatchString(name) {
+			name = fmt.Sprintf("%q", name)
 		}
 		fmt.Fprintf(b, "  %s%s: %s;\n", name, mark, ts)
 	}
 	return nil
+}
+
+type jsonField struct {
+	name   string
+	goName string
+	typ    reflect.Type
+	opts   string
+	tagged bool
+	depth  int
+}
+
+func (f jsonField) has(opt string) bool {
+	return slices.Contains(strings.Split(f.opts, ","), opt)
+}
+
+// jsonFields lists the fields encoding/json writes for struct t, in its
+// order: embedded structs (also pointer and unexported ones) are flattened,
+// and of several fields with one name the shallowest wins, a tagged one
+// breaks a tie, and an unbroken tie drops them all.
+func jsonFields(t reflect.Type) []jsonField {
+	var all []jsonField
+	var walk func(t reflect.Type, depth int, seen map[reflect.Type]bool)
+	walk = func(t reflect.Type, depth int, seen map[reflect.Type]bool) {
+		if seen[t] {
+			return
+		}
+		seen = maps.Clone(seen)
+		seen[t] = true
+		for i := range t.NumField() {
+			f := t.Field(i)
+			tag := f.Tag.Get("json")
+			if tag == "-" {
+				continue
+			}
+			name, opts, _ := strings.Cut(tag, ",")
+			ft := f.Type
+			if f.Anonymous {
+				if ft.Kind() == reflect.Pointer {
+					ft = ft.Elem()
+				}
+				if name == "" && ft.Kind() == reflect.Struct {
+					walk(ft, depth+1, seen)
+					continue
+				}
+				if !f.IsExported() {
+					continue
+				}
+			} else if !f.IsExported() {
+				continue
+			}
+			all = append(all, jsonField{name: cmp.Or(name, f.Name), goName: f.Name, typ: f.Type, opts: opts, tagged: name != "", depth: depth})
+		}
+	}
+	walk(t, 0, map[reflect.Type]bool{})
+
+	byName := map[string][]int{}
+	for i, f := range all {
+		byName[f.name] = append(byName[f.name], i)
+	}
+	keep := map[int]bool{}
+	for _, idx := range byName {
+		if i, ok := dominant(all, idx); ok {
+			keep[i] = true
+		}
+	}
+	var out []jsonField
+	for i, f := range all {
+		if keep[i] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// dominant picks the field encoding/json writes among those sharing a name.
+func dominant(all []jsonField, idx []int) (int, bool) {
+	depth := math.MaxInt
+	for _, i := range idx {
+		depth = min(depth, all[i].depth)
+	}
+	var shallow, tagged []int
+	for _, i := range idx {
+		if all[i].depth == depth {
+			shallow = append(shallow, i)
+			if all[i].tagged {
+				tagged = append(tagged, i)
+			}
+		}
+	}
+	switch {
+	case len(shallow) == 1:
+		return shallow[0], true
+	case len(tagged) == 1:
+		return tagged[0], true
+	}
+	return 0, false
 }
 
 func pascal(s string) string {
@@ -187,4 +305,8 @@ func pascal(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func implements(t, iface reflect.Type) bool {
+	return t.Implements(iface) || reflect.PointerTo(t).Implements(iface)
 }

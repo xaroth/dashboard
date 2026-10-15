@@ -14,7 +14,9 @@ const number0 = new Intl.NumberFormat("nl-NL", { maximumFractionDigits: 0 });
 
 /** 16,6° */
 export function formatTemperature(celsius: number, digits: 0 | 1 = 1): string {
-  return `${(digits === 1 ? number1 : number0).format(celsius)}°`;
+  // Round first, so -0.04 is "0,0°" rather than "-0,0°".
+  const rounded = Number(celsius.toFixed(digits)) || 0;
+  return `${(digits === 1 ? number1 : number0).format(rounded)}°`;
 }
 
 /** 07:30 */

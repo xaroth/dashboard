@@ -7,7 +7,9 @@ test("Dutch date in the configured timezone", () => {
 
 test("numbers with a decimal comma", () => {
   expect(formatTemperature(16.64)).toBe("16,6°");
-  expect(formatTemperature(-0.4, 0)).toBe("-0°");
+  expect(formatTemperature(-0.4, 0)).toBe("0°");
+  expect(formatTemperature(-0.04)).toBe("0,0°");
+  expect(formatTemperature(-0.6, 0)).toBe("-1°");
   expect(formatMillimeters(2.35)).toBe("2,4 mm");
 });
 

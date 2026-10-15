@@ -3,6 +3,24 @@
 /** A Go duration string, e.g. "24h" or "1h30m". */
 export type Duration = string;
 
+export interface DemoModEchoParams {
+  v?: number;
+}
+
+export interface DemoModEmb {
+  a: number;
+}
+
+export interface DemoModExtra {
+  ptr?: number;
+  asText: string;
+  fixed: number[];
+  json: unknown;
+  paged: DemoModPageInt;
+  "with-hyphen": number;
+  tricky: DemoModTricky;
+}
+
 export interface DemoModItem {
   id: string;
   at: string;
@@ -26,8 +44,29 @@ export interface DemoModNested {
   X: number;
 }
 
+export interface DemoModPageInt {
+  items: number[];
+}
+
+export interface DemoModShared {
+  v: number;
+}
+
+export interface DemoModTricky {
+  a: number;
+  b: number;
+  y: number;
+  Y: number;
+  Z: string;
+  named: DemoModEmb;
+  n: string;
+  "-": number;
+}
+
 /** Every query: "module.query" to its params and result. */
 export interface Queries {
+  "demo_mod.echo": { params: DemoModEchoParams; result: DemoModShared };
+  "demo_mod.extra": { params: Record<string, never>; result: DemoModExtra };
   "demo_mod.list": { params: DemoModListParams; result: DemoModItem[] };
   "demo_mod.one": { params: Record<string, never>; result: DemoModItem | null };
 }

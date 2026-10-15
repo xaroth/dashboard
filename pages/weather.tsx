@@ -20,6 +20,10 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
     );
   }
   const chartWidth = viewport.width - 64;
+  // Everything but the chart takes about 390 px; the chart fills the rest.
+  const chartHeight = Math.max(80, viewport.height - 390);
+  // Daily dates are midnights where the forecast is, not where the screen is.
+  const placeZone = f.location.timezone;
   const hourLabels = f.hourly.filter((_, i) => i % 6 === 0);
   return (
     <div className={styles.screen}>
@@ -44,7 +48,7 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
           values={f.hourly.map((h) => h.temperature)}
           bars={f.hourly.map((h) => h.precipitationProbability)}
           width={chartWidth}
-          height={Math.round(viewport.height * 0.22)}
+          height={chartHeight}
         />
         <div className={styles.hours}>
           {hourLabels.map((h) => (
@@ -57,7 +61,7 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
       <div className={styles.days}>
         {f.daily.map((d) => (
           <div key={d.date} className={styles.day}>
-            <span className={styles.dayName}>{formatDayShort(d.date, timezone)}</span>
+            <span className={styles.dayName}>{formatDayShort(d.date, placeZone)}</span>
             <span>{weatherLabel(d.weatherCode)}</span>
             <span>
               {formatTemperature(d.temperatureMax, 0)} / {formatTemperature(d.temperatureMin, 0)}

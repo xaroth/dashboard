@@ -14,18 +14,22 @@ export function LineChart({ values, bars, width, height }: LineChartProps) {
   const pad = Math.max((max - min) * 0.15, 0.5);
   const lo = min - pad;
   const hi = max + pad;
-  const step = width / (values.length - 1);
-  const y = (v: number) => height - ((v - lo) / (hi - lo)) * height;
-  const points = values.map((v, i) => `${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const stroke = 4;
+  // Each value gets a column; points sit at column centers, over their bars.
   const barWidth = width / values.length;
+  const x = (i: number) => (i + 0.5) * barWidth;
+  // Inset by half the stroke so the line is not clipped at the top and bottom.
+  const y = (v: number) => stroke / 2 + (1 - (v - lo) / (hi - lo)) * (height - stroke);
+  const points = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const barHeight = (b: number) => (Math.min(b, 100) / 100) * height;
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
       {bars?.map((b, i) =>
         b == null || b <= 0 ? null : (
-          <rect key={i} x={i * barWidth} y={height - (b / 100) * height} width={barWidth - 1} height={(b / 100) * height} fill="#aaa" />
+          <rect key={i} x={i * barWidth} y={height - barHeight(b)} width={barWidth - 1} height={barHeight(b)} fill="#aaa" />
         ),
       )}
-      <polyline points={points} fill="none" stroke="#000" strokeWidth={4} strokeLinejoin="round" strokeLinecap="round" />
+      <polyline points={points} fill="none" stroke="#000" strokeWidth={stroke} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
