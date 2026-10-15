@@ -146,14 +146,14 @@ Likely causes, most likely first:
 
 1. **Firmware V00.02.22**: Photovoltaikforum (Feb 2024) reports exactly this on DTU-Pro-S V00.02.22: every Modbus TCP query times out. V00.02.23 reported the same (ioBroker, 2024). Hoymiles support reflashed affected units to V00.02.19, which restored Modbus. DTU-Pro firmware has since moved to V00.07.x (V00.07.04 is the minimum for `ha-hoymiles-dtupro`); whether a V00.07 build exists for the DTU-Pro-S is unconfirmed. Updates are offered through S-Miles; rollback only via Hoymiles support.
 2. **RS-485 port config**: in the S-Miles Installer app, Toolkit > DTU Information > RS-485 Port Config. "Export control" blocks Modbus TCP; "Remote control" enables it. Note the Modbus address shown there.
-3. **Address mismatch**: unlikely; a sweep of all unit IDs 0-255 is the check.
+3. **Address mismatch**: ruled out; a sweep of unit IDs 0-255 got no response on any.
 
 No installer access (plant registered by the installer). Workarounds:
 
 1. **S-Miles Cloud with the owner account** (preferred for now). Reverse-engineered API (`/iam/pub/3/auth/login`, v3 login); reference implementation: `homeassistant-hoymiles-cloud` (Python). Gives PV power, today/total energy, per-channel PV. Cloud lags the DTU upload interval, which is fine for screens refreshing every 15-30 min. Risk: unofficial, may break.
 2. **Installer** changes RS-485 port config to Remote control and updates firmware, or transfers installer rights.
 3. **Hoymiles support** as owner: report Modbus TCP timeouts on DTU-Pro-S V00.02.22, ask for a working firmware (they have reflashed units remotely before).
-4. **DIY account** in the S-Miles Installer app (beta, NL supported). Unverified whether it can access a plant registered by another installer.
+4. **DIY account** in the S-Miles Installer app. Hoymiles FAQ: DIY homeowners may register in the Installer app (beta; NL supported). A DIY account only manages plants it owns; the DTU is bound to the installer's plant. Plant transfers between accounts go through Hoymiles technical support. Route: register DIY account, try Toolkit local connection at the DTU; if refused, ask support to transfer the plant to the DIY account. Gives control over RS-485 config and firmware updates; the installer loses access, which may matter for warranty service.
 
 OpenDTU is a weak fallback: drops S-Miles, reported gaps for HMT 3-phase data, and Hoymiles' Aug 2026 inverter security firmware blocks OpenDTU/AhoyDTU on updated inverters.
 
