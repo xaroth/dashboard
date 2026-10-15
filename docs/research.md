@@ -78,7 +78,7 @@ TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation
 | Need | Source | Notes |
 | --- | --- | --- |
 | Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
-| Calendar | Google Calendar secret iCal address | Per calendar; read-only, no OAuth |
+| Calendar | Google Workspace shared calendar | See below |
 | Power usage | Smartstuff P1 dongle, DSMR-API firmware, local HTTP | No adapter needed, see below |
 | Solar production | Hoymiles DTU, Modbus TCP (local) or S-Miles cloud | 16 panels, micro inverters; see below |
 | Car status | Hyundai Bluelink EU cloud API | Kona 2024; needs adapter, see below |
@@ -92,6 +92,15 @@ Both units on battery. TRMNL firmware sleeps for the `refresh_rate` (seconds) re
 - Daytime: fixed interval per device, e.g. 15-30 min.
 - Night: return the seconds until the morning start time, so the device wakes once.
 - Skip unchanged screens: same `filename` means no download and no redraw.
+
+## Calendar: Google Workspace shared calendar
+
+Two options:
+
+1. **Secret iCal address** (calendar settings > Integrate calendar). Simplest: plain HTTPS GET of an `.ics`. Only shown to users who can manage sharing, and Workspace admins can disable it via Calendar external sharing settings. Anyone with the URL can read the calendar.
+2. **Calendar API with a service account**. Share the calendar with the service account's email (read-only), call `events.list` with `singleEvents=true` and a time window. No user OAuth, no token expiry handling, survives password changes. Needs a Google Cloud project.
+
+Preferred: iCal if available, service account otherwise.
 
 ## Power: Smartstuff P1 dongle (DSMR-API)
 
@@ -127,7 +136,9 @@ Consumption = P1 import - P1 export + solar production; needed for a self-consum
 
 To verify: DTU IP, Ethernet connected, Modbus TCP enabled (DTU local settings or S-Miles installer app), DTU data refresh interval.
 
-## Car: Hyundai Kona 2024 (Bluelink EU)
+## Car: Hyundai Kona Electric 2024 (Bluelink EU)
+
+Fields that matter: SoC, range, plugged in, charging, time to full, target SoC, locks/doors, climate, last update time.
 
 ### Official: Pleos Vehicle Data API
 
@@ -168,11 +179,11 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 
 ## Open questions
 
-1. Kona powertrain: electric, hybrid or petrol? Determines which car fields matter.
-2. Content per screen (E1001 vs E1003) and where each goes.
-3. Which Google calendars to show.
-4. DTU IP; is Modbus TCP enabled?
-5. Daytime hours and refresh interval per screen.
+1. Is the secret iCal address available on the shared calendar?
+2. DTU IP; is Modbus TCP enabled?
+3. Does the Pleos API return data for the Kona Electric 2024?
+4. Content, layout and placement per screen (deferred).
+5. Daytime hours and refresh interval per screen (deferred).
 
 ## Sources
 
@@ -196,5 +207,6 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 - Pleos Vehicle Data API: https://document.pleos.ai/en/api-reference/vehicle-data-api/intro
 - Pleos API compatibility: https://document.pleos.ai/en/api-reference/vehicle-data-api/api-compatibility
 - Hyundai data rights (EU): https://connected-mobility.hyundai.com/data-rights-en
+- Google Calendar API events.list: https://developers.google.com/workspace/calendar/api/v3/reference/events/list
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
