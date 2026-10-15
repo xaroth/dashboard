@@ -5,7 +5,7 @@ import { encodeFrame, FrameReader } from "./frame";
 const root = join(import.meta.dir, "..");
 
 test("process answers describe and render over frames", async () => {
-  const proc = Bun.spawn(["bun", join(root, "renderer/main.ts"), "--pages", join(root, "pages"), "--fonts", join(root, "fonts")], {
+  const proc = Bun.spawn(["bun", join(root, "renderer/main.ts"), "--pages", join(root, "pages")], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -39,7 +39,7 @@ test("process answers describe and render over frames", async () => {
 }, 20000);
 
 test("a throwing page with stray output yields an error frame and the process keeps serving", async () => {
-  const proc = Bun.spawn(["bun", join(root, "renderer/main.ts"), "--pages", join(root, "renderer/testdata/pages"), "--fonts", join(root, "fonts")], {
+  const proc = Bun.spawn(["bun", join(root, "renderer/main.ts"), "--pages", join(root, "renderer/testdata/pages")], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",

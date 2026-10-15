@@ -1,7 +1,8 @@
+import { Renderer } from "@takumi-rs/core";
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { bundlePages } from "./bundle";
-import { loadRenderer, renderPage } from "./render";
+import { renderPage } from "./render";
 
 const root = join(import.meta.dir, "..");
 
@@ -11,7 +12,7 @@ test("bundles and renders the hello page", async () => {
   const hello = bundle.pages.get("hello")!;
   expect(hello.css).toContain("font-size");
 
-  const renderer = await loadRenderer(join(root, "fonts"));
+  const renderer = new Renderer();
   const png = await renderPage(renderer, hello, { width: 800, height: 480, portrait: false }, {
     data: {},
     device: { name: "test", model: "reterminal_e1001", rotation: 0 },
