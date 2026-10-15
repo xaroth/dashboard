@@ -46,13 +46,17 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		}
 
 		uctx, _ := s.context(ctx, inst, s.writer, false)
-		if !inst.reg.enabled(uctx, inst.module) {
+		on, err := inst.reg.enabled(uctx, inst.module)
+		if err != nil {
+			err = fmt.Errorf("enabled: %w", err)
+			s.recordFailure(ctx, inst, err)
+		} else if !on {
 			phase, delay = PhaseDisabled, inst.interval
 			continue
+		} else {
+			inst.set(PhaseUpdating, time.Time{})
+			err = s.runUpdate(ctx, inst)
 		}
-
-		inst.set(PhaseUpdating, time.Time{})
-		err := s.runUpdate(ctx, inst)
 		if ctx.Err() != nil {
 			return
 		}
@@ -99,20 +103,24 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	at := s.now()
-	q := New(s.writer)
-	if err == nil {
-		// The update itself worked; a failed write here is not a source failure to back off from.
-		if err := q.RecordSuccess(ctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
-			inst.log.Error("recording update", "err", err)
-		}
-		return nil
+	if err != nil {
+		s.recordFailure(ctx, inst, err)
+		return err
 	}
+	at := s.now()
+	// The update itself worked; a failed write here is not a source failure to back off from.
+	if err := New(s.writer).RecordSuccess(ctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
+		inst.log.Error("recording update", "err", err)
+	}
+	return nil
+}
+
+func (s *Set) recordFailure(ctx context.Context, inst *instance, err error) {
+	at := s.now()
 	msg := err.Error()
-	if rerr := q.RecordFailure(ctx, RecordFailureParams{Module: inst.reg.name, At: &at, Error: &msg}); rerr != nil {
+	if rerr := New(s.writer).RecordFailure(ctx, RecordFailureParams{Module: inst.reg.name, At: &at, Error: &msg}); rerr != nil {
 		inst.log.Error("recording update failure", "err", rerr)
 	}
-	return err
 }
 
 func backoff(failures int) time.Duration {
