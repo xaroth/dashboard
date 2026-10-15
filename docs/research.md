@@ -50,7 +50,9 @@ Possible, but rebuilds what TRMNL and ESPHome already provide. Not worth it.
 
 ## Constraints
 
-- Own server available (Docker).
+- Server: TrueNAS with Docker, 10 Gbit uplink, reachable from the IoT network.
+- Both units battery powered; no refreshes at night.
+- If LaraPaper does not fit, build our own server rather than bend it.
 - No Home Assistant: too much setup and upkeep for this use.
 
 This rules out ESPHome+Puppet and the TRMNL HA add-on. ESPHome can run without HA (`online_image` from any URL), but then it only duplicates what TRMNL firmware already does, with firmware we maintain ourselves.
@@ -76,14 +78,26 @@ TRMNL lists the E1003 as 1872x1404, 16 grays; Seeed lists 1404x1872. Orientation
 | Need | Source | Notes |
 | --- | --- | --- |
 | Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
-| Calendar | ICS / CalDAV URL | Google, iCloud, Nextcloud all expose ICS |
+| Calendar | Google Calendar secret iCal address | Per calendar; read-only, no OAuth |
 | Power usage | Smartstuff P1 dongle, DSMR-API firmware, local HTTP | No adapter needed, see below |
 | Solar production | Hoymiles DTU, Modbus TCP (local) or S-Miles cloud | 16 panels, micro inverters; see below |
 | Car status | Hyundai Bluelink EU cloud API | Kona 2024; needs adapter, see below |
 
 Weather and calendar fit LaraPaper polling plugins directly. Car and power may need a small adapter on the server that exposes clean JSON.
 
-## Power: Smartstuff P1 dongle (DSMR-API v5)
+## Refresh schedule
+
+Both units on battery. TRMNL firmware sleeps for the `refresh_rate` (seconds) returned by `/api/display`, so the server controls the schedule:
+
+- Daytime: fixed interval per device, e.g. 15-30 min.
+- Night: return the seconds until the morning start time, so the device wakes once.
+- Skip unchanged screens: same `filename` means no download and no redraw.
+
+## Power: Smartstuff P1 dongle (DSMR-API)
+
+Verified 2026-10-15 at `192.168.5.180` (hostname `P1-Dongle-Pro`): firmware 4.14.4, no Basic Auth, local history enabled, 3-phase, gas present, MQTT off. Wi-Fi RSSI -74 dBm and 215 reboots logged; signal is weak.
+
+`/api/v2/hist/*` values are cumulative meter readings per slot (ring buffer, `actSlot` = current); usage per period is the difference between slots.
 
 Local HTTP JSON, no cloud, no adapter needed. Dashboard server polls it directly. Basic Auth applies if set in the dongle UI.
 
@@ -100,7 +114,7 @@ Give the dongle a fixed IP or DHCP reservation.
 
 ## Solar: Hoymiles micro inverters
 
-16 panels on Hoymiles micro inverters, DTU uploads to S-Miles Cloud. The P1 dongle cannot read Hoymiles (its solar link supports SolarEdge, Enphase, SMA only), so the P1 only sees net import/export. Production must come from the DTU.
+16 panels on 3x HMT-2250-6T (6 inputs each), DTU-Pro-S firmware V00.02.22, uploads to S-Miles Cloud. This matches the evcc-supported combination (HMT/HMS + DTU-Pro-S over Modbus TCP), so option 1 applies. The P1 dongle cannot read Hoymiles (its solar link supports SolarEdge, Enphase, SMA only), so the P1 only sees net import/export. Production must come from the DTU.
 
 Options, in order of preference:
 
@@ -111,11 +125,24 @@ Options, in order of preference:
 
 Consumption = P1 import - P1 export + solar production; needed for a self-consumption figure on screen.
 
-To verify: DTU model and firmware, inverter series (HM vs HMS), Modbus enable path (DTU local settings or S-Miles installer app), DTU data refresh interval.
+To verify: DTU IP, Ethernet connected, Modbus TCP enabled (DTU local settings or S-Miles installer app), DTU data refresh interval.
 
 ## Car: Hyundai Kona 2024 (Bluelink EU)
 
-No official public API. Use `hyundai_kia_connect_api` (Python, the library behind the HA `kia_uvo` integration) in a small adapter container that exposes JSON for the dashboard server.
+### Official: Pleos Vehicle Data API
+
+Hyundai Motor Group's EU Data Act API, read-only, Europe only (NL included).
+
+- Private users: sign up at Pleos Playground, account menu > My Vehicle Data API > Hyundai tab, accept terms, sign in with the Bluelink account. Issues a Client ID/Secret immediately, no approval, one key per brand.
+- Auth: `POST https://api.pleos.ai/v1/auth/personal-token` with `clientId`, `clientSecret`, header `Brand: hyundai`; returns a bearer token. Re-issue on expiry.
+- Vehicles: `GET /v1/vehicles/consent` lists VINs.
+- Data: `/v1/vehicles/{vin}/batteries` (plug, charging, SoC, time to full), `/powertrains` (fuel level, range), `/locations`, `/driving` (ignition, odometer, park), `/status` (doors, trunk, warnings, climate).
+- Docs do not state rate limits or data freshness.
+- Compatibility table (Oct 2026) lists ELANTRA, INSTER, IONIQ 5/6, IONIQ, and "KONA Electric (HEV)" with every field marked N. The 2024 Kona (SX2) is not listed. Issuing a key and calling it is the only way to know what returns data.
+
+### Unofficial: hyundai_kia_connect_api
+
+`hyundai_kia_connect_api` (Python, the library behind the HA `kia_uvo` integration) talks to the Bluelink app backend.
 
 - **Auth**: EU username/password login supported directly since v4.12.0. Fallback: generate a refresh token via a browser tool (KiaHyundaiToken in the library repo, or bluelink-refresh-token); valid ~180 days.
 - **Data**: SoC, range, charging state, locks/doors, climate, odometer, location, last update time, trip info (EU).
@@ -123,11 +150,13 @@ No official public API. Use `hyundai_kia_connect_api` (Python, the library behin
 - **Limits**: EU API is daily rate-limited (cap undocumented); exceeding it can lock the account for days. Frequent forced refreshes drain the 12V battery.
 - **Polling plan**: cached read every 15-30 min, forced refresh at most every 4 h (or never), and show "last updated" on screen.
 
-Risks:
+Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyundai EU logins failing on API 4.35.0); maintainer no longer owns a Hyundai/Kia.
 
-1. EU auth breaks periodically; an Oct 2026 `kia_uvo` issue reports fresh Hyundai EU logins failing on API 4.35.0.
-2. Library maintainer no longer owns a Hyundai/Kia; fixes depend on community.
-3. Adapter must fail soft: serve last known state with its timestamp when the API is down.
+### Plan
+
+1. Issue a Pleos key and test against the Kona. If fields come back, use it: official, stable auth, no 12V or lockout risk.
+2. Otherwise use the unofficial library.
+3. Either way, the adapter serves last known state with its timestamp when the upstream is down.
 
 ## Technical requirements
 
@@ -139,10 +168,11 @@ Risks:
 
 ## Open questions
 
-1. Hoymiles DTU model (DTU-Pro, DTU-Pro-S, DTU-Lite) and inverter model?
-2. Calendar provider?
-3. Mounting: wall with USB power, or battery only? Determines refresh interval.
-4. What goes on which screen, per location?
+1. Kona powertrain: electric, hybrid or petrol? Determines which car fields matter.
+2. Content per screen (E1001 vs E1003) and where each goes.
+3. Which Google calendars to show.
+4. DTU IP; is Modbus TCP enabled?
+5. Daytime hours and refresh interval per screen.
 
 ## Sources
 
@@ -163,5 +193,8 @@ Risks:
 - ha-hoymiles-modbus-tcp: https://github.com/wil-lem/ha-hoymiles-modbus-tcp
 - evcc Hoymiles DTU Modbus: https://docs.evcc.io/en/meters/hoymiles-hmt-hms-series-with-dtu-pro-s-modbus-tcp
 - hoymiles-wifi: https://pypi.org/project/hoymiles-wifi/
+- Pleos Vehicle Data API: https://document.pleos.ai/en/api-reference/vehicle-data-api/intro
+- Pleos API compatibility: https://document.pleos.ai/en/api-reference/vehicle-data-api/api-compatibility
+- Hyundai data rights (EU): https://connected-mobility.hyundai.com/data-rights-en
 - LaraPaper: https://github.com/usetrmnl/larapaper
 - SenseCraft HMI: https://sensecraft-hmi-docs.seeed.cc/en/overview/
