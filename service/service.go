@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -195,6 +196,10 @@ type resolver struct {
 
 func (r resolver) Resolve(ctx context.Context, q render.QueryDescriptor) render.Result {
 	res := r.set.Resolve(ctx, q.Module, q.Query, q.Params)
+	// A value JSON cannot encode (NaN) would fail the whole render; fail this key only.
+	if _, err := json.Marshal(res.Value); err != nil {
+		res.Value, res.Error = nil, fmt.Sprintf("encoding result: %v", err)
+	}
 	out := render.Result{Value: res.Value, Stale: res.Stale}
 	if res.FetchedAt != nil {
 		at := res.FetchedAt.In(r.loc).Format(time.RFC3339)

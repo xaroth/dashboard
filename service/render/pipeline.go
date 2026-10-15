@@ -126,9 +126,10 @@ func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, err
 		return Props{}, fmt.Errorf("%w %q", ErrUnknownModel, t.Model)
 	}
 
+	// Like a failing query, unreadable module states must not fail the page.
 	stale, err := p.resolver.StaleModules(ctx)
 	if err != nil {
-		return Props{}, fmt.Errorf("module states: %w", err)
+		stale = []string{}
 	}
 	return Props{
 		Data:     p.resolve(ctx, t, page, info),

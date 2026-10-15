@@ -37,6 +37,9 @@ func (m *testModule) count(ctx context.Context, p countParams) (countResult, err
 	return countResult{Updates: snap["updates"], Limit: p.Limit, Window: time.Duration(p.Window).String()}, nil
 }
 
+// boom panics.
+func (m *testModule) boom(context.Context, struct{}) (int, error) { panic("kaboom") }
+
 // write tries to write through the query connection.
 func (m *testModule) write(ctx context.Context, _ struct{}) (int, error) {
 	_, err := modules.Database(ctx).ExecContext(ctx, "INSERT INTO test_items (id) VALUES (1)")
@@ -49,6 +52,7 @@ func queryRegistration() modules.Registration {
 		modules.WithMigrations(migrations),
 		modules.WithQuery("count", (*testModule).count),
 		modules.WithQuery("write", (*testModule).write),
+		modules.WithQuery("boom", (*testModule).boom),
 	)
 }
 
@@ -66,7 +70,8 @@ func TestCheck(t *testing.T) {
 		{"valid", "test", "count", map[string]any{"limit": 3, "window": "24h"}, nil, ""},
 		{"no params", "test", "count", nil, nil, ""},
 		{"unknown module", "nope", "count", nil, modules.ErrUnknownModule, ""},
-		{"unknown query", "test", "nope", nil, modules.ErrUnknownQuery, "count, write"},
+		{"unknown query", "test", "nope", nil, modules.ErrUnknownQuery, "boom, count, write"},
+		{"null duration", "test", "count", map[string]any{"window": nil}, nil, ""},
 		{"unknown param", "test", "count", map[string]any{"bogus": 1}, nil, "bogus"},
 		{"bad duration", "test", "count", map[string]any{"window": "soon"}, nil, "soon"},
 		{"wrong type", "test", "count", map[string]any{"limit": "three"}, nil, "limit"},
@@ -118,6 +123,17 @@ func TestResolve(t *testing.T) {
 	})
 }
 
+func TestResolveStateUnreadable(t *testing.T) {
+	t.Parallel()
+	set, _ := loadWith(t.Context(), t, "test: {key: k}", queryRegistration())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got := set.Resolve(ctx, "test", "count", nil)
+	if !got.Stale || got.Error == "" {
+		t.Errorf("got %+v, want stale with an error", got)
+	}
+}
+
 func TestResolveErrors(t *testing.T) {
 	t.Parallel()
 	set, db := loadWith(t.Context(), t, "test: {key: k}", queryRegistration())
@@ -132,6 +148,7 @@ func TestResolveErrors(t *testing.T) {
 		{"bad params", "test", "count", map[string]any{"bogus": 1}, "bogus"},
 		{"unknown module", "nope", "count", nil, "unknown module"},
 		{"read only", "test", "write", nil, "readonly"},
+		{"panic", "test", "boom", nil, "query panicked: kaboom"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

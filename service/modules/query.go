@@ -25,7 +25,7 @@ type query struct {
 func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P) (R, error)) Option {
 	decode := func(raw []byte) (P, error) {
 		var p P
-		dec := json.NewDecoder(bytes.NewReader(cmpBytes(raw, []byte("{}"))))
+		dec := json.NewDecoder(bytes.NewReader(orDefault(raw, []byte("{}"))))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&p); err != nil {
 			return p, fmt.Errorf("params: %w", err)
@@ -36,7 +36,13 @@ func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P)
 		moduleType: reflect.TypeFor[*M](),
 		params:     reflect.TypeFor[P](),
 		result:     reflect.TypeFor[R](),
-		call: func(ctx context.Context, m any, raw []byte) (any, error) {
+		call: func(ctx context.Context, m any, raw []byte) (res any, err error) {
+			// Queries run in the pipeline's goroutines, outside net/http's recovery.
+			defer func() {
+				if r := recover(); r != nil {
+					res, err = nil, fmt.Errorf("query panicked: %v", r)
+				}
+			}()
 			p, err := decode(raw)
 			if err != nil {
 				return nil, err
@@ -59,7 +65,7 @@ func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P)
 	}
 }
 
-func cmpBytes(b, fallback []byte) []byte {
+func orDefault(b, fallback []byte) []byte {
 	if len(b) == 0 || string(b) == "null" {
 		return fallback
 	}
@@ -71,6 +77,9 @@ func cmpBytes(b, fallback []byte) []byte {
 type Duration time.Duration
 
 func (d *Duration) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
 		return fmt.Errorf("duration must be a string like \"24h\": %w", err)
@@ -125,6 +134,8 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 	res := Result{}
 	if st, err := s.state(ctx, inst); err == nil {
 		res.FetchedAt, res.Stale, res.Error = st.FetchedAt, st.Stale, st.Error
+	} else {
+		res.Stale, res.Error = true, fmt.Sprintf("reading module state: %v", err)
 	}
 	raw, err := json.Marshal(params)
 	if err == nil {

@@ -98,9 +98,9 @@ func Define[M any, C any, PM interface {
 	if r.interval <= 0 || r.staleAfter <= 0 {
 		panic(fmt.Sprintf("modules: %s: update interval and stale after must be positive", name))
 	}
-	for name, q := range r.queries {
-		if q.moduleType != r.moduleType {
-			panic(fmt.Sprintf("modules: %s: query %s is a method of %s, not %s", r.name, name, q.moduleType, r.moduleType))
+	for _, qname := range r.queryNames() {
+		if q := r.queries[qname]; q.moduleType != r.moduleType {
+			panic(fmt.Sprintf("modules: %s: query %s is a method of %s, not %s", r.name, qname, q.moduleType, r.moduleType))
 		}
 	}
 	return r
