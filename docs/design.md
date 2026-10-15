@@ -4,113 +4,197 @@ Draft, 2026-10-15. Background and data source research: [research.md](research.m
 
 ## Overview
 
-One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E1003) running TRMNL firmware in BYOS mode. The service owns I/O, storage, scheduling, rendering and the device protocol. Data sources are modules: Go packages that are registered at compile time, configured in YAML, and global to the system (not tied to a device).
+One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E1003) running TRMNL firmware in BYOS mode. The service owns I/O, storage, scheduling, rendering and the device protocol. Data sources are modules: packages under `modules/` that register themselves, are configured in YAML, and are global to the system (not tied to a device).
 
 ```
-             +---------------------- dashboard ----------------------+
-             |                                                       |
- P1 dongle --+--> p1 ------+                                         |
- S-Miles   --+--> solar ---+                                         |
- Google    --+--> calendar +--> storage --> pages --> render --> device API <-- E1001
- Pleos     --+--> car -----+   (state +     (templates)  (Takumi)      |      <-- E1003
- Open-Meteo -+--> weather -+    series)                               |
-             |                    ^                                   |
-             |   scheduler -------+          web UI: preview, module routes (OAuth)
-             +-------------------------------------------------------+
+             +---------------------------- dashboard -----------------------------+
+             |                                                                    |
+ P1 dongle --+--> modules/p1 -------+                                             |
+ S-Miles   --+--> modules/solar ----+                                             |
+ Google    --+--> modules/calendar -+--> storage <-- pages (templates) --> render --+--> device API <-- E1001
+ Pleos     --+--> modules/car ------+   (state +        |                  (Takumi) |               <-- E1003
+ Open-Meteo -+--> modules/weather --+    series)        |                           |
+             |          ^                                +--> web UI: preview, module routes (OAuth)
+             |      scheduler                                                       |
+             +--------------------------------------------------------------------+
 ```
+
+## Code layout
+
+```
+cmd/dashboard/main.go      entrypoint: load config, build service, run
+cmd/dashboard/config.go    config loading: YAML file, ${ENV} substitution, validation
+service/service.go         the service: wires storage, scheduler, modules, listeners
+service/modules/           registration API and the module contract
+service/storage/           SQLite: state, series, rollups, devices
+service/scheduler/         module updates, rollups, retention
+service/device/            TRMNL protocol, health, page selection, screen schedule
+service/render/            template pipeline, Takumi subprocess, gray reduction, PNG
+service/web/               admin UI, preview, module route mounting
+modules/modules.go         blank-imports every module so it registers
+modules/<name>/            one module per data source
+renderer/                  Rust CLI around Takumi
+templates/                 pages, partials, CSS (embedded, overridable)
+fonts/
+```
+
+Everything outside `modules/` is the service. `service/service.go` imports `modules` so all modules are linked in; it only knows them through the registry.
 
 ## Modules
 
-A module is a package that collects data from one source and exposes it to templates.
-
-Initial modules:
-
-| Module | Source | Kind of data |
+| Module | Source | Data |
 | --- | --- | --- |
-| `p1` | Smartstuff P1 dongle, local HTTP | current state + time series (import/export power, energy, gas) |
-| `solar` | Hoymiles: S-Miles Cloud now, DTU Modbus later | current state + time series (production per inverter, alarms) |
-| `calendar` | Google Calendar secret iCal URL | current state (upcoming events) |
-| `car` | Pleos Vehicle Data API, fallback Bluelink | current state (SoC, range, charging, locks) |
-| `weather` | Open-Meteo | current state (now, hourly, daily) |
+| `p1` | Smartstuff P1 dongle, local HTTP | state + series (import/export power, energy, gas) |
+| `solar` | Hoymiles: S-Miles Cloud now, DTU Modbus later | state + series (production per inverter, alarms) |
+| `calendar` | Google Calendar secret iCal URL | state (upcoming events) |
+| `car` | Pleos Vehicle Data API, fallback Bluelink | state (SoC, range, charging, locks) |
+| `weather` | Open-Meteo | state (now, hourly, daily) |
 
-Possible later: Plex recently added, waste collection, public transport.
+Later candidates: Plex recently added, waste collection, public transport.
 
-Device health is a core concern, not a module (see [Devices](#devices)).
+Device health is a service concern, not a module (see [Devices](#devices)).
+
+### Registration
+
+Modules register themselves at init, the same pattern as `database/sql` drivers:
+
+```go
+package weather
+
+import "github.com/xaroth/dashboard/service/modules"
+
+type config struct {
+	Location string `yaml:"location"`
+}
+
+func defaultConfig() *config {
+	return &config{Location: "Amsterdam, The Netherlands"}
+}
+
+type module struct {
+	cfg *config
+}
+
+var _ = modules.Register[module, config](
+	"weather",
+	defaultConfig,
+	modules.WithUpdateInterval(15*time.Minute),
+	modules.WithStaleAfter(2*time.Hour),
+)
+
+func (m *module) Initialize(ctx context.Context, cfg *config) error {
+	m.cfg = cfg
+	return nil
+}
+
+func (m *module) Update(ctx context.Context) error {
+	db := modules.Database(ctx)
+	// fetch from the source, write state and series
+}
+```
+
+`Register` is generic over the module and config types. A third, inferred type parameter constrains `*M` to the module interface, so a missing method is a compile error:
+
+```go
+func Register[M any, C any, PM interface {
+	*M
+	Module[C]
+}](name string, defaults func() *C, opts ...Option) Registration
+```
+
+The registry is package-level state in `service/modules`, filled before `main` runs; the service reads it once at start.
 
 ### Contract
 
-What the core needs from a module:
+Required:
 
-1. **Name**: stable identifier, used as config key, storage namespace and template key.
-2. **Config**: decoded from `modules.<name>` in the config file. Unknown keys are an error.
-3. **Collect**: called by the scheduler; fetches from the source and writes to storage.
-4. **View**: returns the template data for the module, built from storage. Pure read, no network.
+| Method | Purpose |
+| --- | --- |
+| `Initialize(ctx, *C) error` | Receive config (defaults overlaid with `modules.<name>` from YAML; unknown keys are an error). Set up clients, run backfill if storage is empty. |
+| `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
-Optional:
+Optional, detected by interface assertion:
 
-5. **Routes**: HTTP handlers mounted under `/modules/<name>/` on the admin listener. For auth flows (OAuth redirect/callback, login forms) and module-specific debug pages.
-6. **Backfill**: one-time import of history on first start (P1 dongle keeps hours/days/months locally).
+| Method | Purpose |
+| --- | --- |
+| `View(ctx) (any, error)` | Template-facing object for this module. Its methods are called from templates and read storage lazily (see [Rendering](#rendering)). Never touches the network. |
+| `Routes(mux *http.ServeMux)` | Handlers mounted under `/modules/<name>/` on the admin listener: OAuth redirect/callback, login forms, debug pages. |
 
-Modules are registered explicitly in `main`; disabled modules are not constructed. Each module gets its dependencies injected: its config, a storage handle scoped to its namespace, an HTTP client with timeouts, a logger, a clock.
+Options: `WithUpdateInterval`, `WithStaleAfter`, `WithActiveHours` (e.g. car only 06:00-23:00 to spare the Bluelink quota). Config can override each.
 
-Collect and View are split so a slow or failing source never blocks rendering: a page always renders from the last stored data.
+Update and View are split so a slow or failing source never blocks a screen: pages render from the last stored data.
+
+### Dependencies
+
+The proposal above passes dependencies through the context (`modules.Database(ctx)`, likewise logger, HTTP client, clock). Alternative: a typed `*modules.Host` argument to `Initialize` holding the same dependencies, kept on the module struct. It makes dependencies visible in signatures and avoids a runtime lookup that can panic when missing. To decide.
 
 ## Storage
 
-One SQLite database on the data volume, using a pure-Go driver (`modernc.org/sqlite`) so the build stays free of cgo.
+One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo.
+
+### Keeping it in memory
+
+Two ways to keep most data in memory with periodic disk writes:
+
+1. **On-disk SQLite tuned for memory** (proposed): WAL mode, `synchronous=NORMAL`, a large page cache and `mmap_size`, so reads are served from memory. Writes are buffered in the service (e.g. P1 samples) and flushed in one transaction per minute. A crash loses at most the unflushed buffer; the file is always consistent.
+2. **In-memory database** with a periodic snapshot to disk (`VACUUM INTO` or the backup API). Fastest, but a crash loses everything since the last snapshot, and startup loads the snapshot back.
+
+Data volume either way: tens of MB per year.
 
 ### State
 
-Latest result per module: a JSON document plus metadata.
-
-| Field | Purpose |
-| --- | --- |
-| `module` | namespace |
-| `data` | JSON of the module's state |
-| `fetched_at` | time of the last successful collect |
-| `attempted_at`, `error` | last attempt and its error, if any |
-
-Templates get `fetched_at` and a staleness flag (age above the module's `stale_after`) next to the data.
+Latest result per module: a JSON document plus `fetched_at`, `attempted_at` and `error`. Templates get the data plus freshness (age above `stale_after` marks it stale).
 
 ### Time series
 
-Needed for P1 and solar history graphs, and device health. Volume is small: P1 at one sample per 10 s is ~3 M rows a year raw; solar per inverter port per minute ~10 M.
+For P1 and solar history graphs and device battery. Schema `series(name, ts, value)` with rollup tables at 5 minutes, 1 hour and 1 day. Retention: raw 7 days, 5-minute 90 days, hourly and daily forever. Queries pick the coarsest resolution that still fills the graph.
 
-Options:
-
-| Option | For | Against |
-| --- | --- | --- |
-| **SQLite tables** with raw samples + rollups (5 min, 1 h, 1 d) and retention | one file, one backup, no extra container, SQL for queries | rollups and retention are ours to write |
-| Embedded TSDB library (e.g. `tstorage`) | purpose-built, compression | another storage engine next to SQLite, smaller communities |
-| External TSDB container (VictoriaMetrics, InfluxDB) | mature, fast, own UI | extra container to run and back up; overkill for two graphs |
-
-Proposed: SQLite. Schema `series(name, ts, value)` with rollup tables per resolution; raw kept 7 days, 5-minute 90 days, hourly and daily forever. Graph queries pick the coarsest resolution that still fills the graph's pixel width.
-
-Counters (energy kWh, gas m³) are stored as meter readings; usage per period is the difference. Rates (W) are stored as samples and averaged in rollups.
+Counters (kWh, m³) are stored as meter readings; usage per period is the difference. Rates (W) are averaged in rollups.
 
 ## Scheduler
 
-- Each module has a collect interval (module default, overridable in config) and a `stale_after`.
-- Jitter on start, exponential backoff on errors, capped at the interval.
-- Optional active hours per module (e.g. car only 06:00-23:00, to spare the Bluelink quota).
-- Rollup and retention jobs run on the same scheduler.
+- Module updates: per-module interval, jitter on start, exponential backoff on errors capped at the interval, optional active hours.
+- Storage jobs: flush buffered writes, rollups, retention.
 
 ## Devices
 
 ### Configuration
-
-Per device: name, MAC address, model (`seeed_e1001`, `seeed_e1003`), rotation, pages, schedule.
 
 ```yaml
 devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:FF"
     model: seeed_e1001
-    pages: [overview, energy]
-    schedule:
-      active: "06:30-23:00"
-      refresh: 15m
+    rotation: 0          # 0, 90, 180, 270
+    pages: [overview, energy, car]
 ```
+
+### Screen schedule
+
+Global, overridable per device: active 07:00-01:00, refresh every hour on the hour.
+
+- **Timer wake**: show the first page. `refresh_rate` is the seconds until the next full hour; after 01:00, until 07:00.
+- **Button wake**: refresh and advance to the next page, wrapping around. `refresh_rate` stays aimed at the next full hour, so the hourly wake returns to the first page. Pages after the first are detail pages.
+- The ESP32 clock drifts during deep sleep; computing `refresh_rate` from the server clock on every wake corrects it.
+
+Battery use: 18 timer wakes a day plus button presses.
+
+### Buttons
+
+Every `/api/display` request carries `Update-Source` with the wake reason: `timer`, a GPIO source (`EXT0`, `EXT1`, `gpio`) for a button, `powercycle` after power-on. The firmware does not say which button: any button means "next page". Double-click runs a special function (signaled with a `special_function` header) and a 5-second hold resets Wi-Fi, so those stay out of page logic. To verify on hardware: which buttons wake each model (E1001: green button; E1003: refresh, and whether page up/down wake it) and the exact `Update-Source` values.
+
+### Orientation
+
+The firmware does not report orientation. It does rotate automatically: a PNG with width and height swapped relative to the panel is drawn in portrait. Orientation is therefore a device setting:
+
+| `rotation` | Server renders | Notes |
+| --- | --- | --- |
+| 0 | native size (E1003: 1872x1404) | landscape |
+| 90 | swapped size (1404x1872) | firmware rotates to portrait |
+| 180 | native size, image turned 180° | landscape, upside down mount |
+| 270 | swapped size, image turned 180° | portrait, other direction |
+
+Templates get the resulting viewport (`.Viewport.Width`, `.Viewport.Height`, `.Viewport.Portrait`). The firmware's rotation direction is to confirm on hardware.
 
 ### Protocol
 
@@ -118,52 +202,54 @@ TRMNL BYOS, on the device listener:
 
 | Route | Behavior |
 | --- | --- |
-| `GET /api/setup` | Known MAC: issue and store an API key. Unknown MAC: record it as pending (shown in the web UI), return a non-200 so the device retries. |
-| `GET /api/display` | Authenticate by `Access-Token`. Record health headers. Pick the page, render if inputs changed, return `image_url`, `filename` (content hash), `refresh_rate`. |
+| `GET /api/setup` | Known MAC: issue and store an API key. Unknown MAC: record as pending (shown in the web UI), return non-200 so the device retries. |
+| `GET /api/display` | Authenticate by `Access-Token`, record health headers, pick the page, render if needed, return `image_url`, `filename` (content hash), `refresh_rate`. |
 | `GET /images/{hash}.png` | Rendered image. |
 | `POST /api/log` | Store device log entries. |
 
 Never return JSON `status: 500` from `/api/display`: firmware treats it as a reset and wipes its credentials.
 
-`refresh_rate` comes from the schedule: the refresh interval inside active hours, otherwise the seconds until the next active window starts.
-
-### Pages
-
-A device cycles through its pages. The firmware sends `Update-Source` with the wake reason: a button wake advances to the next page, a timer wake shows the first page. To verify on hardware: which buttons wake the unit under TRMNL firmware, and whether the E1003's page up/down buttons can be told apart.
-
 ### Health
 
-Recorded from every `/api/display` request: battery voltage, charging, RSSI, firmware version, wake reason, last seen. Battery voltage is stored as a time series and converted to a percentage per model.
+Recorded per request: battery voltage (also as a series), charging, RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage per model.
 
-Health reaches people through the screens: every page gets a `.System` block with this device's battery, stale modules and errors, and the other devices' status (last seen, battery). A unit that runs flat shows up on the other unit.
+Health reaches people through the screens: every page gets `.System` with this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
 
 ## Rendering
 
-- Templates: Go `html/template`, one per page, plus shared partials. Layout lives entirely in HTML/CSS; design is a separate track.
-- Template data: `.Modules.<name>` (view + freshness), `.Device`, `.System`, `.Now`, formatting helpers (Dutch locale: decimal comma, day/month names, Europe/Amsterdam).
-- Graphs: rendered as inline SVG by template helpers from series queries.
-- Renderer: Takumi through a small Rust CLI run as a subprocess (validated in the spike, commit `8da478f`; 12-35 ms per render). Go reduces the output to the panel's gray levels (4 or 16) and encodes a 2- or 4-bit PNG. cgo binding only if subprocess overhead ever matters.
-- A render's identity is the hash of page, template version and the data it used; same hash means no re-render and no device redraw.
-- Fonts are bundled in the image.
+### Pipeline
+
+1. **Select**: device, page and viewport from the request.
+2. **Execute template**: Go `html/template` with root data `.Device`, `.Viewport`, `.System`, `.Now`. Module data is pulled during execution: `{{ with module "weather" }}{{ .Current.Temperature }}{{ end }}`. `module` returns the module's `View` object; its methods can take arguments and query storage on demand, e.g. `{{ (module "p1").Usage "24h" }}`.
+3. **Hash**: hash the HTML output. Same hash as the last render for this device and page: reuse the PNG, the device skips the redraw.
+4. **Render**: Takumi CLI (subprocess, spike in commit `8da478f`: 12-35 ms) turns HTML + CSS into a PNG at the viewport size.
+5. **Reduce**: rotate if needed, map to the panel's gray levels (4 or 16), encode a 2- or 4-bit PNG.
+
+Executing a template costs milliseconds, so hashing its output is the simplest correct cache key: anything that changes the screen changes the hash.
+
+### Templates
+
+- Embedded in the binary as defaults (`embed.FS`), overridable by a `templates_dir` on the config mount. The override wins per file, so one page can be edited without rebuilding the image. Preview requests reload templates from disk.
+- Shared helpers: Dutch formatting (decimal comma, day and month names, Europe/Amsterdam), durations, freshness labels.
+- Graphs: helpers that turn a series query into inline SVG (line, bar, sparkline). Takumi's support for inline `<svg>` versus SVG as `<img>` data URI is to verify.
+- Fonts bundled in the image.
 
 ## Web UI
 
-On a separate admin listener, so the device listener can be the only port exposed to the IoT network.
+On a separate admin listener, so only the device listener faces the IoT network. No authentication in v1.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | Devices, pages, module status (last fetch, errors), pending devices |
-| `GET /preview/{device}/{page}.png` | Exactly what the device would get |
-| `GET /preview/{device}/{page}.html` | The HTML fed to the renderer, for debugging in a browser (browser rendering may differ from Takumi) |
-| `GET /preview/page/{page}.png?model=...` | Page on a given panel without a device |
+| `GET /` | Devices, pages, module status (last update, errors), pending devices |
+| `GET /preview/{device}/{page}.png` | Exactly what the device gets |
+| `GET /preview/{device}/{page}.html` | The HTML fed to the renderer (browser rendering may differ from Takumi) |
+| `GET /preview/page/{page}.png?model=...&rotation=...` | A page on a panel without a device |
 | `/modules/{name}/...` | Module routes, e.g. `/modules/car/login` |
 | `GET /healthz` | Liveness |
 
-No authentication in v1; the admin listener is only reachable from the trusted network.
-
 ## Configuration
 
-One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can come from env vars or be written inline.
+One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values.
 
 ```yaml
 listen:
@@ -171,11 +257,15 @@ listen:
   admin: ":8081"
 timezone: Europe/Amsterdam
 data_dir: /data
+templates_dir: /config/templates   # optional overrides
+
+schedule:
+  active: "07:00-01:00"
+  refresh: hourly
 
 modules:
   weather:
-    latitude: 52.37
-    longitude: 4.89   # Amsterdam
+    location: "Amsterdam, The Netherlands"
   p1:
     url: http://192.168.1.20
   calendar:
@@ -183,39 +273,26 @@ modules:
   car:
     client_id: ${PLEOS_CLIENT_ID}
     client_secret: ${PLEOS_CLIENT_SECRET}
+
+devices:
+  hallway:
+    mac: "AA:BB:CC:DD:EE:FF"
+    model: seeed_e1001
+    pages: [overview, energy, car]
 ```
 
-Module state that changes at runtime (OAuth tokens, device API keys) lives in the database, not the config file.
-
-## Package layout
-
-```
-main.go          wiring: config, storage, modules, scheduler, listeners
-config/          load YAML, env substitution, validation
-storage/         SQLite: state, series, rollups, devices
-scheduler/       intervals, backoff, active hours
-device/          TRMNL protocol, health, page selection
-render/          templates, Takumi subprocess, gray reduction, PNG
-web/             admin UI, preview, module route mounting
-modules: p1/ solar/ calendar/ car/ weather/
-renderer/        Rust CLI around Takumi
-templates/       pages, partials, CSS
-fonts/
-```
-
-Modules depend on small interfaces they define themselves (for storage, clock), not on core packages, so `main` stays the only wiring point.
+Runtime state (OAuth tokens, device API keys) lives in the database, not the config file.
 
 ## Deployment
 
-- One Docker image, multi-stage: Rust renderer, Go service, fonts and templates on a distroless base.
+- One Docker image, multi-stage: Rust renderer, Go service, fonts and default templates, distroless base.
 - Built by GitHub Actions, pushed to GHCR.
-- Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite) mounts.
-- Backup: the SQLite file (online backup API or `VACUUM INTO`).
+- Runs on TrueNAS with `/config` (YAML, template overrides) and `/data` (SQLite) mounts.
+- Backup: SQLite online backup or `VACUUM INTO`.
 
 ## Open questions
 
-1. Time series: confirm SQLite with rollups, and the retention periods.
-2. Pages: auto-cycle on timer wakes, or always first page?
-3. Templates: embedded in the binary (immutable image) or loaded from the config mount (edit without rebuild)?
-4. Button behavior per model, to verify on hardware.
-5. E1003 mounting orientation.
+1. Module dependencies: through the context, or a typed `*modules.Host` argument?
+2. Storage: on-disk SQLite tuned for memory, or in-memory with snapshots?
+3. Weather location as a place name needs geocoding (Open-Meteo has a free geocoding API), resolved once at `Initialize`. Or configure coordinates directly?
+4. Buttons and rotation direction: to verify on hardware.
