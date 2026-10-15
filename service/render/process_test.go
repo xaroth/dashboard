@@ -86,8 +86,8 @@ func fakeRenderer(mode string) {
 type logSignal chan string
 
 func (s logSignal) Enabled(context.Context, slog.Level) bool { return true }
-func (s logSignal) WithAttrs([]slog.Attr) slog.Handler        { return s }
-func (s logSignal) WithGroup(string) slog.Handler             { return s }
+func (s logSignal) WithAttrs([]slog.Attr) slog.Handler       { return s }
+func (s logSignal) WithGroup(string) slog.Handler            { return s }
 func (s logSignal) Handle(_ context.Context, r slog.Record) error {
 	select {
 	case s <- r.Message:
