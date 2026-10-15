@@ -525,6 +525,7 @@ Runtime state (device API keys, module caches) lives in the database, not the co
 - Built by GitHub Actions, pushed to GHCR.
 - Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite, own ZFS dataset, `recordsize=16K`) mounts.
 - Restart policy `unless-stopped` and a Docker health check on `/healthz`.
+- Shutdown (SIGTERM): module schedules stop, both listeners stop accepting, and requests in flight get 5 s to finish (within Docker's 10 s stop timeout). Requests still running then have their context cancelled, which ends renders and manual module updates; the renderer and storage close only after every handler has returned. A drain that runs out is logged as a warning, not a failed exit.
 - Backup: ZFS snapshots of the `/data` dataset.
 
 ## Open questions

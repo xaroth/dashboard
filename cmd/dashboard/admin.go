@@ -192,7 +192,8 @@ func (h *adminHandler) fail(w http.ResponseWriter, err error) {
 }
 
 // updateModule runs one update now and returns to the index. The outcome
-// shows in the module table.
+// shows in the module table. The request context ends with the shutdown
+// drain, so an update cannot outlive the service.
 func (h *adminHandler) updateModule(w http.ResponseWriter, r *http.Request) {
 	err := h.Modules.Update(r.Context(), r.PathValue("module"))
 	if errors.Is(err, module.ErrUnknownModule) {

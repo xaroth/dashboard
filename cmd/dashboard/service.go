@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -38,7 +39,12 @@ type Service struct {
 	regs     []module.Registration
 	device   *http.ServeMux
 	admin    *http.ServeMux
+	// shutdownGrace is how long requests may finish after shutdown starts.
+	shutdownGrace time.Duration
 }
+
+// Within Docker's default 10 s stop timeout.
+const shutdownGrace = 5 * time.Second
 
 type Option func(*Service)
 
@@ -56,11 +62,12 @@ func WithRenderer(r Renderer) Option {
 // named by devices must exist.
 func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *Service, err error) {
 	s := &Service{
-		cfg:    cfg,
-		log:    log,
-		regs:   modules.All(),
-		device: http.NewServeMux(),
-		admin:  http.NewServeMux(),
+		cfg:           cfg,
+		log:           log,
+		regs:          modules.All(),
+		device:        http.NewServeMux(),
+		admin:         http.NewServeMux(),
+		shutdownGrace: shutdownGrace,
 	}
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
@@ -246,17 +253,26 @@ func (s *Service) close() {
 	}
 }
 
+// serve runs a listener until ctx ends, then drains it for up to
+// s.shutdownGrace. Requests left after that are cancelled, and serve's
+// goroutines return only once every handler has, so close never runs under one.
 func (s *Service) serve(ctx context.Context, g *errgroup.Group, name, addr string, h http.Handler) {
+	// Requests keep their context during the drain; it ends when the drain does.
+	base, cancelRequests := context.WithCancel(context.WithoutCancel(ctx))
+	var handlers sync.WaitGroup
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           h,
+		Addr: addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handlers.Add(1)
+			defer handlers.Done()
+			h.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		// Covers a render on a cold or restarting renderer.
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  2 * time.Minute,
-		// Requests keep their context during the shutdown drain.
-		BaseContext: func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
+		BaseContext:  func(net.Listener) context.Context { return base },
 	}
 	g.Go(func() error {
 		s.log.Info("listening", "listener", name, "addr", addr)
@@ -267,8 +283,13 @@ func (s *Service) serve(ctx context.Context, g *errgroup.Group, name, addr strin
 	})
 	g.Go(func() error {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.shutdownGrace)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			s.log.Warn("requests still running after the drain; cancelling them", "listener", name, "err", err)
+		}
+		cancelRequests()
+		handlers.Wait()
+		return nil
 	})
 }

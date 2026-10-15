@@ -12,7 +12,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -176,6 +178,74 @@ func TestRunStopsOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// blockingRenderer renders until the request's context ends, and records
+// whether it was closed while a render was running.
+type blockingRenderer struct {
+	*render.FakeRenderer
+	started            chan struct{}
+	rendering          atomic.Bool
+	closedDuringRender atomic.Bool
+}
+
+func (b *blockingRenderer) Render(ctx context.Context, _ string, _ render.Props) ([]byte, error) {
+	b.rendering.Store(true)
+	defer b.rendering.Store(false)
+	close(b.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *blockingRenderer) Close() error {
+	b.closedDuringRender.Store(b.rendering.Load())
+	return b.FakeRenderer.Close()
+}
+
+func TestRunCancelsRequestsAfterDrain(t *testing.T) {
+	t.Parallel()
+	admin := freeAddr(t)
+	r := &blockingRenderer{FakeRenderer: render.NewFakeRenderer(render.PageInfo{Name: "hello"}), started: make(chan struct{})}
+	s, err := New(t.Context(), testConfig(t, freeAddr(t), admin), slog.New(slog.DiscardHandler), WithRenderer(r))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.shutdownGrace = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// Polls the listener until it is up; the request then blocks in Render.
+	go func() {
+		for ctx.Err() == nil {
+			resp, err := http.Get("http://" + admin + "/preview/page/hello.png")
+			if err == nil {
+				resp.Body.Close()
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+	select {
+	case <-r.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("render never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("got %v, want nil: a drain timeout is not a failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return: the running request was not cancelled")
+	}
+	if r.closedDuringRender.Load() {
+		t.Error("renderer closed while a request was still rendering")
+	}
+	if !r.Closed() {
+		t.Error("renderer not closed after Run")
 	}
 }
 
