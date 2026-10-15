@@ -2,7 +2,6 @@
 package service
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/xaroth/dashboard/service/device"
 	"github.com/xaroth/dashboard/service/render"
 	"github.com/xaroth/dashboard/service/web"
 )
@@ -82,33 +82,29 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (*Se
 	s.admin.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 	})
+	var configs []device.Config
+	for name, d := range cfg.Devices {
+		mac, _ := NormalizeMAC(d.MAC) // validated with the config
+		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.Pages})
+	}
+	devices := device.New(device.Options{
+		Devices:   configs,
+		Pipeline:  pipeline,
+		Store:     &device.Store{Max: 16},
+		PublicURL: cfg.PublicURL,
+		Log:       log.With("component", "device"),
+		Now:       time.Now,
+	})
+	devices.Register(s.device)
+
 	webHandler := &web.Handler{
-		Pipeline: pipeline,
-		Devices:  s.webDevices(),
-		Target:   s.target,
-		Log:      log.With("component", "web"),
+		Pipeline:  pipeline,
+		Devices:   devices,
+		DeviceAPI: s.device,
+		Log:       log.With("component", "web"),
 	}
 	webHandler.Register(s.admin)
 	return s, nil
-}
-
-func (s *Service) webDevices() []web.Device {
-	var out []web.Device
-	for name, d := range s.cfg.Devices {
-		out = append(out, web.Device{Name: name, Pages: d.Pages, Rotation: d.Rotation})
-	}
-	slices.SortFunc(out, func(a, b web.Device) int { return cmp.Compare(a.Name, b.Name) })
-	return out
-}
-
-// target is how a configured device is rendered. Until devices report their
-// model, the E1001 is assumed.
-func (s *Service) target(name string) (render.Target, bool) {
-	d, ok := s.cfg.Devices[name]
-	if !ok {
-		return render.Target{}, false
-	}
-	return render.Target{Name: name, Model: "reterminal_e1001", Rotation: d.Rotation}, true
 }
 
 // Device is the handler for the device listener.

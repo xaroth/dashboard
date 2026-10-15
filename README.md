@@ -21,6 +21,6 @@ cp config.example.yaml config.yaml
 go run ./cmd/dashboard -config config.yaml
 ```
 
-Open http://127.0.0.1:8081/ for previews of every page per device and panel. With `renderer.watch`, page edits rebuild on save; reload the browser.
+Open http://127.0.0.1:8081/ for previews of every page per device and panel, and a simulator per device that wakes it through the real device API (timer or button). With `renderer.watch`, page edits rebuild on save; reload the browser.
 
 Tests: `go test -race ./...`, `bun test`, `bunx tsc --noEmit`.

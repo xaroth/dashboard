@@ -11,9 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/xaroth/dashboard/service/device"
 	"github.com/xaroth/dashboard/service/render"
 	"github.com/xaroth/dashboard/service/web"
 )
@@ -50,22 +52,27 @@ func (s *stubPipeline) Render(ctx context.Context, t render.Target, page string)
 	return render.Image{PNG: []byte("png"), Filename: "f", Props: props}, nil
 }
 
-func newHandler(tb testing.TB, devices ...web.Device) (http.Handler, *stubPipeline) {
+func newHandler(tb testing.TB, devices ...device.Config) (http.Handler, *stubPipeline) {
 	tb.Helper()
 	if devices == nil {
-		devices = []web.Device{{Name: "hallway", Pages: []string{"hello"}, Rotation: 90}}
+		devices = []device.Config{{Name: "hallway", MAC: "AA:BB:CC:DD:EE:FF", Pages: []string{"hello"}, Rotation: 90}}
 	}
 	stub := &stubPipeline{}
+	devs := device.New(device.Options{
+		Devices:   devices,
+		Pipeline:  stub,
+		Store:     &device.Store{Max: 4},
+		PublicURL: "http://dash",
+		Log:       slog.New(slog.DiscardHandler),
+		Now:       func() time.Time { return time.Unix(1792087200, 0) },
+	})
+	deviceAPI := http.NewServeMux()
+	devs.Register(deviceAPI)
 	h := &web.Handler{
-		Pipeline: stub,
-		Devices:  devices,
-		Target: func(name string) (render.Target, bool) {
-			if name != "hallway" {
-				return render.Target{}, false
-			}
-			return render.Target{Name: "hallway", Model: "reterminal_e1001", Rotation: 90}, true
-		},
-		Log: slog.New(slog.DiscardHandler),
+		Pipeline:  stub,
+		Devices:   devs,
+		DeviceAPI: deviceAPI,
+		Log:       slog.New(slog.DiscardHandler),
 	}
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -99,7 +106,7 @@ func TestIndex(t *testing.T) {
 
 func TestIndexEscapesNames(t *testing.T) {
 	t.Parallel()
-	h, _ := newHandler(t, web.Device{Name: `<script>x</script>`, Pages: []string{"hello"}})
+	h, _ := newHandler(t, device.Config{Name: `<script>x</script>`, MAC: "AA:BB:CC:DD:EE:FF", Pages: []string{"hello"}})
 	body := get(t, h, "/").Body.String()
 	if strings.Contains(body, "<script>x") {
 		t.Error("device name rendered unescaped")
@@ -108,7 +115,7 @@ func TestIndexEscapesNames(t *testing.T) {
 
 func TestIndexWithoutDevices(t *testing.T) {
 	t.Parallel()
-	h, _ := newHandler(t, []web.Device{}...)
+	h, _ := newHandler(t, []device.Config{}...)
 	rec := get(t, h, "/")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "No devices configured") {
 		t.Errorf("got %d, want 200 with \"No devices configured\"", rec.Code)
@@ -188,4 +195,91 @@ func TestPreviewProps(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSimulateWake(t *testing.T) {
+	t.Parallel()
+	h, stub := newHandler(t)
+
+	post := func(url string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, url, nil))
+		return rec
+	}
+	type exchange struct {
+		Status   int            `json:"status"`
+		Response map[string]any `json:"response"`
+	}
+	decode := func(rec *httptest.ResponseRecorder) []exchange {
+		t.Helper()
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got %d %s, want 200", rec.Code, rec.Body)
+		}
+		var out []exchange
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decoding: %v", err)
+		}
+		return out
+	}
+
+	// First wake runs setup, then display.
+	first := decode(post("/simulate/hallway/wake?source=timer&model=reterminal_e1003"))
+	if len(first) != 2 || first[0].Response["status"] != float64(200) || first[1].Response["status"] != float64(0) {
+		t.Fatalf("got %+v, want setup then display", first)
+	}
+	if diff := cmp.Diff(render.Target{Name: "hallway", Model: "reterminal_e1003", Rotation: 90}, withoutWake(stub.target)); diff != "" {
+		t.Errorf("target (-want +got):\n%s", diff)
+	}
+
+	// The image the display response names is served on the admin listener.
+	filename := first[1].Response["filename"].(string)
+	if rec := get(t, h, "/images/"+filename+".png"); rec.Code != http.StatusOK {
+		t.Errorf("got %d for the image, want 200", rec.Code)
+	}
+
+	// Later wakes reuse the key.
+	second := decode(post("/simulate/hallway/wake?source=button&model=reterminal_e1003"))
+	if len(second) != 1 || second[0].Response["refresh_rate"] != float64(300) {
+		t.Errorf("got %+v, want one display with refresh_rate 300", second)
+	}
+}
+
+func TestSimulateErrors(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+		url  string
+		want int
+	}{
+		{"unknown device", "/simulate/garage/wake?source=timer&model=reterminal_e1001", http.StatusNotFound},
+		{"unknown model", "/simulate/hallway/wake?source=timer&model=kindle", http.StatusBadRequest},
+		{"bad source", "/simulate/hallway/wake?source=powercycle&model=reterminal_e1001", http.StatusBadRequest},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			h, _ := newHandler(t)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, testCase.url, nil))
+			if rec.Code != testCase.want {
+				t.Errorf("got %d, want %d", rec.Code, testCase.want)
+			}
+		})
+	}
+}
+
+func TestSimulatePage(t *testing.T) {
+	t.Parallel()
+	h, _ := newHandler(t)
+	if rec := get(t, h, "/simulate/hallway"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "AA:BB:CC:DD:EE:FF") {
+		t.Errorf("got %d, want 200 naming the MAC", rec.Code)
+	}
+	if rec := get(t, h, "/simulate/garage"); rec.Code != http.StatusNotFound {
+		t.Errorf("got %d for an unknown device, want 404", rec.Code)
+	}
+}
+
+func withoutWake(t render.Target) render.Target {
+	t.Wake = nil
+	return t
 }

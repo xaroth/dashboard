@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>simulate {{.Device.Name}}</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; background: #eee; color: #111; }
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
+  button { font: inherit; padding: 6px 14px; }
+  .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  #screen { display: block; background: #fff; border: 16px solid #222; border-radius: 10px; max-width: 900px; max-height: 80vh; }
+  pre { background: #fff; padding: 12px; max-width: 640px; overflow: auto; font-size: 12px; }
+</style>
+</head>
+<body>
+<p><a href="/">dashboard</a></p>
+<h1>{{.Device.Name}}</h1>
+<p>{{.Device.MAC}} · rotation {{.Device.Rotation}} · pages {{range $i, $p := .Device.Pages}}{{if $i}}, {{end}}{{$p}}{{end}}</p>
+<div class="controls">
+  <label>Model <select id="model">{{range .Models}}<option{{if eq . $.Device.Model}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+  <button data-source="timer">Timer wake</button>
+  <button data-source="button">Button press</button>
+  <span id="info"></span>
+</div>
+<div class="layout">
+  <img id="screen" alt="no image yet">
+  <pre id="log"></pre>
+</div>
+<script>
+const device = {{.Device.Name}};
+async function wake(source) {
+  const model = document.getElementById("model").value;
+  const res = await fetch(`/simulate/${encodeURIComponent(device)}/wake?source=${source}&model=${model}`, { method: "POST" });
+  const text = await res.text();
+  if (!res.ok) {
+    document.getElementById("log").textContent = text;
+    return;
+  }
+  const log = JSON.parse(text);
+  document.getElementById("log").textContent = JSON.stringify(log, null, 2);
+  const display = log[log.length - 1].response;
+  if (display.filename) {
+    document.getElementById("screen").src = `/images/${display.filename}.png`;
+    document.getElementById("info").textContent = `${display.filename}, next wake in ${display.refresh_rate} s`;
+  }
+}
+for (const b of document.querySelectorAll("button[data-source]")) {
+  b.addEventListener("click", () => wake(b.dataset.source));
+}
+wake("timer");
+</script>
+</body>
+</html>

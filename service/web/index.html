@@ -17,7 +17,8 @@
 
 <h2>Devices</h2>
 {{range .Devices}}{{$d := .}}
-<h3>{{.Name}} <small>rotation {{.Rotation}}</small></h3>
+<h3>{{.Name}} <small>{{.MAC}} · {{.Model}} · rotation {{.Rotation}} · <a href="/simulate/{{.Name}}">simulate</a></small></h3>
+<p>{{with .Wake}}Last wake {{.At.Format "2006-01-02 15:04:05"}} ({{.Source}}), showing {{$d.Page}}{{else}}Not seen since start.{{end}}</p>
 <div class="row">
   {{range .Pages}}
   <figure>
@@ -28,6 +29,12 @@
 </div>
 {{else}}
 <p>No devices configured.</p>
+{{end}}
+
+{{with .Pending}}
+<h2>Pending devices</h2>
+<p>Asked for setup but not in the config:</p>
+<ul>{{range .}}<li>{{.MAC}}, last seen {{.Seen.Format "2006-01-02 15:04:05"}}</li>{{end}}</ul>
 {{end}}
 
 <h2>Pages</h2>
