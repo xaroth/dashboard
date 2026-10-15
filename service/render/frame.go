@@ -10,15 +10,11 @@ import (
 const maxHeader = 16 << 20
 
 // writeFrame writes a 4-byte big-endian length, then the JSON header.
-func writeFrame(w io.Writer, header any) error {
-	b, err := json.Marshal(header)
-	if err != nil {
-		return err
-	}
+func writeFrame(w io.Writer, b []byte) error {
 	buf := make([]byte, 4+len(b))
 	binary.BigEndian.PutUint32(buf, uint32(len(b)))
 	copy(buf[4:], b)
-	_, err = w.Write(buf)
+	_, err := w.Write(buf)
 	return err
 }
 

@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -20,6 +22,8 @@ const (
 	minBackoff = 500 * time.Millisecond
 	maxBackoff = 30 * time.Second
 )
+
+var ErrClosed = errors.New("renderer closed")
 
 // Viewport is the size a page is rendered at, after rotation.
 type Viewport struct {
@@ -43,24 +47,43 @@ type QueryDescriptor struct {
 // Process runs the Bun renderer and talks to it one request at a time. A dead
 // or desynced process is replaced on the next request, with backoff between starts.
 type Process struct {
-	Command []string
-	Dir     string
-	Log     *slog.Logger
+	command []string
+	dir     string
+	log     *slog.Logger
 
-	mu       sync.Mutex
-	cur      *proc
+	turn      chan struct{} // held by the one request in flight; select-able unlike a mutex
+	closing   chan struct{}
+	closeOnce sync.Once
+	hash      atomic.Pointer[string]
+
+	// Guarded by turn.
 	nextID   int64
-	hash     string
 	failures int
 	lastExit time.Time
-	closed   bool
+
+	// Written with turn held; read by Close without it.
+	curMu sync.Mutex
+	cur   *proc
 }
 
 type proc struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	exited chan struct{}
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   *bufio.Reader
+	exited   chan struct{}
+	exitedAt time.Time // set before exited is closed
+}
+
+// NewProcess returns a Process that runs command in dir. The process starts
+// on the first request.
+func NewProcess(command []string, dir string, log *slog.Logger) *Process {
+	return &Process{
+		command: command,
+		dir:     dir,
+		log:     log,
+		turn:    make(chan struct{}, 1),
+		closing: make(chan struct{}),
+	}
 }
 
 // Describe returns the bundled pages and the bundle hash.
@@ -90,42 +113,65 @@ func (p *Process) Render(ctx context.Context, page string, vp Viewport, props an
 
 // Hash is the bundle hash from the latest response; it changes after a rebuild.
 func (p *Process) Hash() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.hash
+	if h := p.hash.Load(); h != nil {
+		return *h
+	}
+	return ""
 }
 
-// Close stops the process; later calls fail.
+// Close stops the process, also while a request is in flight; later calls fail.
 func (p *Process) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.closed = true
-	p.stop()
+	p.closeOnce.Do(func() { close(p.closing) })
+	p.curMu.Lock()
+	cur := p.cur
+	p.curMu.Unlock()
+	if cur != nil {
+		cur.kill()
+		<-cur.exited
+	}
 	return nil
 }
 
 func (p *Process) call(ctx context.Context, req map[string]any) (response, []byte, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.closed {
-		return response{}, nil, errors.New("renderer closed")
+	select {
+	case p.turn <- struct{}{}:
+		defer func() { <-p.turn }()
+	case <-ctx.Done():
+		return response{}, nil, fmt.Errorf("renderer: %w", ctx.Err())
+	case <-p.closing:
+		return response{}, nil, ErrClosed
 	}
-	if err := p.ensure(ctx); err != nil {
-		return response{}, nil, err
+	select {
+	case <-p.closing:
+		return response{}, nil, ErrClosed
+	default:
 	}
+	if err := ctx.Err(); err != nil {
+		return response{}, nil, fmt.Errorf("renderer: %w", err)
+	}
+
 	p.nextID++
 	id := p.nextID
 	req["id"] = id
+	// Marshal before touching the process: bad props are the caller's error,
+	// not a reason to restart the renderer.
+	header, err := json.Marshal(req)
+	if err != nil {
+		return response{}, nil, fmt.Errorf("encoding request: %w", err)
+	}
+	cur, err := p.ensure(ctx)
+	if err != nil {
+		return response{}, nil, err
+	}
 
 	type result struct {
 		resp response
 		body []byte
 		err  error
 	}
-	cur := p.cur
 	ch := make(chan result, 1)
 	go func() {
-		if err := writeFrame(cur.stdin, req); err != nil {
+		if err := writeFrame(cur.stdin, header); err != nil {
 			ch <- result{err: fmt.Errorf("writing request: %w", err)}
 			return
 		}
@@ -134,6 +180,8 @@ func (p *Process) call(ctx context.Context, req map[string]any) (response, []byt
 	}()
 
 	select {
+	case <-p.closing:
+		return response{}, nil, ErrClosed
 	case <-ctx.Done():
 		// The response may still arrive; the stream is no longer in step.
 		p.stop()
@@ -149,7 +197,7 @@ func (p *Process) call(ctx context.Context, req map[string]any) (response, []byt
 		}
 		p.failures = 0
 		if r.resp.Hash != "" {
-			p.hash = r.resp.Hash
+			p.hash.Store(&r.resp.Hash)
 		}
 		if r.resp.Error != "" {
 			return r.resp, nil, fmt.Errorf("renderer: %s", r.resp.Error)
@@ -158,16 +206,18 @@ func (p *Process) call(ctx context.Context, req map[string]any) (response, []byt
 	}
 }
 
-// ensure starts the process if none is running, waiting out the backoff
-// after earlier failures. Called with mu held.
-func (p *Process) ensure(ctx context.Context) error {
+// ensure returns the running process, starting one if needed after waiting
+// out the backoff from earlier failures. Called with turn held.
+func (p *Process) ensure(ctx context.Context) (*proc, error) {
 	if p.cur != nil {
 		select {
 		case <-p.cur.exited:
-			p.Log.Warn("renderer exited", "err", p.cur.cmd.ProcessState)
-			p.stop()
+			p.log.Warn("renderer exited", "state", p.cur.cmd.ProcessState)
+			p.failures++
+			p.lastExit = p.cur.exitedAt
+			p.setCur(nil)
 		default:
-			return nil
+			return p.cur, nil
 		}
 	}
 	if p.failures > 0 {
@@ -175,58 +225,86 @@ func (p *Process) ensure(ctx context.Context) error {
 		if wait > 0 {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("renderer: waiting to restart: %w", ctx.Err())
+				return nil, fmt.Errorf("renderer: waiting to restart: %w", ctx.Err())
+			case <-p.closing:
+				return nil, ErrClosed
 			case <-time.After(wait):
 			}
 		}
 	}
+	if len(p.command) == 0 {
+		return nil, errors.New("renderer: no command")
+	}
 
-	cmd := exec.Command(p.Command[0], p.Command[1:]...)
-	cmd.Dir = p.Dir
+	cmd := exec.Command(p.command[0], p.command[1:]...)
+	cmd.Dir = p.dir
+	// Own process group, so a kill also reaches anything the renderer started.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
 		p.failures++
 		p.lastExit = time.Now()
-		return fmt.Errorf("starting renderer: %w", err)
+		return nil, fmt.Errorf("starting renderer: %w", err)
 	}
-	exited := make(chan struct{})
+	cur := &proc{cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 1<<20), exited: make(chan struct{})}
 	go func() {
 		s := bufio.NewScanner(stderr)
 		s.Buffer(make([]byte, 64<<10), 1<<20)
 		for s.Scan() {
-			p.Log.Info(s.Text(), "source", "renderer")
+			p.log.Info(s.Text(), "source", "renderer")
 		}
 		// An overlong line stops the scanner; keep draining so the child never blocks.
 		io.Copy(io.Discard, stderr)
 		// Wait after stderr is drained, as os/exec requires.
 		cmd.Wait()
-		close(exited)
+		cur.exitedAt = time.Now()
+		close(cur.exited)
 	}()
-	p.cur = &proc{cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 1<<20), exited: exited}
-	return nil
+	p.setCur(cur)
+	// Close reads cur after closing; checking closing after setting cur means
+	// one of the two always sees the other.
+	select {
+	case <-p.closing:
+		cur.kill()
+		<-cur.exited
+		return nil, ErrClosed
+	default:
+	}
+	return cur, nil
 }
 
 // stop kills the current process and counts it as a failure for backoff.
-// Called with mu held.
+// Called with turn held.
 func (p *Process) stop() {
-	if p.cur == nil {
+	cur := p.cur
+	if cur == nil {
 		return
 	}
-	p.cur.stdin.Close()
-	p.cur.cmd.Process.Kill()
-	<-p.cur.exited
-	p.cur = nil
+	p.setCur(nil)
+	cur.kill()
+	<-cur.exited
 	p.failures++
 	p.lastExit = time.Now()
+}
+
+func (p *Process) setCur(c *proc) {
+	p.curMu.Lock()
+	p.cur = c
+	p.curMu.Unlock()
+}
+
+func (c *proc) kill() {
+	c.stdin.Close()
+	syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
 }
