@@ -41,6 +41,18 @@ bunx tsc --noEmit
 go tool sqlc diff
 ```
 
+## Docker
+
+```sh
+docker build -t dashboard .
+docker run --rm -p 8080:8080 -p 8081:8081 \
+  -v "$PWD/config.yaml:/config/dashboard.yaml:ro" -v "$PWD/data:/data" dashboard
+```
+
+In the container config, set `listen.admin` to `0.0.0.0:8081` so the admin UI is reachable through the port mapping, and drop `data_dir` (defaults to `/data`). The health check expects the admin listener on port 8081. The service runs as uid 1000 (`bun`), which needs write access to `/data`.
+
+Publishing a GitHub release pushes the image to `ghcr.io/xaroth/dashboard`, tagged with the release version.
+
 ## Devices
 
 Point the device at the server in the TRMNL Wi-Fi captive portal (Advanced > Custom Server, the `listen.device` address) and add its MAC under `devices` in the config. An unconfigured MAC shows as pending in the admin UI.
