@@ -68,6 +68,7 @@ type Devices struct {
 	schedule  Schedule
 	log       *slog.Logger
 	now       func() time.Time
+	simulated bool
 
 	mu      sync.Mutex
 	byMAC   map[string]*state
@@ -102,6 +103,8 @@ type Options struct {
 	Schedule  Schedule
 	Log       *slog.Logger
 	Now       func() time.Time
+	// Simulated keeps wakes out of the device metrics, for the simulator.
+	Simulated bool
 }
 
 // Load runs the device migrations and returns the devices. A failing
@@ -118,6 +121,7 @@ func Load(ctx context.Context, o Options) (*Devices, error) {
 		schedule:  o.Schedule,
 		log:       o.Log,
 		now:       o.Now,
+		simulated: o.Simulated,
 		byMAC:     map[string]*state{},
 		byName:    map[string]*state{},
 		pending:   map[string]time.Time{},

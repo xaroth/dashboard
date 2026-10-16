@@ -9,6 +9,10 @@ import (
 	"math/rand/v2"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -111,22 +115,40 @@ func (s *Set) Update(ctx context.Context, name string) error {
 }
 
 // runUpdate calls Update with a timeout and records success, with the
-// snapshot it saved, or failure.
-func (s *Set) runUpdate(ctx context.Context, inst *instance) error {
+// snapshot it saved, or failure. A scheduled update starts its own trace; a
+// manual one is part of the request's.
+func (s *Set) runUpdate(ctx context.Context, inst *instance) (err error) {
 	inst.updating.Lock()
 	defer inst.updating.Unlock()
+	ctx, span := tracer.Start(ctx, inst.reg.name+".update", trace.WithAttributes(attribute.String("module", inst.reg.name)))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 	uctx, state := s.context(ctx, inst, s.writer, true)
 	uctx, cancel := context.WithTimeout(uctx, updateTimeout)
 	defer cancel()
-	err := inst.reg.update(uctx, inst.module)
+	start := time.Now()
+	err = inst.reg.update(uctx, inst.module)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	updateDuration.WithLabelValues(inst.reg.name).Observe(time.Since(start).Seconds())
 	if err != nil {
+		result := "failure"
+		if errors.Is(err, ErrAuth) {
+			result = "auth"
+		}
+		updatesTotal.WithLabelValues(inst.reg.name, result).Inc()
 		s.recordFailure(ctx, inst, err)
 		return err
 	}
+	updatesTotal.WithLabelValues(inst.reg.name, "success").Inc()
 	at := s.now()
+	lastSuccess.WithLabelValues(inst.reg.name).Set(float64(at.Unix()))
 	// The update itself worked; a failed write here is not a source failure to back off from.
 	if err := New(s.writer).RecordSuccess(ctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
 		inst.log.Error("recording update", "err", err)
