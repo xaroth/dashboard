@@ -57,6 +57,8 @@ type Process struct {
 	log             *slog.Logger
 	renderTimeout   time.Duration
 	describeTimeout time.Duration
+	now             func() time.Time
+	after           func(time.Duration) <-chan time.Time
 
 	turn      chan struct{} // held by the one request in flight; select-able unlike a mutex
 	closing   chan struct{}
@@ -89,6 +91,8 @@ func NewProcess(command []string, dir string, log *slog.Logger) *Process {
 		log:             log,
 		renderTimeout:   renderTimeout,
 		describeTimeout: describeTimeout,
+		now:             time.Now,
+		after:           time.After,
 		turn:            make(chan struct{}, 1),
 		closing:         make(chan struct{}),
 	}
@@ -182,25 +186,22 @@ func (p *Process) call(ctx context.Context, req map[string]any, timeout time.Dur
 		ch <- result{resp, body, err}
 	}()
 
-	expired := time.NewTimer(timeout)
+	expired := p.after(timeout)
 	select {
 	case <-p.closing:
-		expired.Stop()
 		return response{}, nil, ErrClosed
-	case <-expired.C:
+	case <-expired:
 		p.timedOut(req["op"], timeout)
 		return response{}, nil, fmt.Errorf("renderer: no response within %v: %w", timeout, context.DeadlineExceeded)
 	case r := <-ch:
-		expired.Stop()
 		return p.finish(r, id)
 	case <-ctx.Done():
 		draining = true
 		go func() {
 			defer func() { <-p.turn }()
-			defer expired.Stop()
 			select {
 			case <-p.closing:
-			case <-expired.C:
+			case <-expired:
 				p.timedOut(req["op"], timeout)
 			case r := <-ch:
 				p.finish(r, id)
@@ -255,14 +256,14 @@ func (p *Process) ensure(ctx context.Context) (*proc, error) {
 		}
 	}
 	if p.failures > 0 {
-		wait := min(minBackoff<<min(p.failures-1, 10), maxBackoff) - time.Since(p.lastExit)
+		wait := min(minBackoff<<min(p.failures-1, 10), maxBackoff) - p.now().Sub(p.lastExit)
 		if wait > 0 {
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("renderer: waiting to restart: %w", ctx.Err())
 			case <-p.closing:
 				return nil, ErrClosed
-			case <-time.After(wait):
+			case <-p.after(wait):
 			}
 		}
 	}
@@ -288,7 +289,7 @@ func (p *Process) ensure(ctx context.Context) (*proc, error) {
 	}
 	if err := cmd.Start(); err != nil {
 		p.failures++
-		p.lastExit = time.Now()
+		p.lastExit = p.now()
 		return nil, fmt.Errorf("starting renderer: %w", err)
 	}
 	cur := &proc{cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 1<<20), exited: make(chan struct{})}
@@ -302,7 +303,7 @@ func (p *Process) ensure(ctx context.Context) (*proc, error) {
 		io.Copy(io.Discard, stderr)
 		// Wait after stderr is drained, as os/exec requires.
 		cmd.Wait()
-		cur.exitedAt = time.Now()
+		cur.exitedAt = p.now()
 		close(cur.exited)
 	}()
 	p.setCur(cur)
@@ -329,7 +330,7 @@ func (p *Process) stop() {
 	cur.kill()
 	<-cur.exited
 	p.failures++
-	p.lastExit = time.Now()
+	p.lastExit = p.now()
 }
 
 func (p *Process) setCur(c *proc) {

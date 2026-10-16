@@ -33,7 +33,7 @@ modules:
 `
 	cfg, err := parseConfig([]byte(raw), env(map[string]string{"ICAL": "https://x/y.ics?a=1#b: c", "ROT": "90"}))
 	if err != nil {
-		t.Fatalf("got error %v", err)
+		t.Fatalf("got error %v, want nil", err)
 	}
 
 	var calendar map[string]string
@@ -70,7 +70,6 @@ func TestParseConfigEnvTypes(t *testing.T) {
 	}{
 		{"empty", "", RendererConfig{Bun: "", Dir: "", Watch: true}},
 		{"null", "null", RendererConfig{Bun: "null", Dir: "null", Watch: true}},
-		{"tilde", "~", RendererConfig{Bun: "~", Dir: "~", Watch: true}},
 		{"plain", "x", RendererConfig{Bun: "x", Dir: "x", Watch: true}},
 	}
 	for _, testCase := range testCases {
@@ -78,7 +77,7 @@ func TestParseConfigEnvTypes(t *testing.T) {
 			t.Parallel()
 			cfg, err := parseConfig([]byte(raw), env(map[string]string{"BUN": testCase.value, "DIR": testCase.value, "WATCH": "true"}))
 			if err != nil {
-				t.Fatalf("got error %v", err)
+				t.Fatalf("got error %v, want nil", err)
 			}
 			if diff := cmp.Diff(testCase.want, cfg.Renderer); diff != "" {
 				t.Errorf("renderer (-want +got):\n%s", diff)

@@ -171,7 +171,7 @@ func TestUpdateAndForecast(t *testing.T) {
 	for _, d := range f.Daily {
 		days = append(days, d.Date.In(ams).Format("01-02 15:04"))
 		if !d.Sunrise.Before(d.Sunset) {
-			t.Errorf("%s: sunrise %v not before sunset %v", d.Date, d.Sunrise, d.Sunset)
+			t.Errorf("%s: got sunrise %v, want it before sunset %v", d.Date, d.Sunrise, d.Sunset)
 		}
 	}
 	if diff := cmp.Diff([]string{"10-16 00:00", "10-17 00:00"}, days); diff != "" {
@@ -289,7 +289,7 @@ func TestForecastNullProbabilities(t *testing.T) {
 	fake := newFake(t)
 	var body map[string]any
 	if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
-		t.Fatal(err)
+		t.Fatalf("decoding fixture: %v", err)
 	}
 	body["hourly"].(map[string]any)["precipitation_probability"].([]any)[1] = nil
 	body["daily"].(map[string]any)["precipitation_probability_max"].([]any)[1] = nil
@@ -339,7 +339,7 @@ func TestForecastModel(t *testing.T) {
 			fake := newFake(t)
 			var body map[string]any
 			if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
-				t.Fatal(err)
+				t.Fatalf("decoding fixture: %v", err)
 			}
 			nullTail := func(series map[string]any, nulls map[string]int) int {
 				n := len(series["time"].([]any))
@@ -420,6 +420,6 @@ func TestForecastRejectsNegative(t *testing.T) {
 	set := load(t, t.TempDir(), newFake(t), "")
 	res := set.Resolve(t.Context(), "weather", "forecast", map[string]any{"hours": -1})
 	if res.Error == "" {
-		t.Error("got no error for negative hours")
+		t.Error("got no error for negative hours, want one")
 	}
 }

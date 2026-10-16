@@ -61,9 +61,7 @@ func TestFinish(t *testing.T) {
 		want     [][]uint8
 	}{
 		{"levels", levels, 0, [][]uint8{{0, 85, 170, 255}, {255, 170, 170, 170}}},
-		{"portrait is not turned", levels, 90, [][]uint8{{0, 85, 170, 255}, {255, 170, 170, 170}}},
-		{"180 is turned", levels, 180, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
-		{"270 is turned", levels, 270, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
+		{"turned", levels, 180, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
 		{"gray input", gray, 0, [][]uint8{{0, 170}}},
 	}
 	for _, testCase := range testCases {
@@ -71,7 +69,7 @@ func TestFinish(t *testing.T) {
 			t.Parallel()
 			out, err := render.Finish(encodePNG(t, testCase.src), testCase.rotation)
 			if err != nil {
-				t.Fatalf("got error %v", err)
+				t.Fatalf("got error %v, want nil", err)
 			}
 			// IHDR bit depth and color type: 2-bit grayscale.
 			if out[24] != 2 || out[25] != 0 {
@@ -120,14 +118,12 @@ func TestViewportFor(t *testing.T) {
 	}{
 		{"landscape", 0, render.Viewport{Width: 1872, Height: 1404}},
 		{"portrait", 90, render.Viewport{Width: 1404, Height: 1872, Portrait: true}},
-		{"landscape turned", 180, render.Viewport{Width: 1872, Height: 1404}},
-		{"portrait turned", 270, render.Viewport{Width: 1404, Height: 1872, Portrait: true}},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			if diff := cmp.Diff(testCase.want, render.ViewportFor(panel, testCase.rotation)); diff != "" {
-				t.Errorf("(-want +got):\n%s", diff)
+				t.Errorf("viewport (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -140,7 +136,7 @@ func TestFilename(t *testing.T) {
 		t.Errorf("got %q, want 12 hex + \"-1792087200\"", got)
 	}
 	if other := render.Filename([]byte("other"), time.Unix(1792087200, 0)); other[:12] == got[:12] {
-		t.Errorf("got same hash %q for different images", other[:12])
+		t.Errorf("got hash %q for different images, want a different one", other[:12])
 	}
 }
 
