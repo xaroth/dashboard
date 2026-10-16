@@ -46,7 +46,7 @@ func testConfig(tb testing.TB, device, admin string) Config {
 
 func newService(tb testing.TB, cfg Config) (*Service, *render.FakeRenderer) {
 	tb.Helper()
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
+	stub := render.NewFakeRenderer(tb, render.ExpectPages(render.PageInfo{Name: "e1001/hello"}))
 	s, err := New(tb.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
 	if err != nil {
 		tb.Fatalf("New: %v", err)
@@ -54,17 +54,41 @@ func newService(tb testing.TB, cfg Config) (*Service, *render.FakeRenderer) {
 	return s, stub
 }
 
-func TestNewRejectsUnknownPage(t *testing.T) {
+func TestNewErrors(t *testing.T) {
 	t.Parallel()
-	cfg := testConfig(t, "", "")
-	cfg.Devices["hallway"] = Device{MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello", "nope"}}
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
-	_, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
-	if err == nil || !strings.Contains(err.Error(), `"nope"`) {
-		t.Errorf("got %v, want error naming the missing page", err)
+	testCases := []struct {
+		name   string
+		mutate func(testing.TB, *Config)
+		want   string
+	}{
+		{"unknown page", func(_ testing.TB, cfg *Config) {
+			cfg.Devices["hallway"] = Device{MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello", "nope"}}
+		}, `page "nope" does not exist`},
+		{"unusable data dir", func(tb testing.TB, cfg *Config) {
+			// A file where the data directory should be.
+			cfg.DataDir = filepath.Join(tb.TempDir(), "file")
+			if err := os.WriteFile(cfg.DataDir, nil, 0o644); err != nil {
+				tb.Fatalf("writing file: %v", err)
+			}
+		}, "opening storage"},
+		{"unknown module", func(_ testing.TB, cfg *Config) {
+			cfg.Modules = map[string]yaml.Node{"nope": {}}
+		}, "no such module"},
 	}
-	if !stub.Closed() {
-		t.Error("renderer not closed after failed New")
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := testConfig(t, "", "")
+			testCase.mutate(t, &cfg)
+			stub := render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "e1001/hello"}))
+			_, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Errorf("got %v, want error containing %q", err, testCase.want)
+			}
+			if !stub.Closed() {
+				t.Error("got renderer open after a failed New, want it closed")
+			}
+		})
 	}
 }
 
@@ -73,38 +97,7 @@ func TestNewCreatesDatabase(t *testing.T) {
 	cfg := testConfig(t, "", "")
 	newService(t, cfg)
 	if _, err := os.Stat(filepath.Join(cfg.DataDir, storage.File)); err != nil {
-		t.Errorf("database file: %v", err)
-	}
-}
-
-func TestNewFailsOnUnusableDataDir(t *testing.T) {
-	t.Parallel()
-	cfg := testConfig(t, "", "")
-	// A file where the data directory should be.
-	cfg.DataDir = filepath.Join(t.TempDir(), "file")
-	if err := os.WriteFile(cfg.DataDir, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
-	if _, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub)); err == nil {
-		t.Error("got nil error, want one")
-	}
-	if !stub.Closed() {
-		t.Error("renderer not closed after failed New")
-	}
-}
-
-func TestNewRejectsUnknownModule(t *testing.T) {
-	t.Parallel()
-	cfg := testConfig(t, "", "")
-	cfg.Modules = map[string]yaml.Node{"nope": {}}
-	stub := render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"})
-	_, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub))
-	if err == nil || !strings.Contains(err.Error(), "no such module") {
-		t.Errorf("got %v, want an unknown module error", err)
-	}
-	if !stub.Closed() {
-		t.Error("renderer not closed after failed New")
+		t.Errorf("got %v, want the database file", err)
 	}
 }
 
@@ -134,7 +127,7 @@ func TestSimulatorIsSeparate(t *testing.T) {
 		Response map[string]any `json:"response"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &log); err != nil || len(log) != 2 {
-		t.Fatalf("simulated wake: got %d %s", rec.Code, rec.Body)
+		t.Fatalf("simulated wake: got %d %s, want setup then display", rec.Code, rec.Body)
 	}
 	image := "/images/" + log[1].Response["filename"].(string) + ".png"
 	if rec := get(t, s.Admin(), image); rec.Code != http.StatusOK {
@@ -147,7 +140,7 @@ func TestSimulatorIsSeparate(t *testing.T) {
 
 	// The real device still has no reported model or wake.
 	if body := get(t, s.Admin(), "/").Body.String(); !strings.Contains(body, "AA:BB:CC:DD:EE:FF · reterminal_e1001") {
-		t.Error("the simulated wake changed the real device's model")
+		t.Error("got the real device's model changed by the simulated wake, want it unchanged")
 	}
 }
 
@@ -174,7 +167,7 @@ func TestRunStopsOnCancel(t *testing.T) {
 			t.Errorf("got %v, want nil", err)
 		}
 		if !stub.Closed() {
-			t.Error("renderer not closed after Run")
+			t.Error("got renderer open after Run, want it closed")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
@@ -206,7 +199,7 @@ func (b *blockingRenderer) Close() error {
 func TestRunCancelsRequestsAfterDrain(t *testing.T) {
 	t.Parallel()
 	admin := freeAddr(t)
-	r := &blockingRenderer{FakeRenderer: render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"}), started: make(chan struct{})}
+	r := &blockingRenderer{FakeRenderer: render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "e1001/hello"})), started: make(chan struct{})}
 	s, err := New(t.Context(), testConfig(t, freeAddr(t), admin), slog.New(slog.DiscardHandler), WithRenderer(r))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -242,10 +235,10 @@ func TestRunCancelsRequestsAfterDrain(t *testing.T) {
 		t.Fatal("Run did not return: the running request was not cancelled")
 	}
 	if r.closedDuringRender.Load() {
-		t.Error("renderer closed while a request was still rendering")
+		t.Error("got renderer closed while a request was still rendering, want it closed after")
 	}
 	if !r.Closed() {
-		t.Error("renderer not closed after Run")
+		t.Error("got renderer open after Run, want it closed")
 	}
 }
 

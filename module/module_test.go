@@ -40,9 +40,11 @@ type testModule struct {
 	updates int
 }
 
+var errBadInit = errors.New("bad init")
+
 func (m *testModule) Initialize(_ context.Context, cfg *testConfig) error {
 	if cfg.Fail == "init" {
-		return errors.New("bad init")
+		return errBadInit
 	}
 	if cfg.Panic == "init" {
 		panic("boom")
@@ -187,7 +189,7 @@ func TestLoad(t *testing.T) {
 	}
 	var n int
 	if err := db.Reader.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM goose_test").Scan(&n); err != nil || n == 0 {
-		t.Errorf("module migrations not applied: %d, %v", n, err)
+		t.Errorf("got %d module migration rows (%v), want at least 1", n, err)
 	}
 }
 
@@ -203,7 +205,7 @@ func TestDefineRejectsZeroInterval(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
-			t.Error("Define accepted a zero update interval")
+			t.Error("got no panic for a zero update interval, want one")
 		}
 	}()
 	module.Define[testModule, testConfig]("zero", func() *testConfig { return &testConfig{} }, module.WithUpdateInterval(0))
@@ -239,7 +241,62 @@ func TestUpdatePanic(t *testing.T) {
 	}
 }
 
+func TestUpdateErrors(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name   string
+		yaml   string
+		module string
+		want   error
+	}{
+		{"unknown module", "test: {key: k}", "nope", module.ErrUnknownModule},
+		{"initialize failed", "test: {key: k, fail: init}", "test", errBadInit},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			set, _ := load(t.Context(), t, testCase.yaml)
+			if err := set.Update(t.Context(), testCase.module); !errors.Is(err, testCase.want) {
+				t.Errorf("got %v, want %v", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestStaleness(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		set, _ := load(t.Context(), t, "test: {key: k, schedule: {stale_after: 2h}}")
+		if err := set.Update(t.Context(), "test"); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		// Sequential: the clock only moves forward.
+		steps := []struct {
+			advance   time.Duration
+			wantStale []string
+		}{
+			{0, []string{}},
+			{2 * time.Hour, []string{}}, // stale only past stale_after
+			{time.Second, []string{"test"}},
+		}
+		for i, step := range steps {
+			time.Sleep(step.advance)
+			got, err := set.StaleModules(t.Context())
+			if err != nil {
+				t.Fatalf("step %d: StaleModules: %v", i, err)
+			}
+			if diff := cmp.Diff(step.wantStale, got); diff != "" {
+				t.Errorf("step %d: stale modules (-want +got):\n%s", i, diff)
+			}
+			if got, want := status(t, set).Stale, len(step.wantStale) > 0; got != want {
+				t.Errorf("step %d: got status stale %v, want %v", i, got, want)
+			}
+		}
+	})
+}
+
 func TestSchedulePanics(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{"enabled", "update"} {
 		t.Run(in, func(t *testing.T) {
 			run(t, "test: {key: k, panic: "+in+"}", func(t *testing.T, set *module.Set, db *storage.DB) {
@@ -258,6 +315,8 @@ func TestSchedulePanics(t *testing.T) {
 
 // run starts the schedule in a synctest bubble and stops it at the end.
 func run(t *testing.T, src string, check func(t *testing.T, set *module.Set, db *storage.DB)) {
+	t.Helper()
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		set, db := load(ctx, t, src)
@@ -301,7 +360,7 @@ func TestScheduleSuccess(t *testing.T) {
 		synctest.Wait()
 		got := status(t, set)
 		if got.Phase != module.PhaseWaiting || got.FetchedAt == nil || got.Error != "" || got.Stale {
-			t.Fatalf("after first update: got %+v", got)
+			t.Fatalf("after first update: got %+v, want waiting, fetched, fresh", got)
 		}
 		if want := got.FetchedAt.Add(10 * time.Minute); !got.NextRun.Equal(want) {
 			t.Errorf("got next run %v, want %v", got.NextRun, want)
@@ -330,7 +389,7 @@ func TestScheduleBackoff(t *testing.T) {
 		waitFirstAttempt(t, set)
 		got := status(t, set)
 		if got.Phase != module.PhaseFailed || got.Error != "source down" || got.FetchedAt != nil {
-			t.Fatalf("after first failure: got %+v", got)
+			t.Fatalf("after first failure: got %+v, want failed with the error, never fetched", got)
 		}
 		if d := got.NextRun.Sub(*got.AttemptedAt); d != 30*time.Second {
 			t.Errorf("got first retry in %v, want 30s", d)

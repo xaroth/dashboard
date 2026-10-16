@@ -16,15 +16,19 @@ func TestStore(t *testing.T) {
 
 	testCases := []struct {
 		name string
+		key  string
 		want bool
 	}{
-		{"a", true},
-		{"b", false},
-		{"c", true},
+		{"refreshed", "a", true},
+		{"evicted", "b", false},
+		{"newest", "c", true},
 	}
 	for _, testCase := range testCases {
-		if _, ok := s.Get(testCase.name); ok != testCase.want {
-			t.Errorf("Get(%q): got %v, want %v", testCase.name, ok, testCase.want)
-		}
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if _, ok := s.Get(testCase.key); ok != testCase.want {
+				t.Errorf("got %v, want %v", ok, testCase.want)
+			}
+		})
 	}
 }

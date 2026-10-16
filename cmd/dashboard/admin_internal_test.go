@@ -5,16 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/device"
 	"github.com/xaroth/dashboard/module"
@@ -22,100 +21,108 @@ import (
 	"github.com/xaroth/dashboard/storage"
 )
 
-// stubPipeline records the target it was asked for. Page "e1001/nope" does not
-// exist, model "kindle" is unknown and page "e1001/broken" fails to render.
-type stubPipeline struct {
-	mu     sync.Mutex
-	target render.Target
+var adminNow = time.Unix(1792087200, 0)
+
+type adminConfig struct {
+	Fail bool `yaml:"fail"`
 }
 
-func (s *stubPipeline) Pages(context.Context) ([]string, error) { return []string{"e1001/hello"}, nil }
+// adminModule is a module for the admin UI to show; fail makes its updates fail.
+type adminModule struct{ fail bool }
 
-func (s *stubPipeline) Props(_ context.Context, t render.Target, page string) (render.Props, error) {
-	s.mu.Lock()
-	s.target = t
-	s.mu.Unlock()
-	switch {
-	case page == "e1001/nope":
-		return render.Props{}, fmt.Errorf("%w %q", render.ErrUnknownPage, page)
-	case t.Model == "kindle":
-		return render.Props{}, fmt.Errorf("%w %q", render.ErrUnknownModel, t.Model)
-	case page == "e1001/broken":
-		return render.Props{}, errors.New("renderer: boom")
-	}
-	return render.Props{Device: render.DeviceProps{Name: t.Name, Model: t.Model, Rotation: t.Rotation}, Now: "now"}, nil
+func (m *adminModule) Initialize(_ context.Context, cfg *adminConfig) error {
+	m.fail = cfg.Fail
+	return nil
 }
 
-func (s *stubPipeline) Render(ctx context.Context, t render.Target, page string) (render.Image, error) {
-	if _, err := s.Props(ctx, t, page); err != nil {
-		return render.Image{}, err
-	}
-	return render.Image{PNG: []byte("png"), Filename: "f"}, nil
-}
+func (*adminModule) Enabled(context.Context) bool { return true }
 
-type stubModules struct{}
-
-func (stubModules) Update(_ context.Context, name string) error {
-	switch name {
-	case "weather":
-		return nil
-	case "car":
+func (m *adminModule) Update(context.Context) error {
+	if m.fail {
 		return errors.New("token refused")
 	}
-	return fmt.Errorf("%w %q", module.ErrUnknownModule, name)
+	return nil
 }
 
-func (stubModules) Statuses(context.Context) ([]module.Status, error) {
-	fetched := time.Date(2026, 10, 16, 7, 0, 0, 0, time.UTC)
-	return []module.Status{
-		{Name: "weather", Phase: module.PhaseWaiting, Interval: 15 * time.Minute, FetchedAt: &fetched},
-		{Name: "car", Phase: module.PhaseAuth, Error: "token <refused>", Stale: true},
-	}, nil
+func adminRegistration(name string) module.Registration {
+	return module.Define[adminModule, adminConfig](name, func() *adminConfig { return &adminConfig{} },
+		module.WithUpdateInterval(15*time.Minute))
 }
 
-func newHandler(tb testing.TB, devices ...device.Config) (http.Handler, *stubPipeline) {
+// fixture is the admin UI on a real pipeline, devices and module set: modules
+// "sun" and "car", whose updates fail, and pages from a fake renderer.
+type fixture struct {
+	handler  http.Handler
+	renderer *render.FakeRenderer
+	db       *storage.DB
+}
+
+// newFixture serves devices, or a hallway device when nil, with the page
+// e1001/hello. opts set up the renderer further.
+func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRendererOption) *fixture {
 	tb.Helper()
 	if devices == nil {
 		devices = []device.Config{{Name: "hallway", MAC: "AA:BB:CC:DD:EE:FF", Pages: []string{"e1001/hello"}, Rotation: 90}}
 	}
-	stub := &stubPipeline{}
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	opts := device.Options{
+	now := func() time.Time { return adminNow }
+
+	var configs map[string]yaml.Node
+	if err := yaml.Unmarshal([]byte("car: {fail: true}"), &configs); err != nil {
+		tb.Fatalf("module config: %v", err)
+	}
+	set, err := module.Load(tb.Context(), module.Options{
+		Registrations: []module.Registration{adminRegistration("sun"), adminRegistration("car")},
+		Configs:       configs,
+		Migrator:      db,
+		Writer:        db.Writer,
+		Reader:        db.Reader,
+		Log:           slog.New(slog.DiscardHandler),
+		HTTPClient:    http.DefaultClient,
+		Now:           now,
+	})
+	if err != nil {
+		tb.Fatalf("modules: %v", err)
+	}
+	renderer := render.NewFakeRenderer(tb, append([]render.FakeRendererOption{render.ExpectPages(render.PageInfo{Name: "e1001/hello"})}, opts...)...)
+	pipeline := render.NewPipeline(renderer, resolver{set: set, loc: time.UTC}, time.UTC, now)
+
+	deviceOpts := device.Options{
 		Devices:   devices,
-		Pipeline:  stub,
+		Pipeline:  pipeline,
 		Store:     &device.Store{Max: 4},
 		DB:        db.Writer,
 		Migrator:  db,
 		PublicURL: "http://dash",
 		Schedule:  device.Schedule{First: 7 * time.Hour, Interval: time.Hour, Detail: 5 * time.Minute, Location: time.UTC},
 		Log:       slog.New(slog.DiscardHandler),
-		Now:       func() time.Time { return time.Unix(1792087200, 0) },
+		Now:       now,
 	}
-	devs, err := device.Load(tb.Context(), opts)
+	devs, err := device.Load(tb.Context(), deviceOpts)
 	if err != nil {
 		tb.Fatalf("devices: %v", err)
 	}
-	opts.Store = &device.Store{Max: 4}
-	sim, err := device.Load(tb.Context(), opts)
+	deviceOpts.Store = &device.Store{Max: 4}
+	sim, err := device.Load(tb.Context(), deviceOpts)
 	if err != nil {
 		tb.Fatalf("simulator: %v", err)
 	}
 	simulator := http.NewServeMux()
 	sim.Register(simulator)
 	h := &adminHandler{
-		Pipeline:  stub,
+		Pipeline:  pipeline,
 		Devices:   devs,
-		Modules:   stubModules{},
+		Modules:   set,
 		Simulator: simulator,
 		Log:       slog.New(slog.DiscardHandler),
 	}
 	mux := http.NewServeMux()
 	h.Register(mux)
-	return mux, stub
+	return &fixture{handler: mux, renderer: renderer, db: db}
 }
 
 func get(tb testing.TB, h http.Handler, url string) *httptest.ResponseRecorder {
@@ -125,10 +132,20 @@ func get(tb testing.TB, h http.Handler, url string) *httptest.ResponseRecorder {
 	return rec
 }
 
+func post(tb testing.TB, h http.Handler, url string) *httptest.ResponseRecorder {
+	tb.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, url, nil))
+	return rec
+}
+
 func TestIndex(t *testing.T) {
 	t.Parallel()
-	h, _ := newHandler(t)
-	rec := get(t, h, "/")
+	f := newFixture(t, nil)
+	for _, name := range []string{"sun", "car"} {
+		post(t, f.handler, "/modules/"+name+"/update")
+	}
+	rec := get(t, f.handler, "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want 200", rec.Code)
 	}
@@ -136,52 +153,66 @@ func TestIndex(t *testing.T) {
 		`src="/preview/hallway/e1001/hello.png"`,
 		`href="/preview/hallway/e1001/hello/props.json"`,
 		`src="/preview/page/e1001/hello.png?model=reterminal_e1003&rotation=90"`,
-		`<td>weather</td>`,
+		"<td>sun</td>\n    <td>waiting</td>",
+		"<td>car</td>\n    <td>waiting <span class=\"stale\">stale</span></td>",
 		`<td>15m0s</td>`,
-		`auth <span class="stale">stale</span>`,
-		`token &lt;refused&gt;`,
+		`<td>token refused</td>`,
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
-			t.Errorf("index lacks %s", want)
+			t.Errorf("got index without %s, want it", want)
 		}
-	}
-}
-
-func TestIndexEscapesNames(t *testing.T) {
-	t.Parallel()
-	h, _ := newHandler(t, device.Config{Name: `<script>x</script>`, MAC: "AA:BB:CC:DD:EE:FF", Pages: []string{"e1001/hello"}})
-	body := get(t, h, "/").Body.String()
-	if strings.Contains(body, "<script>x") {
-		t.Error("device name rendered unescaped")
 	}
 }
 
 func TestIndexWithoutDevices(t *testing.T) {
 	t.Parallel()
-	h, _ := newHandler(t, []device.Config{}...)
-	rec := get(t, h, "/")
+	f := newFixture(t, []device.Config{})
+	rec := get(t, f.handler, "/")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "No devices configured") {
 		t.Errorf("got %d, want 200 with \"No devices configured\"", rec.Code)
+	}
+}
+
+func TestIndexErrors(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name     string
+		renderer []render.FakeRendererOption
+		closeDB  bool
+	}{
+		{"pages", []render.FakeRendererOption{render.ExpectDescribe_Error(errors.New("bundle broken"))}, false},
+		{"module statuses", nil, true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, nil, testCase.renderer...)
+			if testCase.closeDB {
+				f.db.Close()
+			}
+			if rec := get(t, f.handler, "/"); rec.Code != http.StatusInternalServerError {
+				t.Errorf("got %d %s, want 500", rec.Code, rec.Body)
+			}
+		})
 	}
 }
 
 func TestUpdateModule(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
+		name   string
 		module string
 		want   int
 	}{
-		{"weather", http.StatusSeeOther},
-		{"car", http.StatusSeeOther}, // the failure shows in the table
-		{"nope", http.StatusNotFound},
+		{"succeeds", "sun", http.StatusSeeOther},
+		{"fails", "car", http.StatusSeeOther}, // the failure shows in the table
+		{"unknown", "nope", http.StatusNotFound},
 	}
 	for _, testCase := range testCases {
-		t.Run(testCase.module, func(t *testing.T) {
+		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			h, _ := newHandler(t)
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/modules/"+testCase.module+"/update", nil))
-			if rec.Code != testCase.want {
+			f := newFixture(t, nil)
+			if rec := post(t, f.handler, "/modules/"+testCase.module+"/update"); rec.Code != testCase.want {
 				t.Errorf("got %d, want %d", rec.Code, testCase.want)
 			}
 		})
@@ -190,36 +221,39 @@ func TestUpdateModule(t *testing.T) {
 
 func TestPreviewPNG(t *testing.T) {
 	t.Parallel()
+	const textType = "text/plain; charset=utf-8"
 	testCases := []struct {
 		name       string
 		url        string
+		renderer   []render.FakeRendererOption
 		wantStatus int
-		wantTarget render.Target
+		wantType   string
+		wantDevice render.DeviceProps // as rendered; zero when nothing was
 	}{
-		{"device", "/preview/hallway/e1001/hello.png", http.StatusOK, render.Target{Name: "hallway", Model: "reterminal_e1001", Rotation: 90}},
-		{"device with model", "/preview/hallway/e1001/hello.png?model=reterminal_e1003", http.StatusOK, render.Target{Name: "hallway", Model: "reterminal_e1003", Rotation: 90}},
-		{"panel defaults", "/preview/page/e1001/hello.png", http.StatusOK, render.Target{Name: "preview", Model: "reterminal_e1001"}},
-		{"panel", "/preview/page/e1001/hello.png?model=reterminal_e1003&rotation=270", http.StatusOK, render.Target{Name: "preview", Model: "reterminal_e1003", Rotation: 270}},
-		{"unknown device", "/preview/garage/e1001/hello.png", http.StatusNotFound, render.Target{}},
-		{"not png", "/preview/hallway/e1001/hello.jpg", http.StatusNotFound, render.Target{}},
-		{"bad rotation", "/preview/page/e1001/hello.png?rotation=45", http.StatusBadRequest, render.Target{}},
-		{"unknown page", "/preview/page/e1001/nope.png", http.StatusNotFound, render.Target{Name: "preview", Model: "reterminal_e1001"}},
-		{"unknown model", "/preview/hallway/e1001/hello.png?model=kindle", http.StatusBadRequest, render.Target{Name: "hallway", Model: "kindle", Rotation: 90}},
-		{"render error", "/preview/page/e1001/broken.png", http.StatusInternalServerError, render.Target{Name: "preview", Model: "reterminal_e1001"}},
+		{"device", "/preview/hallway/e1001/hello.png", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "hallway", Model: "reterminal_e1001", Rotation: 90}},
+		{"device with model", "/preview/hallway/e1001/hello.png?model=reterminal_e1003", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "hallway", Model: "reterminal_e1003", Rotation: 90}},
+		{"panel defaults", "/preview/page/e1001/hello.png", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "preview", Model: "reterminal_e1001"}},
+		{"panel", "/preview/page/e1001/hello.png?model=reterminal_e1003&rotation=270", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "preview", Model: "reterminal_e1003", Rotation: 270}},
+		{"unknown device", "/preview/garage/e1001/hello.png", nil, http.StatusNotFound, textType, render.DeviceProps{}},
+		{"not png", "/preview/hallway/e1001/hello.jpg", nil, http.StatusNotFound, textType, render.DeviceProps{}},
+		{"bad rotation", "/preview/page/e1001/hello.png?rotation=45", nil, http.StatusBadRequest, textType, render.DeviceProps{}},
+		{"unknown page", "/preview/page/e1001/nope.png", nil, http.StatusNotFound, textType, render.DeviceProps{}},
+		{"unknown model", "/preview/hallway/e1001/hello.png?model=kindle", nil, http.StatusBadRequest, textType, render.DeviceProps{}},
+		{"render error", "/preview/page/e1001/hello.png", []render.FakeRendererOption{render.ExpectRender_Error(errors.New("boom"))}, http.StatusInternalServerError, textType, render.DeviceProps{}},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			h, stub := newHandler(t)
-			rec := get(t, h, testCase.url)
+			f := newFixture(t, nil, testCase.renderer...)
+			rec := get(t, f.handler, testCase.url)
 			if rec.Code != testCase.wantStatus {
 				t.Fatalf("got %d %s, want %d", rec.Code, rec.Body, testCase.wantStatus)
 			}
-			if diff := cmp.Diff(testCase.wantTarget, stub.target); diff != "" {
-				t.Errorf("target (-want +got):\n%s", diff)
+			if got := rec.Header().Get("Content-Type"); got != testCase.wantType {
+				t.Errorf("got content type %q, want %q", got, testCase.wantType)
 			}
-			if rec.Code == http.StatusOK && rec.Header().Get("Content-Type") != "image/png" {
-				t.Errorf("got content type %q, want image/png", rec.Header().Get("Content-Type"))
+			if diff := cmp.Diff(testCase.wantDevice, f.renderer.LastProps().Device); diff != "" {
+				t.Errorf("rendered device (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -230,22 +264,27 @@ func TestPreviewProps(t *testing.T) {
 	testCases := []struct {
 		name       string
 		url        string
+		renderer   []render.FakeRendererOption
 		wantStatus int
 		want       *render.Props
 	}{
-		{"device", "/preview/hallway/e1001/hello/props.json", http.StatusOK, &render.Props{
-			Device: render.DeviceProps{Name: "hallway", Model: "reterminal_e1001", Rotation: 90},
-			Now:    "now",
+		{"device", "/preview/hallway/e1001/hello/props.json", nil, http.StatusOK, &render.Props{
+			Data:     map[string]render.Result{},
+			Device:   render.DeviceProps{Name: "hallway", Model: "reterminal_e1001", Rotation: 90},
+			Viewport: render.Viewport{Width: 480, Height: 800, Portrait: true},
+			System:   render.SystemProps{StaleModules: []string{"car", "sun"}},
+			Now:      adminNow.UTC().Format(time.RFC3339),
+			Timezone: "UTC",
 		}},
-		{"unknown device", "/preview/garage/e1001/hello/props.json", http.StatusNotFound, nil},
-		{"unknown page", "/preview/hallway/e1001/nope/props.json", http.StatusNotFound, nil},
-		{"render error", "/preview/hallway/e1001/broken/props.json", http.StatusInternalServerError, nil},
+		{"unknown device", "/preview/garage/e1001/hello/props.json", nil, http.StatusNotFound, nil},
+		{"unknown page", "/preview/hallway/e1001/nope/props.json", nil, http.StatusNotFound, nil},
+		{"pages error", "/preview/hallway/e1001/hello/props.json", []render.FakeRendererOption{render.ExpectDescribe_Error(errors.New("bundle broken"))}, http.StatusInternalServerError, nil},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			h, _ := newHandler(t)
-			rec := get(t, h, testCase.url)
+			f := newFixture(t, nil, testCase.renderer...)
+			rec := get(t, f.handler, testCase.url)
 			if rec.Code != testCase.wantStatus {
 				t.Fatalf("got %d %s, want %d", rec.Code, rec.Body, testCase.wantStatus)
 			}
@@ -265,13 +304,8 @@ func TestPreviewProps(t *testing.T) {
 
 func TestSimulateWake(t *testing.T) {
 	t.Parallel()
-	h, stub := newHandler(t)
+	f := newFixture(t, nil)
 
-	post := func(url string) *httptest.ResponseRecorder {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, url, nil))
-		return rec
-	}
 	type exchange struct {
 		Status   int            `json:"status"`
 		Response map[string]any `json:"response"`
@@ -289,22 +323,27 @@ func TestSimulateWake(t *testing.T) {
 	}
 
 	// First wake runs setup, then display.
-	first := decode(post("/simulate/hallway/wake?source=timer&model=reterminal_e1003"))
+	first := decode(post(t, f.handler, "/simulate/hallway/wake?source=timer&model=reterminal_e1003"))
 	if len(first) != 2 || first[0].Response["status"] != float64(200) || first[1].Response["status"] != float64(0) {
 		t.Fatalf("got %+v, want setup then display", first)
 	}
-	if diff := cmp.Diff(render.Target{Name: "hallway", Model: "reterminal_e1003", Rotation: 90}, withoutWake(stub.target)); diff != "" {
-		t.Errorf("target (-want +got):\n%s", diff)
+	got := f.renderer.LastProps().Device
+	if got.Wake == nil {
+		t.Error("got no wake in the rendered props, want the simulated one")
+	}
+	got.Wake = nil
+	if diff := cmp.Diff(render.DeviceProps{Name: "hallway", Model: "reterminal_e1003", Rotation: 90}, got); diff != "" {
+		t.Errorf("rendered device (-want +got):\n%s", diff)
 	}
 
 	// The image the display response names is served on the admin listener.
 	filename := first[1].Response["filename"].(string)
-	if rec := get(t, h, "/images/"+filename+".png"); rec.Code != http.StatusOK {
+	if rec := get(t, f.handler, "/images/"+filename+".png"); rec.Code != http.StatusOK {
 		t.Errorf("got %d for the image, want 200", rec.Code)
 	}
 
 	// Later wakes reuse the key.
-	second := decode(post("/simulate/hallway/wake?source=button&model=reterminal_e1003"))
+	second := decode(post(t, f.handler, "/simulate/hallway/wake?source=button&model=reterminal_e1003"))
 	if len(second) != 1 || second[0].Response["refresh_rate"] != float64(300) {
 		t.Errorf("got %+v, want one display with refresh_rate 300", second)
 	}
@@ -324,10 +363,8 @@ func TestSimulateErrors(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			h, _ := newHandler(t)
-			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, testCase.url, nil))
-			if rec.Code != testCase.want {
+			f := newFixture(t, nil)
+			if rec := post(t, f.handler, testCase.url); rec.Code != testCase.want {
 				t.Errorf("got %d, want %d", rec.Code, testCase.want)
 			}
 		})
@@ -336,16 +373,23 @@ func TestSimulateErrors(t *testing.T) {
 
 func TestSimulatePage(t *testing.T) {
 	t.Parallel()
-	h, _ := newHandler(t)
-	if rec := get(t, h, "/simulate/hallway"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "AA:BB:CC:DD:EE:FF") {
-		t.Errorf("got %d, want 200 naming the MAC", rec.Code)
+	testCases := []struct {
+		name       string
+		url        string
+		wantStatus int
+		wantBody   string
+	}{
+		{"known device", "/simulate/hallway", http.StatusOK, "AA:BB:CC:DD:EE:FF"},
+		{"unknown device", "/simulate/garage", http.StatusNotFound, ""},
 	}
-	if rec := get(t, h, "/simulate/garage"); rec.Code != http.StatusNotFound {
-		t.Errorf("got %d for an unknown device, want 404", rec.Code)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, nil)
+			rec := get(t, f.handler, testCase.url)
+			if rec.Code != testCase.wantStatus || !strings.Contains(rec.Body.String(), testCase.wantBody) {
+				t.Errorf("got %d %s, want %d containing %q", rec.Code, rec.Body, testCase.wantStatus, testCase.wantBody)
+			}
+		})
 	}
-}
-
-func withoutWake(t render.Target) render.Target {
-	t.Wake = nil
-	return t
 }

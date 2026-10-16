@@ -77,7 +77,7 @@ func TestGenerate(t *testing.T) {
 	}
 	if *update {
 		if err := os.WriteFile("testdata/golden.ts", got, 0o644); err != nil {
-			t.Fatal(err)
+			t.Fatalf("writing golden: %v", err)
 		}
 	}
 	want, err := os.ReadFile("testdata/golden.ts")

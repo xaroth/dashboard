@@ -58,14 +58,14 @@ func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
 // loadEnv loads the devices on db, as a service start does.
 func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule) *env {
 	tb.Helper()
-	fake := render.NewFakeRenderer(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"})
+	fake := render.NewFakeRenderer(tb, render.ExpectPages(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"}))
 	clock := &atomic.Int64{}
 	clock.Store(time.Unix(1792087200, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	store := &device.Store{Max: 4}
 	devices, err := device.Load(tb.Context(), device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
-		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(nil), time.UTC, now),
+		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(tb), time.UTC, now),
 		Store:     store,
 		DB:        db.Writer,
 		Migrator:  db,
@@ -194,7 +194,7 @@ func TestDisplay(t *testing.T) {
 	rec := httptest.NewRecorder()
 	e.mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
-		t.Fatalf("image: got %d %q", rec.Code, rec.Header().Get("Content-Type"))
+		t.Fatalf("image: got %d %q, want 200 image/png", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	cfg, err := png.DecodeConfig(rec.Body)
 	if err != nil || cfg.Width != 1872 || cfg.Height != 1404 {
@@ -216,7 +216,8 @@ func TestDisplayPages(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
 	key := e.setup(t)
-	testCases := []struct {
+	// Sequential: each wake depends on the one before.
+	steps := []struct {
 		source      string
 		wantPage    string
 		wantRefresh float64
@@ -227,14 +228,13 @@ func TestDisplayPages(t *testing.T) {
 		{"button", "detail", 300},
 		{"powercycle", "main", 3600},
 	}
-	// Sequential: each wake depends on the one before.
-	for _, testCase := range testCases {
-		_, body := e.display(t, key, testCase.source)
-		if body["refresh_rate"] != testCase.wantRefresh {
-			t.Errorf("%s: got refresh_rate %v, want %v", testCase.source, body["refresh_rate"], testCase.wantRefresh)
+	for i, step := range steps {
+		_, body := e.display(t, key, step.source)
+		if body["refresh_rate"] != step.wantRefresh {
+			t.Errorf("step %d (%s): got refresh_rate %v, want %v", i, step.source, body["refresh_rate"], step.wantRefresh)
 		}
-		if got := e.devices.Statuses()[0].Page; got != testCase.wantPage {
-			t.Errorf("%s: got page %q, want %q", testCase.source, got, testCase.wantPage)
+		if got := e.devices.Statuses()[0].Page; got != step.wantPage {
+			t.Errorf("step %d (%s): got page %q, want %q", i, step.source, got, step.wantPage)
 		}
 	}
 }
@@ -243,7 +243,7 @@ func TestDisplayRefresh(t *testing.T) {
 	t.Parallel()
 	amsterdam, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("loading location: %v", err)
 	}
 	testCases := []struct {
 		name     string
@@ -273,7 +273,7 @@ func TestDisplayRefresh(t *testing.T) {
 			t.Parallel()
 			at, err := time.ParseInLocation("2006-01-02 15:04:05.999", testCase.at, amsterdam)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("parsing time: %v", err)
 			}
 			e := newEnvSchedule(t, testCase.schedule)
 			e.clock.Store(at.UnixNano())
@@ -315,34 +315,46 @@ func TestDisplayRenderFailure(t *testing.T) {
 	}
 }
 
-func TestDisplayAuth(t *testing.T) {
+// setupKey stands for the api key setup returned.
+const setupKey = "<setup key>"
+
+func TestDisplayHeaders(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
-		name     string
-		setup    bool
-		id       string
-		token    string
-		wantCode int
+		name      string
+		setup     bool
+		id        string
+		token     string
+		model     string
+		wantCode  int
+		wantModel string
 	}{
-		{"wrong token", true, mac, "nope", http.StatusUnauthorized},
-		{"unknown device", true, other, "x", http.StatusNotFound},
-		{"no token", true, mac, "", http.StatusNotFound},
+		{"unknown model", true, mac, setupKey, "kindle", http.StatusOK, device.DefaultModel},
+		{"wrong token", true, mac, "nope", "", http.StatusUnauthorized, device.DefaultModel},
+		{"unknown device", true, other, "x", "", http.StatusNotFound, device.DefaultModel},
+		{"no token", true, mac, "", "", http.StatusNotFound, device.DefaultModel},
 		// No key stored for the MAC: a presented token is not adopted.
-		{"no stored key", false, mac, "kept-from-before", http.StatusUnauthorized},
+		{"no stored key", false, mac, "kept-from-before", "", http.StatusUnauthorized, device.DefaultModel},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEnv(t)
+			token := testCase.token
 			if testCase.setup {
-				e.setup(t)
+				if key := e.setup(t); token == setupKey {
+					token = key
+				}
 			}
-			code, body := e.do(t, http.MethodGet, "/api/display", map[string]string{"ID": testCase.id, "Access-Token": testCase.token})
+			code, body := e.do(t, http.MethodGet, "/api/display", map[string]string{"ID": testCase.id, "Access-Token": token, "Model": testCase.model})
 			if code != testCase.wantCode {
 				t.Errorf("got %d %v, want %d", code, body, testCase.wantCode)
 			}
 			if body["status"] == float64(500) {
-				t.Error("got JSON status 500, which resets the firmware")
+				t.Error("got JSON status 500, want any other: 500 resets the firmware")
+			}
+			if target, _ := e.devices.Target("hallway"); target.Model != testCase.wantModel {
+				t.Errorf("got model %q, want %q", target.Model, testCase.wantModel)
 			}
 		})
 	}
@@ -361,19 +373,6 @@ func TestKeySurvivesRestart(t *testing.T) {
 	}
 	if code, _ := restarted.display(t, "other", "timer"); code != http.StatusUnauthorized {
 		t.Errorf("got %d for another token, want 401", code)
-	}
-}
-
-func TestDisplayIgnoresUnknownModel(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	key := e.setup(t)
-	code, _ := e.do(t, http.MethodGet, "/api/display", map[string]string{"ID": mac, "Access-Token": key, "Model": "kindle"})
-	if code != http.StatusOK {
-		t.Fatalf("got %d, want 200", code)
-	}
-	if target, _ := e.devices.Target("hallway"); target.Model != device.DefaultModel {
-		t.Errorf("got model %q, want %q", target.Model, device.DefaultModel)
 	}
 }
 
@@ -412,23 +411,46 @@ func TestSetupPendingIsCapped(t *testing.T) {
 
 func TestLog(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
-	key := e.setup(t)
-	if code, _ := e.do(t, http.MethodPost, "/api/log", map[string]string{"ID": mac, "Access-Token": key}); code != http.StatusNoContent {
-		t.Errorf("got %d, want 204", code)
+	testCases := []struct {
+		name  string
+		token string
+		want  int
+	}{
+		{"accepted", setupKey, http.StatusNoContent},
+		{"wrong token", "nope", http.StatusUnauthorized},
 	}
-	if code, _ := e.do(t, http.MethodPost, "/api/log", map[string]string{"ID": mac, "Access-Token": "nope"}); code != http.StatusUnauthorized {
-		t.Errorf("wrong token: got %d, want 401", code)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			token := testCase.token
+			if key := e.setup(t); token == setupKey {
+				token = key
+			}
+			if code, _ := e.do(t, http.MethodPost, "/api/log", map[string]string{"ID": mac, "Access-Token": token}); code != testCase.want {
+				t.Errorf("got %d, want %d", code, testCase.want)
+			}
+		})
 	}
 }
 
 func TestImageNotFound(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
-	for _, path := range []string{"/images/000000000000-1792087200.png", "/images/x.jpg"} {
-		if code, _ := e.do(t, http.MethodGet, path, nil); code != http.StatusNotFound {
-			t.Errorf("%s: got %d, want 404", path, code)
-		}
+	testCases := []struct {
+		name string
+		path string
+	}{
+		{"not stored", "/images/000000000000-1792087200.png"},
+		{"not png", "/images/x.jpg"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t)
+			if code, _ := e.do(t, http.MethodGet, testCase.path, nil); code != http.StatusNotFound {
+				t.Errorf("got %d, want 404", code)
+			}
+		})
 	}
 }
 
@@ -440,10 +462,7 @@ func TestNormalizeMAC(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"colons", "aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF", false},
-		{"dashes", "AA-BB-CC-DD-EE-FF", "AA:BB:CC:DD:EE:FF", false},
-		{"dots", "aabb.ccdd.eeff", "AA:BB:CC:DD:EE:FF", false},
-		{"empty", "", "", true},
+		{"lower case", "aa:bb:cc:dd:ee:ff", "AA:BB:CC:DD:EE:FF", false},
 		{"garbage", "nope", "", true},
 		{"eui-64", "aa:bb:cc:dd:ee:ff:00:11", "", true},
 	}

@@ -28,10 +28,11 @@ func newPipeline(tb testing.TB) (*render.Pipeline, *render.FakeRenderer) {
 
 func newPipelineWithResolver(tb testing.TB) (*render.Pipeline, *render.FakeRenderer, *render.FakeResolver) {
 	tb.Helper()
-	fake := render.NewFakeRenderer(testPages...)
-	res := render.NewFakeResolver(map[string]render.Result{
-		"p1.power": {Value: []float64{1, 2}, FetchedAt: &testFetched},
-	}, "car")
+	fake := render.NewFakeRenderer(tb, render.ExpectPages(testPages...))
+	res := render.NewFakeResolver(tb,
+		render.ExpectResult("p1.power", render.Result{Value: []float64{1, 2}, FetchedAt: &testFetched}),
+		render.ExpectStale("car"),
+	)
 	loc, err := time.LoadLocation("Europe/Amsterdam")
 	if err != nil {
 		tb.Fatalf("loading location: %v", err)
@@ -131,7 +132,7 @@ func TestPipelineSeesRebuilds(t *testing.T) {
 		t.Errorf("pages (-want +got):\n%s", diff)
 	}
 	if _, err := p.Props(t.Context(), render.Target{Model: "reterminal_e1001"}, "energy"); err != nil {
-		t.Errorf("Props for new page: %v", err)
+		t.Errorf("got %v for the new page, want nil", err)
 	}
 }
 

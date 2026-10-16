@@ -91,6 +91,7 @@ func TestCheck(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		set, _ := loadWith(ctx, t, "test: {key: k}", queryRegistration())
@@ -169,7 +170,7 @@ func TestDefineRejectsForeignQuery(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
-			t.Error("Define accepted a query method of another module type")
+			t.Error("got no panic for a query method of another module type, want one")
 		}
 	}()
 	module.Define[testModule, testConfig]("test", func() *testConfig { return &testConfig{} },
