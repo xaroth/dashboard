@@ -1,17 +1,24 @@
 # Read-only Modbus TCP FC03 against Hoymiles DTU-Pro-S.
 import socket, struct, sys
+if len(sys.argv) < 2:
+    sys.exit(f'usage: {sys.argv[0]} <dtu-host>')
 host = sys.argv[1]
+
+def recv_exact(sock, n):
+    buf = b''
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise EOFError(f'connection closed after {len(buf)} of {n} bytes')
+        buf += chunk
+    return buf
 
 def fc03(sock, tid, addr, count, unit=1):
     sock.sendall(struct.pack('>HHHBBHH', tid, 0, 6, unit, 3, addr, count))
-    hdr = sock.recv(9)
-    if len(hdr) < 9 or hdr[7] & 0x80:
-        raise RuntimeError(f'error resp {hdr.hex()}')
-    n = hdr[8]
-    data = b''
-    while len(data) < n:
-        data += sock.recv(n - len(data))
-    return data
+    hdr = recv_exact(sock, 8)
+    if hdr[7] & 0x80:
+        raise RuntimeError(f'exception response {hdr.hex()} code {recv_exact(sock, 1).hex()}')
+    return recv_exact(sock, recv_exact(sock, 1)[0])
 
 s = socket.create_connection((host, 502), timeout=5)
 print('dtu serial', fc03(s, 1, 0x2000, 3).hex())

@@ -1,21 +1,28 @@
 listen:
   device: "0.0.0.0:8080"
-  admin: "127.0.0.1:8081"   # bind to a trusted interface only
-public_url: http://127.0.0.1:8080   # base for image_url, reachable from the devices
+  admin: "127.0.0.1:8081"   # no authentication; bind to a trusted interface only
+public_url: http://127.0.0.1:8080   # required; base for image_url, reachable from the devices
 timezone: Europe/Amsterdam
-data_dir: ./data
+data_dir: ./data   # holds dashboard.sqlite: module state, caches, device API keys
+
+# Timer wakes, local time; these are the defaults.
+# schedule:
+#   first_wake: "07:00"
+#   last_wake: "00:00"
+#   interval: 1h
+#   detail_timeout: 5m   # how long a page shown after a button press stays up
 
 devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:01"
-    rotation: 0
+    rotation: 0   # 0, 90, 180 or 270
     layout: e1001   # pages/layouts/e1001/
-    pages: [weather, hello]
+    pages: [weather, hello]   # the first is the main page; a button press shows the next
 
 renderer:
   watch: true   # rebuild pages on change; reload the browser to see them
 
 modules:
   weather:
-    location: "Uithoorn, The Netherlands"   # geocoded once, coordinates cached
+    location: "Uithoorn, The Netherlands"   # geocoded on first update, coordinates cached per value
     model: knmi_seamless   # KNMI HARMONIE for 2.5 days, then ECMWF; omit to let Open-Meteo pick
