@@ -174,7 +174,7 @@ modules:
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)).
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)).
 
 ## Storage
 
@@ -432,7 +432,7 @@ Each step has its own test with no network:
 | Storage | `go test` | pragmas and page size, reader cannot write, per-owner migrations |
 | Device protocol | `go test` | setup, keys surviving a restart, auth, page selection, refresh rate (including DST), render failure, image store |
 | Pipeline, renderer process | `go test` | fake renderer and queries, including failing and stale ones; frame encoding; timeouts, restarts, backoff; one integration test against the real Bun renderer |
-| Service and admin UI | `go test` | config parsing, startup checks, previews, simulator, `/healthz`, shutdown drain |
+| Service and admin UI | `go test` | config parsing, startup checks, previews, simulator, `/healthz`, `/metrics`, request spans, shutdown drain |
 | Types | `go test`, `tsc --noEmit` | gentypes against a golden file; pages against generated types |
 | Formatting, renderer frames | `bun test` | table tests on pure functions; frame encoding and rendering in `renderer/` |
 
@@ -455,8 +455,40 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |
 | `GET /healthz` | Liveness, `ok` |
+| `GET /metrics` | Prometheus metrics, see [Observability](#observability) |
 
 The simulator runs on its own `device.Devices`, mounted only on the admin listener: its page, wake and image store (4 images) are separate from the real devices', so it never evicts their images. It shares the stored API keys, which belong to a MAC rather than to a device's state. The device listener has no simulator mode.
+
+## Observability
+
+### Metrics
+
+Prometheus metrics on the admin listener at `/metrics`, registered with `promauto` in the package that records them, next to the Go runtime and process metrics.
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `dashboard_http_request_duration_seconds` | `listener`, `route`, `code` | Request duration; `route` is the matched `ServeMux` pattern, or `unmatched` |
+| `dashboard_module_updates_total` | `module`, `result` | Updates by result: `success`, `failure`, `auth` |
+| `dashboard_module_update_duration_seconds` | `module` | Update duration |
+| `dashboard_module_last_success_timestamp_seconds` | `module` | Last successful update |
+| `dashboard_render_duration_seconds` | `page`, `result` | Page render from resolving data to the finished image; an unknown page is `unknown` |
+| `dashboard_device_wakes_total` | `device`, `source` | Display requests by `Update-Source` |
+| `dashboard_device_battery_volts` | `device` | `Battery-Voltage` of the latest wake |
+| `dashboard_device_rssi_dbm` | `device` | `RSSI` of the latest wake |
+| `dashboard_device_last_wake_timestamp_seconds` | `device` | Latest wake |
+
+Simulated wakes are not counted in the device metrics.
+
+### Traces
+
+OpenTelemetry traces, exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set; without either, spans are dropped. The other standard `OTEL_*` variables apply, e.g. `OTEL_SERVICE_NAME` (default `dashboard`). Incoming `traceparent` headers are honored.
+
+| Span | Starts a trace | Children |
+| --- | --- | --- |
+| `<METHOD> <pattern>`, per request on both listeners, except `/healthz` and `/metrics` | yes | `render <page>` with a `<module>.<query>` span per page query and the module's outgoing HTTP calls |
+| `<module>.update`, per scheduled update | yes | the module's outgoing HTTP calls |
+
+A manual update (`POST /modules/{module}/update`) is a child of its request. Spans of failed updates, renders and queries have error status.
 
 ## Configuration
 
@@ -500,7 +532,7 @@ Runtime state (device API keys, module state and caches) lives in the database, 
 
 ## Shutdown
 
-On SIGTERM or interrupt: module schedules stop, both listeners stop accepting, and requests in flight get 5 s to finish (within Docker's 10 s stop timeout). Requests still running then have their context canceled, which ends renders and manual module updates; the renderer and storage close only after every handler has returned. A drain that runs out is logged as a warning, not a failed exit.
+On SIGTERM or interrupt: module schedules stop, both listeners stop accepting, and requests in flight get 5 s to finish (within Docker's 10 s stop timeout). Requests still running then have their context canceled, which ends renders and manual module updates; the renderer and storage close only after every handler has returned. A drain that runs out is logged as a warning, not a failed exit. Pending spans get another 5 s to export.
 
 ## CI
 

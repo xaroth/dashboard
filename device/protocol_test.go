@@ -40,30 +40,31 @@ func hourly(loc *time.Location) device.Schedule {
 	return device.Schedule{First: 7 * time.Hour, Last: 0, Interval: time.Hour, Detail: 5 * time.Minute, Location: loc}
 }
 
-func newEnv(tb testing.TB) *env {
+func newEnv(tb testing.TB, opts ...func(*device.Options)) *env {
 	tb.Helper()
-	return newEnvSchedule(tb, hourly(time.UTC))
+	return newEnvSchedule(tb, hourly(time.UTC), opts...)
 }
 
-func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
+func newEnvSchedule(tb testing.TB, schedule device.Schedule, opts ...func(*device.Options)) *env {
 	tb.Helper()
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	return loadEnv(tb, db, schedule)
+	return loadEnv(tb, db, schedule, opts...)
 }
 
-// loadEnv loads the devices on db, as a service start does.
-func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule) *env {
+// loadEnv loads the devices on db, as a service start does. opts adjust
+// the options before the load.
+func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule, opts ...func(*device.Options)) *env {
 	tb.Helper()
 	fake := render.NewFakeRenderer(tb, render.ExpectPages(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"}))
 	clock := &atomic.Int64{}
 	clock.Store(time.Unix(1792087200, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	store := &device.Store{Max: 4}
-	devices, err := device.Load(tb.Context(), device.Options{
+	o := device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
 		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(tb), time.UTC, now),
 		Store:     store,
@@ -73,7 +74,11 @@ func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule) *env {
 		Schedule:  schedule,
 		Log:       slog.New(slog.DiscardHandler),
 		Now:       now,
-	})
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	devices, err := device.Load(tb.Context(), o)
 	if err != nil {
 		tb.Fatalf("Load: %v", err)
 	}

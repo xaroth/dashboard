@@ -9,6 +9,10 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type query struct {
@@ -102,11 +106,14 @@ func (s *Set) Check(module, name string, params map[string]any) error {
 // Resolve runs module.query on the read-only connection. Failures are in
 // the result, not returned: one failing query must not fail a page.
 func (s *Set) Resolve(ctx context.Context, module, name string, params map[string]any) Result {
+	ctx, span := tracer.Start(ctx, module+"."+name, trace.WithAttributes(attribute.String("module", module), attribute.String("query", name)))
+	defer span.End()
 	inst, q, err := s.lookup(module, name)
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		return Result{Stale: true, Error: err.Error()}
 	}
-	res := Result{}
+	var res Result
 	if st, err := s.state(ctx, inst); err == nil {
 		res.FetchedAt, res.Stale, res.Error = st.FetchedAt, st.Stale, st.Error
 	} else {
@@ -118,6 +125,7 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 		res.Value, err = q.call(qctx, inst.module, raw)
 	}
 	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		res.Value, res.Error = nil, err.Error()
 	}
 	return res

@@ -26,6 +26,8 @@ Without `-config` the service reads `/config/dashboard.yaml`.
 
 Open http://127.0.0.1:8081/ for module status, previews of every page per device and panel, and a simulator per device that wakes it through the real device API (timer or button). With `renderer.watch`, page edits rebuild on save; reload the browser.
 
+Prometheus metrics are at http://127.0.0.1:8081/metrics. Traces are exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, e.g. `http://localhost:4318`. See [Observability](docs/design.md#observability).
+
 After changing SQL or query types: `go tool sqlc generate` and `go run ./cmd/gentypes`; both outputs are committed.
 
 CI runs:

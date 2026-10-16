@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/xaroth/dashboard/device"
@@ -91,7 +93,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Writer:        s.db.Writer,
 		Reader:        s.db.Reader,
 		Log:           log,
-		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+		HTTPClient:    &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		Now:           time.Now,
 	})
 	if err != nil {
@@ -113,6 +115,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	s.admin.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 	})
+	s.admin.Handle("GET /metrics", promhttp.Handler())
 	var configs []device.Config
 	for name, d := range cfg.Devices {
 		mac, _ := device.NormalizeMAC(d.MAC) // validated with the config
@@ -140,6 +143,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	// which identify a MAC, not its state.
 	deviceOpts.Store = &device.Store{Max: 4}
 	deviceOpts.Log = log.With("component", "simulator")
+	deviceOpts.Simulated = true
 	simulated, err := device.Load(ctx, deviceOpts)
 	if err != nil {
 		return nil, err
@@ -170,8 +174,8 @@ func (s *Service) Run(ctx context.Context) error {
 		s.modules.Run(ctx)
 		return nil
 	})
-	s.serve(ctx, g, "device", s.cfg.Listen.Device, s.device)
-	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.admin)
+	s.serve(ctx, g, "device", s.cfg.Listen.Device, instrument("device", s.device))
+	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, instrument("admin", s.admin))
 	return g.Wait()
 }
 
