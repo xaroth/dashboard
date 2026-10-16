@@ -20,6 +20,11 @@ const maxPNG = 64 << 20
 const (
 	minBackoff = 500 * time.Millisecond
 	maxBackoff = 30 * time.Second
+
+	// A response that takes longer means the renderer hangs; it is killed so
+	// the requests queued behind it get a working one. Describe may bundle.
+	renderTimeout   = 30 * time.Second
+	describeTimeout = 60 * time.Second
 )
 
 var ErrClosed = errors.New("renderer closed")
@@ -43,12 +48,15 @@ type QueryDescriptor struct {
 	Params map[string]any `json:"params"`
 }
 
-// Process runs the Bun renderer and talks to it one request at a time. A dead
-// or desynced process is replaced on the next request, with backoff between starts.
+// Process runs the Bun renderer and talks to it one request at a time. A dead,
+// hung or desynced process is replaced on the next request, with backoff
+// between starts.
 type Process struct {
-	command []string
-	dir     string
-	log     *slog.Logger
+	command         []string
+	dir             string
+	log             *slog.Logger
+	renderTimeout   time.Duration
+	describeTimeout time.Duration
 
 	turn      chan struct{} // held by the one request in flight; select-able unlike a mutex
 	closing   chan struct{}
@@ -76,17 +84,19 @@ type proc struct {
 // on the first request.
 func NewProcess(command []string, dir string, log *slog.Logger) *Process {
 	return &Process{
-		command: command,
-		dir:     dir,
-		log:     log,
-		turn:    make(chan struct{}, 1),
-		closing: make(chan struct{}),
+		command:         command,
+		dir:             dir,
+		log:             log,
+		renderTimeout:   renderTimeout,
+		describeTimeout: describeTimeout,
+		turn:            make(chan struct{}, 1),
+		closing:         make(chan struct{}),
 	}
 }
 
 // Describe returns the bundled pages.
 func (p *Process) Describe(ctx context.Context) ([]PageInfo, error) {
-	resp, _, err := p.call(ctx, map[string]any{"op": "describe"})
+	resp, _, err := p.call(ctx, map[string]any{"op": "describe"}, p.describeTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +109,7 @@ func (p *Process) Describe(ctx context.Context) ([]PageInfo, error) {
 
 // Render renders page with props, at props.Viewport, and returns the renderer's PNG.
 func (p *Process) Render(ctx context.Context, page string, props Props) ([]byte, error) {
-	_, body, err := p.call(ctx, map[string]any{"op": "render", "page": page, "props": props})
+	_, body, err := p.call(ctx, map[string]any{"op": "render", "page": page, "props": props}, p.renderTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -122,15 +132,23 @@ func (p *Process) Close() error {
 	return nil
 }
 
-func (p *Process) call(ctx context.Context, req map[string]any) (response, []byte, error) {
+// call sends req and waits up to timeout for its response. A caller that
+// leaves early returns at once while the response is drained in the
+// background, with turn held, so the process stays in step without a restart.
+func (p *Process) call(ctx context.Context, req map[string]any, timeout time.Duration) (response, []byte, error) {
 	select {
 	case p.turn <- struct{}{}:
-		defer func() { <-p.turn }()
 	case <-ctx.Done():
 		return response{}, nil, fmt.Errorf("renderer: %w", ctx.Err())
 	case <-p.closing:
 		return response{}, nil, ErrClosed
 	}
+	draining := false
+	defer func() {
+		if !draining {
+			<-p.turn
+		}
+	}()
 	select {
 	case <-p.closing:
 		return response{}, nil, ErrClosed
@@ -154,11 +172,6 @@ func (p *Process) call(ctx context.Context, req map[string]any) (response, []byt
 		return response{}, nil, err
 	}
 
-	type result struct {
-		resp response
-		body []byte
-		err  error
-	}
 	ch := make(chan result, 1)
 	go func() {
 		if err := writeFrame(cur.stdin, header); err != nil {
@@ -169,28 +182,62 @@ func (p *Process) call(ctx context.Context, req map[string]any) (response, []byt
 		ch <- result{resp, body, err}
 	}()
 
+	expired := time.NewTimer(timeout)
 	select {
 	case <-p.closing:
+		expired.Stop()
 		return response{}, nil, ErrClosed
-	case <-ctx.Done():
-		// The response may still arrive; the stream is no longer in step.
-		p.stop()
-		return response{}, nil, fmt.Errorf("renderer: %w", ctx.Err())
+	case <-expired.C:
+		p.timedOut(req["op"], timeout)
+		return response{}, nil, fmt.Errorf("renderer: no response within %v: %w", timeout, context.DeadlineExceeded)
 	case r := <-ch:
-		if r.err != nil {
-			p.stop()
-			return response{}, nil, fmt.Errorf("renderer: %w", r.err)
-		}
-		if r.resp.ID != id {
-			p.stop()
-			return response{}, nil, fmt.Errorf("renderer: response id %d, want %d", r.resp.ID, id)
-		}
-		p.failures = 0
-		if r.resp.Error != "" {
-			return r.resp, nil, fmt.Errorf("renderer: %s", r.resp.Error)
-		}
-		return r.resp, r.body, nil
+		expired.Stop()
+		return p.finish(r, id)
+	case <-ctx.Done():
+		draining = true
+		go func() {
+			defer func() { <-p.turn }()
+			defer expired.Stop()
+			select {
+			case <-p.closing:
+			case <-expired.C:
+				p.timedOut(req["op"], timeout)
+			case r := <-ch:
+				p.finish(r, id)
+			}
+		}()
+		return response{}, nil, fmt.Errorf("renderer: %w", ctx.Err())
 	}
+}
+
+type result struct {
+	resp response
+	body []byte
+	err  error
+}
+
+// finish checks the response to request id and stops a process that is out
+// of step. Called with turn held.
+func (p *Process) finish(r result, id int64) (response, []byte, error) {
+	if r.err != nil {
+		p.stop()
+		return response{}, nil, fmt.Errorf("renderer: %w", r.err)
+	}
+	if r.resp.ID != id {
+		p.stop()
+		return response{}, nil, fmt.Errorf("renderer: response id %d, want %d", r.resp.ID, id)
+	}
+	p.failures = 0
+	if r.resp.Error != "" {
+		return r.resp, nil, fmt.Errorf("renderer: %s", r.resp.Error)
+	}
+	return r.resp, r.body, nil
+}
+
+// timedOut replaces a renderer that did not answer in time. Called with turn held.
+func (p *Process) timedOut(op any, timeout time.Duration) {
+	p.log.Warn("renderer did not respond; restarting", "op", op, "timeout", timeout)
+	p.stop()
 }
 
 // ensure returns the running process, starting one if needed after waiting

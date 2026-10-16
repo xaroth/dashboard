@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -34,8 +35,11 @@ func TestMain(m *testing.M) {
 
 // fakeRenderer speaks the frame protocol. Describe reports its pid as a page
 // param, so tests can tell whether the process was restarted. Modes: ok, hang
-// (never answers render), crash (exits on the first request), badid.
+// (never answers render), hangall (never answers), crash (exits on the first
+// request), badid, gate:<fifo> (answers render once the fifo is opened for
+// writing and closed).
 func fakeRenderer(mode string) {
+	mode, gate, _ := strings.Cut(mode, ":")
 	in := bufio.NewReader(os.Stdin)
 	pid := map[string]render.QueryDescriptor{"pid": {Params: map[string]any{"pid": fmt.Sprint(os.Getpid())}}}
 	for {
@@ -57,9 +61,17 @@ func fakeRenderer(mode string) {
 		switch {
 		case mode == "crash":
 			os.Exit(3)
-		case mode == "hang" && req.Op == "render":
+		case mode == "hang" && req.Op == "render", mode == "hangall":
 			fmt.Fprintln(os.Stderr, "hanging")
 			time.Sleep(time.Hour)
+		case mode == "gate" && req.Op == "render":
+			fmt.Fprintln(os.Stderr, "gated")
+			f, err := os.Open(gate) // blocks until the test opens it for writing
+			if err != nil {
+				os.Exit(4)
+			}
+			io.Copy(io.Discard, f)
+			f.Close()
 		case mode == "badid":
 			req.ID++
 		}
@@ -181,17 +193,84 @@ func TestProcessBadPropsKeepProcess(t *testing.T) {
 	}
 }
 
-func TestProcessTimeoutRestarts(t *testing.T) {
+func TestProcessRenderTimeoutRestarts(t *testing.T) {
 	t.Parallel()
 	p, _ := newFake(t, "hang")
+	render.SetTimeouts(p, 100*time.Millisecond, 10*time.Second)
 	before := pid(t, p)
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-	if _, err := p.Render(ctx, "hello", render.Props{}); !errors.Is(err, context.DeadlineExceeded) {
+	// The caller has no deadline: the renderer's own timeout ends the wait.
+	if _, err := p.Render(t.Context(), "hello", render.Props{}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("got %v, want deadline exceeded", err)
 	}
 	if pid(t, p) == before {
 		t.Error("got the same pid after a timeout, want a new process")
+	}
+}
+
+func TestProcessDescribeTimeout(t *testing.T) {
+	t.Parallel()
+	p, _ := newFake(t, "hangall")
+	render.SetTimeouts(p, 10*time.Second, 100*time.Millisecond)
+	if _, err := p.Describe(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("got %v, want deadline exceeded", err)
+	}
+}
+
+func TestProcessCallerLeavingDrainsResponse(t *testing.T) {
+	t.Parallel()
+	gate := filepath.Join(t.TempDir(), "gate")
+	if err := syscall.Mkfifo(gate, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	p, logs := newFake(t, "gate:"+gate)
+	before := pid(t, p)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.Render(ctx, "hello", render.Props{})
+		done <- err
+	}()
+	waitLog(t, logs, "gated")
+	cancel()
+	// The caller returns while the renderer still works on its response.
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("got %v, want canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Render did not return after its caller left")
+	}
+
+	f, err := os.OpenFile(gate, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("opening gate: %v", err)
+	}
+	f.Close()
+	if after := pid(t, p); after != before {
+		t.Errorf("got pid %v, want %v: the renderer was restarted for a caller leaving", after, before)
+	}
+}
+
+func TestProcessCallerLeavingHungRenderRestarts(t *testing.T) {
+	t.Parallel()
+	p, logs := newFake(t, "hang")
+	render.SetTimeouts(p, 100*time.Millisecond, 10*time.Second)
+	before := pid(t, p)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.Render(ctx, "hello", render.Props{})
+		done <- err
+	}()
+	waitLog(t, logs, "hanging")
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("got %v, want canceled", err)
+	}
+	if pid(t, p) == before {
+		t.Error("got the same pid after the drain timed out, want a new process")
 	}
 }
 

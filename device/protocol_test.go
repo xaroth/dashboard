@@ -18,6 +18,7 @@ import (
 
 	"github.com/xaroth/dashboard/device"
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/storage"
 )
 
 const (
@@ -31,6 +32,7 @@ type env struct {
 	store   *device.Store
 	fake    *render.FakeRenderer
 	clock   *atomic.Int64
+	db      *storage.DB
 }
 
 // hourly wakes on the hour from 07:00 up to and including 00:00.
@@ -45,23 +47,39 @@ func newEnv(tb testing.TB) *env {
 
 func newEnvSchedule(tb testing.TB, schedule device.Schedule) *env {
 	tb.Helper()
+	db, err := storage.Open(tb.Context(), tb.TempDir())
+	if err != nil {
+		tb.Fatalf("storage: %v", err)
+	}
+	tb.Cleanup(func() { db.Close() })
+	return loadEnv(tb, db, schedule)
+}
+
+// loadEnv loads the devices on db, as a service start does.
+func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule) *env {
+	tb.Helper()
 	fake := render.NewFakeRenderer(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"})
 	clock := &atomic.Int64{}
 	clock.Store(time.Unix(1792087200, 0).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	store := &device.Store{Max: 4}
-	devices := device.New(device.Options{
+	devices, err := device.Load(tb.Context(), device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
 		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(nil), time.UTC, now),
 		Store:     store,
+		DB:        db.Writer,
+		Migrator:  db,
 		PublicURL: "http://dash:8080/",
 		Schedule:  schedule,
 		Log:       slog.New(slog.DiscardHandler),
 		Now:       now,
 	})
+	if err != nil {
+		tb.Fatalf("Load: %v", err)
+	}
 	mux := http.NewServeMux()
 	devices.Register(mux)
-	return &env{mux: mux, devices: devices, store: store, fake: fake, clock: clock}
+	return &env{mux: mux, devices: devices, store: store, fake: fake, clock: clock, db: db}
 }
 
 func (e *env) do(tb testing.TB, method, path string, headers map[string]string) (int, map[string]any) {
@@ -309,8 +327,8 @@ func TestDisplayAuth(t *testing.T) {
 		{"wrong token", true, mac, "nope", http.StatusUnauthorized},
 		{"unknown device", true, other, "x", http.StatusNotFound},
 		{"no token", true, mac, "", http.StatusNotFound},
-		// After a restart the key is gone; the first token presented is adopted.
-		{"token adopted after restart", false, mac, "kept-from-before", http.StatusOK},
+		// No key stored for the MAC: a presented token is not adopted.
+		{"no stored key", false, mac, "kept-from-before", http.StatusUnauthorized},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -330,14 +348,19 @@ func TestDisplayAuth(t *testing.T) {
 	}
 }
 
-func TestDisplayAdoptedTokenIsBinding(t *testing.T) {
+func TestKeySurvivesRestart(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)
-	if code, _ := e.display(t, "first", "timer"); code != http.StatusOK {
-		t.Fatalf("got %d adopting a token, want 200", code)
+	key := e.setup(t)
+	restarted := loadEnv(t, e.db, hourly(time.UTC))
+	if code, body := restarted.display(t, key, "timer"); code != http.StatusOK {
+		t.Errorf("got %d %v with the key from before the restart, want 200", code, body)
 	}
-	if code, _ := e.display(t, "second", "timer"); code != http.StatusUnauthorized {
-		t.Errorf("got %d for a different token, want 401", code)
+	if got := restarted.setup(t); got != key {
+		t.Errorf("got key %q from setup after the restart, want %q", got, key)
+	}
+	if code, _ := restarted.display(t, "other", "timer"); code != http.StatusUnauthorized {
+		t.Errorf("got %d for another token, want 401", code)
 	}
 }
 
@@ -351,27 +374,6 @@ func TestDisplayIgnoresUnknownModel(t *testing.T) {
 	}
 	if target, _ := e.devices.Target("hallway"); target.Model != device.DefaultModel {
 		t.Errorf("got model %q, want %q", target.Model, device.DefaultModel)
-	}
-}
-
-func TestSimulatorIsSeparate(t *testing.T) {
-	t.Parallel()
-	e := newEnv(t)
-	sim := map[string]string{"ID": mac, device.SimulatorHeader: "1"}
-	_, setup := e.do(t, http.MethodGet, "/api/setup", sim)
-	sim["Access-Token"] = setup["api_key"].(string)
-	sim["Model"] = "reterminal_e1003"
-	sim["Update-Source"] = "button"
-	if code, _ := e.do(t, http.MethodGet, "/api/display", sim); code != http.StatusOK {
-		t.Fatalf("simulated display: got %d, want 200", code)
-	}
-
-	// The real device, restarted service: its old token is still adopted and its state is untouched.
-	if target, _ := e.devices.Target("hallway"); target.Wake != nil || target.Model != device.DefaultModel {
-		t.Errorf("got real target %+v after a simulated wake, want untouched", target)
-	}
-	if code, _ := e.display(t, "kept-from-before", "timer"); code != http.StatusOK {
-		t.Errorf("real device with its old token: got %d, want 200", code)
 	}
 }
 

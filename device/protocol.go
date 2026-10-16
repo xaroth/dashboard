@@ -1,7 +1,11 @@
 package device
 
 import (
+	"context"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,7 +34,7 @@ func (d *Devices) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.mu.Lock()
-	s, ok := d.states(r)[mac]
+	s, ok := d.byMAC[mac]
 	if !ok {
 		if _, seen := d.pending[mac]; seen || len(d.pending) < maxPending {
 			d.pending[mac] = d.now()
@@ -41,11 +45,14 @@ func (d *Devices) setup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": 404, "message": "MAC not registered"})
 		return
 	}
-	if s.apiKey == "" {
-		s.apiKey = newAPIKey()
-	}
-	key := s.apiKey
 	d.mu.Unlock()
+	key, err := d.apiKey(r.Context(), mac)
+	if err != nil {
+		d.log.Error("reading api key", "device", s.cfg.Name, "err", err)
+		// A plain HTTP error: the firmware retries setup later.
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	d.log.Info("device setup", "device", s.cfg.Name, "model", r.Header.Get("Model"))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      200,
@@ -150,23 +157,40 @@ func (d *Devices) image(w http.ResponseWriter, r *http.Request) {
 	w.Write(png)
 }
 
-// authenticate finds the device by its ID header and checks Access-Token.
-// After a restart keys are gone; the first token a known device presents is
-// adopted, so devices keep working without running setup again.
+// apiKey returns mac's stored key, creating one on its first setup.
+func (d *Devices) apiKey(ctx context.Context, mac string) (string, error) {
+	key, err := d.queries.GetAPIKey(ctx, mac)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return key, err
+	}
+	if err := d.queries.CreateAPIKey(ctx, CreateAPIKeyParams{Mac: mac, ApiKey: newAPIKey()}); err != nil {
+		return "", err
+	}
+	// Read back: a concurrent setup may have stored its key first.
+	return d.queries.GetAPIKey(ctx, mac)
+}
+
+// authenticate finds the device by its ID header and checks Access-Token
+// against the key stored at setup. A device without a stored key gets 401
+// until it runs setup again.
 func (d *Devices) authenticate(w http.ResponseWriter, r *http.Request) (*state, bool) {
 	mac, _ := NormalizeMAC(r.Header.Get("ID"))
 	token := r.Header.Get("Access-Token")
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	s, ok := d.states(r)[mac]
+	s, ok := d.byMAC[mac]
+	d.mu.Unlock()
 	if !ok || token == "" {
 		writeJSON(w, http.StatusNotFound, map[string]any{"status": 404, "message": "device not registered"})
 		return nil, false
 	}
-	if s.apiKey == "" {
-		s.apiKey = token
+	key, err := d.queries.GetAPIKey(r.Context(), mac)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		d.log.Error("reading api key", "device", s.cfg.Name, "err", err)
+		// Never JSON status 500, which resets the firmware.
+		http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+		return nil, false
 	}
-	if token != s.apiKey {
+	if key == "" || subtle.ConstantTimeCompare([]byte(token), []byte(key)) != 1 {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"status": 401, "message": "invalid Access-Token"})
 		return nil, false
 	}
@@ -212,12 +236,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func imageHash(filename string) string {
 	hash, _, _ := strings.Cut(filename, "-")
 	return hash
-}
-
-// states returns the real or the simulated device states for r. Called with mu held.
-func (d *Devices) states(r *http.Request) map[string]*state {
-	if r.Header.Get(SimulatorHeader) != "" {
-		return d.simByMAC
-	}
-	return d.byMAC
 }

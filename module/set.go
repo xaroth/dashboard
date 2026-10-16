@@ -73,6 +73,8 @@ type instance struct {
 	// updating serializes scheduled and manual updates; modules are not
 	// required to be safe for concurrent Update calls.
 	updating sync.Mutex
+	// kick tells the schedule a manual update succeeded.
+	kick chan struct{}
 
 	mu      sync.Mutex
 	initErr error
@@ -88,7 +90,7 @@ const (
 	PhaseUpdating Phase = "updating"
 	PhaseDisabled Phase = "disabled"
 	PhaseFailed   Phase = "failed"      // last update failed; retrying with backoff
-	PhaseAuth     Phase = "auth"        // credentials rejected; no retries until restart
+	PhaseAuth     Phase = "auth"        // credentials rejected; no retries until a manual update succeeds
 	PhaseInitFail Phase = "init failed" // Initialize failed; off until restart
 )
 
@@ -126,6 +128,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 			interval:   cmp.Or(sched.UpdateInterval, r.interval),
 			staleAfter: cmp.Or(sched.StaleAfter, r.staleAfter),
 			log:        o.Log.With("module", r.name),
+			kick:       make(chan struct{}, 1),
 			phase:      PhaseWaiting,
 		})
 	}

@@ -27,4 +27,4 @@ Tests: `go test -race ./...`, `bun test`, `bunx tsc --noEmit`.
 
 After changing SQL or query types: `go tool sqlc generate` and `go run ./cmd/gentypes`; both outputs are committed.
 
-Device API keys are kept in memory until storage lands. After a restart, the first token a configured MAC presents is accepted, so anyone on the device network who knows a MAC can claim it first. Keep the device listener on a trusted network.
+Device API keys are stored in the database per MAC; a token that does not match the stored key is rejected. `/api/setup` hands the key to anyone presenting a configured MAC (the TRMNL protocol has no other identity), so keep the device listener on a trusted network.

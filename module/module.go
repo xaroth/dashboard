@@ -10,6 +10,7 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"time"
 )
@@ -25,7 +26,7 @@ type Module[C any] interface {
 }
 
 // ErrAuth marks an update error the source rejected for credentials: retries
-// stop until the service restarts.
+// stop until a manual update succeeds or the service restarts.
 var ErrAuth = errors.New("authentication rejected")
 
 const (
@@ -44,8 +45,16 @@ type Registration struct {
 	queries    map[string]query
 	moduleType reflect.Type
 	initialize func(ctx context.Context, m any, cfg any) error
-	enabled    func(ctx context.Context, m any) bool
+	enabled    func(ctx context.Context, m any) (bool, error)
 	update     func(ctx context.Context, m any) error
+}
+
+// recovered turns a panic into *err. Module methods run in the scheduler's
+// goroutines, outside net/http's recovery, where a panic ends the service.
+func recovered(err *error) {
+	if r := recover(); r != nil {
+		*err = fmt.Errorf("panicked: %v\n%s", r, debug.Stack())
+	}
 }
 
 func (r Registration) Name() string { return r.name }
@@ -85,9 +94,18 @@ func Define[M any, C any, PM interface {
 		staleAfter: defaultStaleAfter,
 		queries:    map[string]query{},
 		moduleType: reflect.TypeFor[*M](),
-		initialize: func(ctx context.Context, m any, cfg any) error { return m.(PM).Initialize(ctx, cfg.(*C)) },
-		enabled:    func(ctx context.Context, m any) bool { return m.(PM).Enabled(ctx) },
-		update:     func(ctx context.Context, m any) error { return m.(PM).Update(ctx) },
+		initialize: func(ctx context.Context, m any, cfg any) (err error) {
+			defer recovered(&err)
+			return m.(PM).Initialize(ctx, cfg.(*C))
+		},
+		enabled: func(ctx context.Context, m any) (on bool, err error) {
+			defer recovered(&err)
+			return m.(PM).Enabled(ctx), nil
+		},
+		update: func(ctx context.Context, m any) (err error) {
+			defer recovered(&err)
+			return m.(PM).Update(ctx)
+		},
 	}
 	for _, opt := range opts {
 		opt(&r)
