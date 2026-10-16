@@ -1,22 +1,18 @@
 # Design: dashboard service
 
-Status: ready, 2026-10-16. Background and data source research: [research.md](research.md).
+This document describes the service as built. Planned parts (more modules, time series, device health, more components, page tests, deployment) are specified in [plan.md](plan.md). Background and data source research: [research.md](research.md).
 
 ## Overview
 
 One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E1003) running TRMNL firmware in BYOS mode. The service owns I/O, storage, scheduling, rendering and the device protocol. Data sources are modules: packages under `modules/`, listed in `modules.All` and configured in YAML. They are global to the system (not tied to a device).
 
 ```
-             +---------------------------- dashboard -----------------------------+
-             |                                                                    |
- P1 dongle --+--> modules/p1 -------+                                             |
- S-Miles   --+--> modules/solar ----+                                             |
- Google    --+--> modules/calendar -+--> storage <-- queries --> render ------------+--> device API <-- E1001
- Pleos     --+--> modules/car ------+   (state +        |         (Bun: TSX+Takumi)|               <-- E1003
- Open-Meteo -+--> modules/weather --+    series)        |                           |
-             |          ^                                +--> web UI: status, preview
-             |      scheduler                                                       |
-             +--------------------------------------------------------------------+
+             +------------------------- dashboard --------------------------+
+             |                                                              |
+ Open-Meteo -+--> modules/weather --> storage <-- queries --> render -------+--> device API <-- E1001
+             |          ^            (SQLite)        |    (Bun: TSX+Takumi)  |               <-- E1003
+             |      scheduler                        +--> admin UI: status, previews, simulator
+             +--------------------------------------------------------------+
 ```
 
 ## Code layout
@@ -30,7 +26,8 @@ storage/                   SQLite: connections, per-owner migrations
 module/                    registration API, module contract, scheduler, query dispatch,
                            module state
 module/sql/                module state migrations and queries
-device/                    TRMNL protocol, API keys, health, page selection, screen schedule
+device/                    TRMNL protocol, API keys, page selection, screen schedule,
+                           in-memory image store
 device/sql/                API key migrations and queries
 render/                    page pipeline, renderer process, gray reduction, PNG
 modules/modules.go         modules.All: the list of every module
@@ -40,6 +37,7 @@ renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
 pages/components/, lib/    shared by all layouts
 pages/generated/           TypeScript types generated from Go query results
+tools/                     standalone scripts (dtu_read.py: read-only Modbus check)
 ```
 
 Packages are one level deep and named for what they do. They do not import each other sideways; `cmd/dashboard` wires them together:
@@ -58,15 +56,23 @@ device         -> render
 
 | Module | Source | Data |
 | --- | --- | --- |
-| `p1` | Smartstuff P1 dongle, local HTTP | state + series (import/export power, energy, gas) |
-| `solar` | Hoymiles: S-Miles Cloud now, DTU Modbus later | state + series (production per inverter, alarms) |
-| `calendar` | Google Calendar secret iCal URL | state (upcoming events) |
-| `car` | Pleos Vehicle Data API, fallback Bluelink | state (SoC, range, charging, locks) |
-| `weather` | Open-Meteo; `model` picks the weather model, e.g. `knmi_seamless` for KNMI HARMONIE | state (now, hourly, daily) |
+| `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
-Later candidates: Plex recently added, waste collection, public transport.
+Planned modules are listed in [plan.md](plan.md#modules).
 
-Device health is a service concern, not a module (see [Devices](#devices)).
+### Weather
+
+Config keys under `modules.weather`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `location` | `Amsterdam, The Netherlands` | Place name, optionally with its country after a comma. Empty disables the module. |
+| `forecast_days` | `7` | Days fetched, 1 to 16. Out of range fails `Initialize`. |
+| `model` | empty | Open-Meteo weather model, e.g. `knmi_seamless` for KNMI HARMONIE. Empty lets Open-Meteo pick per location. |
+| `geocoding_url` | `https://geocoding-api.open-meteo.com/v1/search` | Geocoding endpoint |
+| `forecast_url` | `https://api.open-meteo.com/v1/forecast` | Forecast endpoint |
+
+`Update` runs every 15 minutes; data is stale after 2 hours. The location is geocoded on the first update and cached per `location` string, so a changed value is looked up again. Query `weather.forecast` takes `hours` (hourly entries from the current hour, default 24) and `days` (daily entries from today, default 3).
 
 ### Registration
 
@@ -79,6 +85,7 @@ import "github.com/xaroth/dashboard/module"
 
 type config struct {
 	Location string `yaml:"location"`
+	Model    string `yaml:"model"`
 }
 
 func defaultConfig() *config {
@@ -94,6 +101,8 @@ var Module = module.Define[weather, config](
 	defaultConfig,
 	module.WithUpdateInterval(15*time.Minute),
 	module.WithStaleAfter(2*time.Hour),
+	module.WithMigrations(migrations),
+	module.WithQuery("forecast", (*weather).forecast),
 )
 
 func (m *weather) Initialize(ctx context.Context, cfg *config) error {
@@ -106,10 +115,9 @@ func (m *weather) Enabled(ctx context.Context) bool {
 }
 
 func (m *weather) Update(ctx context.Context) error {
-	db := module.Database(ctx)
-	// on first run, geocode Location through Open-Meteo and cache the coordinates
-	// in the module's table; a changed Location triggers a new lookup.
-	// then fetch the forecast and write state.
+	// geocode Location (cached in weather_locations), fetch the forecast,
+	// then store it as the module's snapshot.
+	return module.SaveSnapshot(ctx, forecast)
 }
 ```
 
@@ -139,39 +147,38 @@ Deliberately small; capabilities are added when a module needs them.
 | Method | Purpose |
 | --- | --- |
 | `Initialize(ctx, *C) error` | Receive config, set up clients. The module's migrations have run by then. No network I/O: it runs for every registered module, configured or not. |
-| `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `car` is enabled when credentials are set). |
+| `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
-Options: `WithUpdateInterval`, `WithStaleAfter`, `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)).
-
-Not in v1, added when a module needs it: HTTP routes (OAuth, login forms), active hours, backfill hooks, a shared key-value store.
+Options: `WithUpdateInterval` (default 15 minutes), `WithStaleAfter` (default 1 hour), `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)).
 
 Update and queries are split so a slow or failing source never blocks a screen: pages render from the last stored data.
 
 ### Configuration and lifecycle
 
-- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys and decode errors stop startup: they are operator errors.
-- The scheduler asks `Enabled` before each update. A disabled module skips the update and shows as disabled (not failed) in the web UI; its queries still serve stored data, marked stale once older than `stale_after`. Because it is asked every time, a module can enable itself later, e.g. once a token appears in its table.
+- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys, decode errors and a section for an unknown module stop startup: they are operator errors.
+- The scheduler asks `Enabled` before each update. A disabled module skips the update and shows as disabled (not failed) in the admin UI; its queries still serve stored data, marked stale once older than `stale_after`. Because it is asked every time, a module can enable itself later, e.g. once a token appears in its table.
 - Timing overrides live under a reserved `schedule` key that the service strips before decoding:
 
 ```yaml
 modules:
-  p1:
-    url: http://192.168.1.20
+  weather:
     schedule:
-      update_interval: 1m
+      update_interval: 30m
+      stale_after: 3h
 ```
 
-- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call.
-- Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until a manual update (Update in the web UI) succeeds or the service restarts, and show on the screens. Modules return a typed error for this (`module.ErrAuth`). A successful manual update resets the backoff: the next scheduled update is an interval after it.
+- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call.
+- Start: each schedule starts after a random delay of up to 30 s (or the interval, if shorter).
+- Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval after it.
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)`, `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions.
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)).
 
 ## Storage
 
-One SQLite database on the data volume, pure-Go driver (`modernc.org/sqlite`), no cgo, static binary.
+One SQLite database, `dashboard.sqlite` in `data_dir`, pure-Go driver (`modernc.org/sqlite`), no cgo.
 
 ### SQL files
 
@@ -180,6 +187,8 @@ SQL lives in `.sql` files next to the code that owns it:
 ```
 module/sql/migrations/00001_state.sql
 module/sql/queries.sql
+device/sql/migrations/00001_keys.sql
+device/sql/queries.sql
 modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
 sqlc.yaml                       one entry per owner
@@ -187,9 +196,9 @@ sqlc.yaml                       one entry per owner
 
 - **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each module's, before any `Initialize`. `device.Load` runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
-- **Tables** are prefixed with their owner (`weather_locations`). An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state, and series through `module.Series(ctx)` for writes (buffered) and reads (bucketed, picking the rollup).
-- **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Anything sampled every minute goes through the series buffer, so it lands in the minute flush. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
-- **Times** are `TIMESTAMP` columns in UTC, stored as SQLite date text (driver option `_time_format=sqlite`), so SQLite's date functions work on them. Series use integer Unix seconds to keep rows small.
+- **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `module.SaveSnapshot` and `module.LoadSnapshot`.
+- **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
+- **Times** are `TIMESTAMP` columns in UTC, stored as SQLite date text (driver option `_time_format=sqlite`), so SQLite's date functions work on them.
 
 Registration hands the migrations to the service; `WithMigrations` takes the embedded FS and uses its `sql/migrations` directory as the goose root:
 
@@ -205,51 +214,27 @@ var Module = module.Define[weather, config]("weather", defaultConfig,
 ### Connections
 
 - **Page size**: on a new file, a bootstrap connection runs `page_size=16384` and then `journal_mode=WAL`; the WAL switch writes the header with that page size, and after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
-- **Writer**: one connection (`MaxOpenConns(1)`), used by `Update`, the minute flush, rollups and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
-- **Reader**: a pool of 4 opened with `query_only(1)`, used by query functions. `module.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
-- DSN pragmas apply to every new pooled connection: `journal_mode=WAL` (writer), `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared). Driver options on both: `_time_format=sqlite` and `_timezone=UTC`, so every time is converted to UTC before it is written.
+- **Writer**: one connection (`MaxOpenConns(1)`), used by `Initialize`, `Update`, module state, device API keys and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
+- **Reader**: a pool of 4 opened with `query_only(1)`, used by query functions and status reads. `module.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
+- DSN pragmas apply to every new pooled connection: `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared); the writer also sets `journal_mode=WAL` and `synchronous=NORMAL`. Driver options on both: `_time_format=sqlite` and `_timezone=UTC`, so every time is converted to UTC before it is written.
 
 ### Write load
 
-The concern is many tiny writes wearing the SSD, not losing a minute of data. So:
+The concern is many tiny writes wearing the SSD. SQLite runs in WAL mode with `synchronous=NORMAL`, a large page cache and `mmap_size` (reads come from memory), `busy_timeout`, and one writer connection. WAL checkpoints at the default 1000 pages, so they are infrequent. Rendered PNGs, device wake data and renderer state stay in memory.
 
-- Modules write samples into an in-memory buffer; the service flushes it in one transaction per minute. Losing up to a minute on a crash is accepted. Flush on shutdown (SIGTERM).
-- SQLite: WAL mode, `synchronous=NORMAL`, large page cache and `mmap_size` (reads come from memory), `busy_timeout`, one writer connection. WAL checkpoints at the default 1000 pages, so they are infrequent.
-- Rendered PNGs, device health of the current wake and renderer state stay in memory. Health series are written with the minute flush.
-- ZFS: put `/data` on its own dataset with `recordsize=16K` and SQLite `page_size=16384`. ZFS' default 128K records would rewrite 128K for every changed 4K page.
-
-Estimate: one flush per minute touching a handful of pages is roughly 100-200 KB per minute including WAL and checkpoint, about 50-100 GB per year. Consumer SSDs are rated for hundreds of TB written. To confirm by measuring once running.
-
-Queries read SQLite only, so buffered samples show up within a minute.
+ZFS: put `/data` on its own dataset with `recordsize=16K`, matching SQLite `page_size=16384`. ZFS' default 128K records would rewrite 128K for every changed 4K page.
 
 Backups: ZFS snapshots of the `/data` dataset. WAL mode keeps the file crash-consistent, so a snapshot restores like a power loss.
 
 ### State
 
-The service keeps, per module, the latest status: `fetched_at`, `attempted_at`, `error`, plus a JSON document for modules whose data is one snapshot (weather, calendar, car). Queries return data with its freshness (age above `stale_after` marks it stale).
+The service keeps, per module, the latest status in `module_state`: `fetched_at`, `attempted_at`, `error`, plus a JSON document (`data`) for modules whose data is one snapshot (weather). A snapshot saved during `Update` is written together with `fetched_at` when `Update` returns nil, and dropped when it fails. Queries return data with its freshness (age above `stale_after` marks it stale).
 
 Modules that need more (caches, tokens, history) define their own tables in their [SQL files](#sql-files).
 
-### Time series
-
-For P1 and solar history graphs and device battery. Schema `series(name, ts, value)` with `ts` in Unix seconds, with rollup tables at 5 minutes, 1 hour and 1 day. Retention: raw 7 days, 5-minute 90 days, hourly and daily forever. Queries pick the coarsest resolution that still fills the graph.
-
-Each series declares a kind, which decides rollups and usage:
-
-| Kind | Example | Rollup | Usage over a period |
-| --- | --- | --- | --- |
-| `rate` | P1 power (W), solar power (W) | time-weighted average; gaps are not filled | average x covered time |
-| `counter` | P1 meter readings (kWh, m³), inverter total Wh | last value | difference; a drop is a reset (meter or inverter replaced): count from the new value |
-| `daily_counter` | S-Miles and DTU "today Wh" | last value | value at end of day; resets at local midnight |
-
-- Gaps (P1 reboots, Wi-Fi drops) stay gaps: a bucket without samples has no value and charts show a break. Counters bridge gaps naturally.
-- Buckets of an hour or longer align to local time (Europe/Amsterdam); a day has 23 or 25 hours on DST dates.
-- Backfill: the P1 dongle's own hour/day/month history can seed the counters on first start. Later, not v1.
-
 ## Scheduler
 
-- Module updates: per-module interval, jitter on start, backoff as in [Configuration and lifecycle](#configuration-and-lifecycle).
-- Storage jobs: flush buffered writes (every minute), rollups, retention.
+Module updates: per-module interval, jitter on start, timeout and backoff as in [Configuration and lifecycle](#configuration-and-lifecycle). Scheduled and manual updates of one module never run at the same time.
 
 ## Devices
 
@@ -261,25 +246,34 @@ devices:
     mac: "AA:BB:CC:DD:EE:FF"
     rotation: 0          # 0, 90, 180, 270
     layout: e1001        # folder under pages/layouts/
-    pages: [overview, energy, car]
+    pages: [weather, hello]
+    params:              # optional query param overrides, <page>.<data key>
+      weather.weather: {days: 5}
 ```
 
-A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for one panel size; a page is named `<layout>/<page>`. Each device uses one layout and lists pages from it; a page missing from the layout stops startup. Components and helpers shared by layouts live in `pages/components/` and `pages/lib/`.
+A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for one panel size; a page is named `<layout>/<page>`. Each device uses one layout and lists pages from it; the first page is the main page. A page missing from the layout stops startup. Components and helpers shared by layouts live in `pages/components/` and `pages/lib/`.
 
-The model and native panel size come from the device's own headers (`Model: reterminal_e1001`, `Width`, `Height`), not from config. Both models get the same 4-gray treatment: the E1003 is rendered at its own resolution but with the E1001's four gray levels, so one set of styles works on both.
+Device names and layouts may contain letters, digits, `-` and `_`; `page` is reserved as a device name (it is taken by the admin route `/preview/page/...`). MACs must be unique.
+
+The model comes from the device's `Model` header (`reterminal_e1001`, `reterminal_e1003`); the panel size follows from the model. An unknown model is ignored, and a device that has not reported one yet is treated as `reterminal_e1001`. Both models get the same 4-gray treatment: the E1003 is rendered at its own resolution but with the E1001's four gray levels, so one set of styles works on both.
 
 ### Screen schedule
 
-Global: a wake every `interval` from `first_wake` up to and including `last_wake`, in local time; the last wake sleeps until the first. The default is hourly from 07:00 to 00:00: 18 timer wakes a day plus button presses. A `last_wake` at or before `first_wake` is on the next day.
+Global, under `schedule`: a wake every `interval` from `first_wake` up to and including `last_wake`, in local time; the last wake sleeps until the first. The default is hourly from 07:00 to 00:00: 18 timer wakes a day plus button presses. A `last_wake` at or before `first_wake` is on the next day.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `first_wake` | `"07:00"` | First timer wake, `HH:MM` |
+| `last_wake` | `"00:00"` | Last timer wake, `HH:MM` |
+| `interval` | `1h` | Whole minutes, from 1m to 24h |
+| `detail_timeout` | `5m` | How long a page shown after a button press stays up |
 
 `refresh_rate` is computed from the server clock on every request:
 
 - **Main page**: seconds until the next wake time. If that is 60 s or less (a device that woke just before a wake time), use the wake after it: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
-- **Detail page** (after a button press): `detail_timeout` (5 minutes), or until the next wake time if that is sooner. The following timer wake shows the main page.
+- **Detail page** (after a button press): `detail_timeout`, or until the next wake time if that is sooner. The following timer wake shows the main page.
 
-DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights. Wakes in a skipped hour are dropped; in a repeated hour they happen once, on the second pass.
-
-`interval` is whole minutes, from 1m to 24h.
+DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights. A wake in a skipped hour moves an hour later (merging with a wake already there); a wake in a repeated hour happens once, on the second pass.
 
 ### Buttons
 
@@ -287,7 +281,7 @@ Single click only. A button wake (`Update-Source` is `button` or `EXT0`) refresh
 
 The current page index per device is kept in memory; after a service restart a device starts at the main page.
 
-Firmware hold behavior, outside our control: 1-5 s hold is a special function, more than 5 s resets Wi-Fi, 15 s or more wipes the device's API key and runs setup again. Worth a note near the devices.
+Firmware hold behavior, outside the service's control: 1-5 s hold is a special function, more than 5 s resets Wi-Fi, 15 s or more wipes the device's API key and runs setup again.
 
 ### Orientation
 
@@ -300,31 +294,29 @@ The firmware does not report orientation. It does rotate automatically: a PNG wi
 | 180 | native size, image turned 180° | landscape, upside down mount |
 | 270 | swapped size, image turned 180° | portrait, other direction |
 
-Pages get the resulting viewport as a prop (`viewport.width`, `viewport.height`, `viewport.portrait`). The firmware's rotation direction is to confirm on hardware.
+Pages get the resulting viewport as a prop (`viewport.width`, `viewport.height`, `viewport.portrait`). The firmware's rotation direction is unverified on hardware.
 
 ### Protocol
 
-TRMNL BYOS, on the device listener:
+TRMNL BYOS, on the device listener. Devices are identified by the `ID` header (their MAC).
 
 | Route | Behavior |
 | --- | --- |
-| `GET /api/setup` | Known MAC: return HTTP 200 with `status: 200`, `api_key`, `friendly_id`. The key is created on the MAC's first setup and stored in the database (`device_keys`); later setups return the same key. Firmware reruns setup unless it has both. Unknown MAC: HTTP 200 with JSON `status: 404`; the device shows "MAC not registered" and retries every 5 minutes. The MAC is listed as pending in the web UI. |
-| `GET /api/display` | Authenticate by `Access-Token` against the stored key (constant-time compare), record health headers, pick the page, render if needed, return `image_url`, `filename`, `refresh_rate`. |
-| `GET /images/{filename}.png` | Rendered image, from memory. |
-| `POST /api/log` | Store device log entries; kept 30 days. |
+| `GET /api/setup` | Known MAC: HTTP 200 with `status: 200`, `api_key`, `friendly_id` (last three MAC bytes), `message`. The key is created on the MAC's first setup and stored in the database (`device_keys`); later setups return the same key. Unknown MAC, or a missing or invalid `ID`: HTTP 200 with JSON `status: 404`; the device shows "MAC not registered" and retries every 5 minutes. Unknown MACs are listed as pending in the admin UI (up to 32). A database error is HTTP 503. |
+| `GET /api/display` | Authenticate by `Access-Token` against the stored key (constant-time compare), record the wake headers, pick the page, render, return `image_url`, `filename`, `refresh_rate` (plus `status: 0`, `reset_firmware: false`, `update_firmware: false`, `special_function: "sleep"`). |
+| `POST /api/log` | Authenticated like `/api/display`. The body (up to 64 KB) is written to the service log; HTTP 204. Nothing is stored. |
+| `GET /images/{filename}.png` | Rendered image, from memory. The device listener keeps the 16 most recent images. |
 
 - `image_url` is absolute: `public_url` in the config is the base the devices can reach.
-- `filename` is at most 31 characters: a 12-hex hash of the rendered PNG plus a Unix timestamp (`3fa9c2e81b07-1792087200`). Longer names are truncated by the firmware; names without a 10-digit timestamp suffix are purged from its cache.
-- Never return JSON `status: 500` from `/api/display`: firmware treats it as a reset and wipes its credentials.
+- `filename` is 23 characters: a 12-hex hash of the rendered PNG plus a Unix timestamp (`3fa9c2e81b07-1792087200`). The firmware truncates names over 31 characters and purges cached names without a 10-digit timestamp suffix.
+- Never return JSON `status: 500`: firmware treats it as a reset and wipes its credentials. A failed render returns the device's previous filename (and image) if there is one, and HTTP 503 otherwise; database errors are HTTP 503.
 - When the service is down, devices retry every 5 minutes until it is back. Accepted.
-- Authentication failures on `/api/display` and `/api/log`: an unknown MAC or a missing `Access-Token` is HTTP 404 with JSON `status: 404`; a known MAC whose token does not match the stored key, or that has no stored key, is HTTP 401 with JSON `status: 401`. The firmware keeps its credentials on either and retries on its next wake; it only clears them (and Wi-Fi) on JSON `status: 500`. A device whose key the service does not know (a lost database) runs setup again after a 15 s button hold.
+- Authentication failures on `/api/display` and `/api/log`: an unknown MAC or a missing `Access-Token` is HTTP 404 with JSON `status: 404`; a known MAC whose token does not match the stored key, or that has no stored key, is HTTP 401 with JSON `status: 401`. The firmware keeps its credentials on either and retries on its next wake; it only clears them (and Wi-Fi) on JSON `status: 500`. A device whose key the service does not have (a device set up against a database without its key, or a lost database) runs setup again after a 15 s button hold.
 - The setup response hands the key to whoever presents a configured MAC: the TRMNL protocol has no other identity. Keep the device listener on a trusted network.
 
-### Health
+### Wake data
 
-Recorded per request: battery voltage (also as a series), charging (`Battery-Charging`), USB connected (`USB-Connected`), RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage through a resting-voltage table per model (the firmware measures before Wi-Fi and the display draw current).
-
-Health reaches people through the screens: every page gets a `system` prop with this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
+Each `/api/display` records, in memory, the wake source (`Update-Source`), battery voltage (`Battery-Voltage`), RSSI (`RSSI`), firmware version (`FW-Version`) and the time. Pages get it as `device.wake`; the admin UI shows the last wake per device. It is lost on restart.
 
 ## Rendering
 
@@ -333,100 +325,90 @@ Health reaches people through the screens: every page gets a `system` prop with 
 Pages are React components in TSX, styled with CSS modules, rendered by Takumi through `takumi-js` (no browser). A page exports the data it needs and a default component that receives the results as props:
 
 ```tsx
-// pages/layouts/e1001/overview.tsx
+// pages/layouts/e1001/weather.tsx (abridged)
+import { LineChart } from "../../components/LineChart";
 import { query, type PageProps } from "../../lib/page";
-import { Screen } from "../../components/Screen";
-import { AreaChart } from "../../components/AreaChart";
-import { EventList } from "./components/EventList";
-import styles from "./overview.module.css";
+import styles from "./weather.module.css";
 
 export const data = {
-  weather: query("weather.forecast", { days: 3 }),
-  power:   query("p1.power", { range: "24h", step: "5m" }),
-  solar:   query("solar.production", { range: "24h", step: "5m" }),
-  events:  query("calendar.upcoming", { limit: 5 }),
+  weather: query("weather.forecast", { hours: 24, days: 3 }),
 };
 
 type Data = typeof data;
 
-export default function Overview({ data, device, viewport, system, now }: PageProps<Data>) {
+export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
+  const { value: f, fetchedAt, stale, error } = data.weather;
+  if (!f) return <div className={styles.screen}>Geen weerbericht{error ? `: ${error}` : ""}</div>;
   return (
-    <Screen device={device} system={system}>
-      <div className={styles.grid}>
-        <AreaChart series={[data.power, data.solar]} width={viewport.width} height={200} />
-        <EventList result={data.events} now={now} />
-      </div>
-    </Screen>
+    <div className={styles.screen}>
+      <LineChart values={f.hourly.map((h) => h.temperature)} width={viewport.width - 64} height={120} />
+    </div>
   );
 }
 ```
 
 - `data` is static: `query()` only builds a descriptor (`{module, query, params}`). Components never fetch; everything arrives as props.
-- Each `data.<key>` is a result envelope: `{value, fetchedAt, stale, error}`. Components decide how to show stale or failed data; shared components (`Screen`, cards) give a default.
+- Each `data.<key>` is a result envelope: `{value, fetchedAt, stale, error}`. Pages decide how to show stale or failed data.
+- Props are `data`, `device` (`name`, `model`, `rotation`, `wake`), `viewport`, `system` (`staleModules`: modules whose data is stale), `now` and `timezone`.
 - `PageProps<Data>` types each key from the generated query types.
-- CSS modules: `import styles from "./x.module.css"`; Bun's bundler scopes class names and emits one CSS file. Takumi supports a CSS subset: class selectors, flexbox and grid, borders, fonts. Complex selectors and some properties may not render.
-- Inline `<svg>` works (verified): charts are components that emit SVG.
+- CSS modules: `import styles from "./x.module.css"`; Bun's bundler scopes class names and emits one CSS file per page. Takumi supports a CSS subset: class selectors, flexbox and grid, borders, fonts. Complex selectors and some properties may not render.
+- Inline `<svg>` works: charts are components that emit SVG.
 
 ### Queries
 
 Modules expose named, typed queries; this is how stored data reaches pages.
 
 ```go
-type powerParams struct {
-	Range time.Duration `yaml:"range"`
-	Step  time.Duration `yaml:"step"`
+type forecastParams struct {
+	Hours int `json:"hours"`
+	Days  int `json:"days"`
 }
 
-var Module = module.Define[p1, config](
-	"p1",
+var Module = module.Define[weather, config](
+	"weather",
 	defaultConfig,
-	module.WithQuery("power", (*p1).power),
+	module.WithQuery("forecast", (*weather).forecast),
 )
 
-func (m *p1) power(ctx context.Context, p powerParams) (Series, error) {
-	// series are service-owned; the service picks the rollup and buckets
-	return module.Series(ctx).Query(ctx, "p1.power_import", p.Range, p.Step)
+func (m *weather) forecast(ctx context.Context, p forecastParams) (*Forecast, error) {
+	var f Forecast
+	ok, err := module.LoadSnapshot(ctx, &f)
+	// trim to p.Hours and p.Days from now
 }
 ```
 
-- Params are decoded from the page header into the query's own struct; unknown keys and bad values fail at startup, not at render.
+- Params are the page's declared params, with the device's overrides merged over them, decoded as JSON into the query's own struct. Unknown keys and bad values fail at startup (for every page and every device override), not at render.
 - Results are plain structs that serialize to JSON; TypeScript types for them are generated (see [Types](#types)).
-- Queries read storage only, never the source: their own tables through sqlc on the read-only connection, series through `module.Series(ctx)`.
-
-### Data volume
-
-24 hours of one-minute samples is 1,440 points per series; P1 import, P1 export and solar together are ~4,300. The E1001 is 800 pixels wide, so more points than pixels add nothing. Series queries take a `step` and bucket in SQL (average for power, last value for meter readings): 5 minutes gives 288 points per series. Rollup tables serve longer ranges. Chart components bucket again when given more points than their pixel width.
+- Queries read storage only, never the source: their own tables through sqlc and module state, on the read-only connection.
 
 ### Renderer process
 
-A long-running Bun process (`renderer/`), started and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
+A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run in `renderer.dir`), started on the first request and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
 
-- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` (shipped in the image) with `Bun.build` into JS plus CSS. With `watch` on, for development, it rebuilds on file changes. Pages change through a new image; no pages on the config mount in v1.
+- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` with `Bun.build` into JS plus CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle.
 - **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
 
 | Request | Response |
 | --- | --- |
-| `{"id":1,"op":"describe"}` | every page with its `data` descriptors |
-| `{"id":2,"op":"render","page":"overview","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
+| `{"id":1,"op":"describe"}` | `{"id":1,"pages":[{"name":"e1001/weather","data":{...}}]}` |
+| `{"id":2,"op":"render","page":"e1001/weather","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
 - **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
-- **Supervision**: Go restarts the process on exit with backoff. Each request has its own timeout, 30 s for a render and 60 s for describe (it may bundle); a process that does not answer in time is killed and restarted, so requests queued behind it are not stuck. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
+- **Supervision**: a process that exits is replaced on the next request, with backoff from 500 ms to 30 s between starts. Each request has its own timeout, 30 s for a render and 60 s for describe (it may bundle); a process that does not answer in time is killed and restarted, so requests queued behind it are not stuck. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
 - **Callers leaving**: when a caller's context ends (a device disconnects), the caller gets its error at once, while the response is still read in the background, within the same timeout, before the next request uses the process. Only a response that does not arrive in time restarts the process.
 
 ### Pipeline
 
-1. **Describe** (startup and after a rebuild): the renderer reports pages and their `data`. Go checks that each `module.query` exists and its params decode into the query's params type. Errors stop startup; after a rebuild, they keep the previous bundle.
-2. **Resolve**: Go runs the page's queries concurrently with a timeout. One failing query yields an error envelope, not a failed page.
+1. **Describe**: the renderer reports pages and their `data`. Go asks on every use, so a watch rebuild is seen by the next request. At startup Go checks that every page's `module.query` exists and its params decode into the query's params type, with each device's overrides too; errors stop startup. Pages from a later rebuild are not checked again: a bad query shows as an error envelope.
+2. **Resolve**: Go runs the page's queries concurrently with a 10 s timeout. One failing query yields an error envelope, not a failed page.
 3. **Render**: Go sends props to the renderer, gets an RGBA PNG at `props.viewport`.
 4. **Reduce** (Go): rotate if needed, map each pixel to the nearest of 4 gray levels (0, 85, 170, 255) without dithering, which keeps text sharp, and encode a 2-bit PNG. Both models use 4 levels.
-5. **Check**: the PNG must be under 750 KB (both models; firmware limit with PSRAM). A 2-bit image without dithering is far below that (spike: 34 KB at 1872x1404); exceeding it is logged and the previous image is served.
-6. **Name**: `filename` is the PNG's hash plus timestamp (see [Protocol](#protocol)). An unchanged image keeps its filename and the device skips the download. Props include `now` and battery values, so most wakes produce a new image; that is accepted.
-
-Per-device params: a device can override a page's query params in config (e.g. `limit` for the bigger E1003), merged over the page's declared params before resolving.
+5. **Check**: the PNG must be under 750 KB (both models; firmware limit with PSRAM). A 2-bit image without dithering is far below that (spike: 34 KB at 1872x1404); exceeding it fails the render, which is logged, and the device gets its previous image.
+6. **Name**: `filename` is the PNG's hash plus timestamp (see [Protocol](#protocol)). An image identical to the device's previous one keeps its filename and the device skips the download. Props include `now` and wake values, so most wakes produce a new image; that is accepted.
 
 ### Types
 
-Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
+Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
 
 Mapping rules: `time.Time` is a string (RFC 3339), pointers are `T | null`, and exported fields are named by their `json` tag (`omitempty` and `omitzero` make them optional). Slices are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default. Embedded fields, maps, `[]byte`, interfaces, the `,string` option and types with their own JSON encoding are errors; gentypes supports a shape once a query needs it.
 
@@ -434,10 +416,10 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 
 ### Shared code
 
-- `pages/lib/`: `query`, `PageProps`, formatting (Dutch decimal comma, day and month names, durations, "updated at" labels). Pure functions.
+- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, temperatures and millimeters with a decimal comma), `weather.ts` (weather code labels, wind direction). Pure functions.
+- `pages/components/`: `LineChart` (a line over optional bars, as inline SVG).
 
-Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the image's ICU data formats Dutch dates as expected.
-- `pages/components/`: `Screen` (frame with device status from `.system`), cards, charts (`LineChart`, `AreaChart`, `BarChart`, `Sparkline` as inline SVG), event list.
+Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
 
 ### Testing
 
@@ -445,91 +427,85 @@ Each step has its own test with no network:
 
 | What | Tool | How |
 | --- | --- | --- |
-| Module `Update` | `go test` | `httptest` fake of the source, assert on stored state and series |
-| Queries | `go test` | storage in a temp dir with migrations applied, seeded with inserts, `cmp.Diff` on the returned struct |
-| Migrations | `go test` | all owners' migrations applied together to one empty database, so table name collisions show |
-| Pipeline | `go test` | fake renderer and queries, including failing and stale ones |
-| Formatting, chart math | `bun test` | table tests on pure functions |
-| Pages | `bun test` | fixture props (`pages/testdata/<page>.json`) rendered, reduced to 4 grays, compared to a golden PNG with a small pixel tolerance; a mismatch writes a diff image. Goldens are regenerated deliberately on Takumi or font upgrades. |
-| Types | `tsc --noEmit` | pages against generated types |
-
-Fixtures come from the live service: the preview serves the resolved props as JSON (`/preview/{device}/{layout}/{page}/props.json`), saved as-is into `pages/testdata/`.
+| Module `Update` and queries | `go test` | `httptest` fake of Open-Meteo with fixtures in `modules/weather/testdata`, storage in a temp dir, assertions on the query results |
+| Module loading, scheduler | `go test` | fake modules: config errors, panics, backoff, auth pause, manual updates, snapshots |
+| Storage | `go test` | pragmas and page size, reader cannot write, per-owner migrations |
+| Device protocol | `go test` | setup, keys surviving a restart, auth, page selection, refresh rate (including DST), render failure, image store |
+| Pipeline, renderer process | `go test` | fake renderer and queries, including failing and stale ones; frame encoding; timeouts, restarts, backoff; one integration test against the real Bun renderer |
+| Service and admin UI | `go test` | config parsing, startup checks, previews, simulator, `/healthz`, shutdown drain |
+| Types | `go test`, `tsc --noEmit` | gentypes against a golden file; pages against generated types |
+| Formatting, renderer frames | `bun test` | table tests on pure functions; frame encoding and rendering in `renderer/` |
 
 ### Fonts
 
 Takumi's built-in sans-serif, a variable font covering all weights. No font files are loaded.
 
-## Web UI
+## Admin UI
 
 On a separate admin listener. No authentication; access is restricted at the network level (bind addresses in config, TrueNAS port mapping, firewall rules).
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | Devices, pages, module status (last update, errors), pending devices |
-| `GET /preview/{device}/{layout}/{page}.png` | Exactly what the device gets |
-| `GET /preview/{device}/{layout}/{page}/props.json` | The props the page received; saved as test fixtures |
-| `GET /preview/page/{layout}/{page}.png?model=...&rotation=...` | A page on a panel without a device |
-| `GET /queries` | Every registered query with its params and a sample result |
-| `GET /healthz` | Liveness |
-| `GET /simulate/{device}`, `POST /simulate/{device}/wake` | Simulator: plays a device's wake (setup, display) through the device protocol in-process |
-| `GET /images/{filename}.png` | Simulated images |
+| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), devices with their last wake and page previews, pending devices, every page on every panel at rotations 0 and 90 |
+| `POST /modules/{module}/update` | Run one update of the module now, then redirect to `/` |
+| `GET /preview/{device}/{layout}/{page}.png` | Exactly what the device gets; `?model=` overrides the device's model |
+| `GET /preview/{device}/{layout}/{page}/props.json` | The props the page receives; `?model=` as above |
+| `GET /preview/page/{layout}/{page}.png?model=...&rotation=...` | A page on a panel without a device; model defaults to `reterminal_e1001`, rotation to 0 |
+| `GET /simulate/{device}` | Simulator page for a device |
+| `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
+| `GET /images/{filename}.png` | Images rendered for simulated wakes |
+| `GET /healthz` | Liveness, `ok` |
 
-The simulator runs on its own `device.Devices`, mounted only on the admin listener: its page, wake and image store are separate from the real devices', so it never evicts their images. It shares the stored API keys, which belong to a MAC rather than to a device's state. The device listener has no simulator mode.
+The simulator runs on its own `device.Devices`, mounted only on the admin listener: its page, wake and image store (4 images) are separate from the real devices', so it never evicts their images. It shares the stored API keys, which belong to a MAC rather than to a device's state. The device listener has no simulator mode.
 
 ## Configuration
 
-One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values. A substituted value takes its YAML type (`${PORT}` can be a number), except null: an empty, `null` or `~` value is that string, not a missing key that falls back to the default.
+One YAML file, `-config` flag (default `/config/dashboard.yaml`). `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values; a referenced variable that is not set stops startup. A substituted value takes its YAML type (`${PORT}` can be a number), except null: an empty, `null` or `~` value is that string, not a missing key that falls back to the default. Unknown keys stop startup.
 
 ```yaml
 listen:
-  device: "0.0.0.0:8080"
-  admin: "192.168.1.10:8081"   # bind to the trusted interface only
-public_url: http://192.168.1.10:8080   # base for image_url, reachable from the devices
-timezone: Europe/Amsterdam
-data_dir: /data
+  device: "0.0.0.0:8080"       # default ":8080"
+  admin: "192.168.1.10:8081"   # default "127.0.0.1:8081"; bind to a trusted interface only
+public_url: http://192.168.1.10:8080   # required; base for image_url, reachable from the devices
+timezone: Europe/Amsterdam     # default
+data_dir: /data                # default
 
-schedule:
+schedule:                      # defaults shown
   first_wake: "07:00"
   last_wake: "00:00"
   interval: 1h
   detail_timeout: 5m
 
+renderer:                      # defaults shown
+  bun: bun                     # Bun executable
+  dir: .                       # holds renderer/, pages/ and node_modules
+  watch: false                 # rebuild pages on change, for development
+
 modules:
   weather:
-    location: "Amsterdam, The Netherlands"   # geocoded once, coordinates cached in the module's table
-    model: knmi_seamless   # Open-Meteo weather model; omit to let Open-Meteo pick
-  p1:
-    url: http://192.168.1.20
-  calendar:
-    ical_url: ${CALENDAR_ICAL_URL}
-  car:
-    client_id: ${PLEOS_CLIENT_ID}
-    client_secret: ${PLEOS_CLIENT_SECRET}
+    location: "Amsterdam, The Netherlands"
+    model: knmi_seamless
 
 devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:FF"
     rotation: 0
     layout: e1001
-    pages: [overview, energy, car]
-    params:                       # optional per-device query param overrides, page.key within the layout
-      overview.events: {limit: 8}
+    pages: [weather, hello]
+    params:
+      weather.weather: {days: 5}
 ```
 
-Runtime state (device API keys, module caches) lives in the database, not the config file.
+Runtime state (device API keys, module state and caches) lives in the database, not the config file.
 
-## Deployment
+## Shutdown
 
-- One Docker image, multi-stage: Go service, Bun runtime with the renderer and `node_modules`, pages. Base is a slim image with Bun (~60-90 MB); the Go binary is static.
-- CI: `go test`, `bun test`, `tsc --noEmit`, generated types and sqlc code up to date.
-- Built by GitHub Actions, pushed to GHCR.
-- Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite, own ZFS dataset, `recordsize=16K`) mounts.
-- Restart policy `unless-stopped` and a Docker health check on `/healthz`.
-- Shutdown (SIGTERM): module schedules stop, both listeners stop accepting, and requests in flight get 5 s to finish (within Docker's 10 s stop timeout). Requests still running then have their context cancelled, which ends renders and manual module updates; the renderer and storage close only after every handler has returned. A drain that runs out is logged as a warning, not a failed exit.
-- Backup: ZFS snapshots of the `/data` dataset.
+On SIGTERM or interrupt: module schedules stop, both listeners stop accepting, and requests in flight get 5 s to finish (within Docker's 10 s stop timeout). Requests still running then have their context canceled, which ends renders and manual module updates; the renderer and storage close only after every handler has returned. A drain that runs out is logged as a warning, not a failed exit.
 
-## Open questions
+## CI
 
-1. To verify on hardware: `Update-Source` values for a button wake, which button wakes each model, firmware rotation direction, resting-voltage table for the battery percentage.
-2. Takumi CSS coverage: find limits as pages are built.
-3. Write load: measure actual bytes written per day once running, and compare with the estimate in [Write load](#write-load).
+GitHub Actions (`.github/workflows/ci.yml`) on pushes to `main` and on pull requests: `go vet ./...`, `go run ./cmd/gentypes` with no diff in `pages/generated`, `go test -race ./...` (with Bun installed for the renderer integration test), `bun test`, `bunx tsc --noEmit` and `go tool sqlc diff`.
+
+## Unverified on hardware
+
+`Update-Source` values for a button wake, which button wakes each model, and the firmware rotation direction.

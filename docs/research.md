@@ -1,6 +1,6 @@
 # Research: reTerminal E1001 / E1003 dashboards
 
-Status as of 2026-10-15.
+Dated entries record when an observation was made.
 
 ## Hardware
 
@@ -74,7 +74,7 @@ LaraPaper supports both (it syncs models from that API) but is not used: two fix
 
 Server: one Go service that fetches data, renders and serves the device protocol.
 
-Rendering: HTML templates + CSS rendered by Takumi (Rust, no browser) through a small CLI called as a subprocess (spike: commit `8da478f`). Go reduces the output to the panel's grays and encodes the PNG. Switch to cgo if subprocess overhead ever matters. Spike results: 12 ms / 7.6 KB for E1001, 35 ms / 34 KB for E1003, including process start.
+Rendering: TSX pages rendered by Takumi (Rust, no browser) through `takumi-js` in a resident Bun process; Go reduces the output to the panel's grays and encodes the PNG (see [design.md](design.md#rendering)). A spike with Takumi as a small CLI called per render (commit `8da478f`) measured 12 ms / 7.6 KB for E1001 and 35 ms / 34 KB for E1003, including process start.
 
 ## Data sources without Home Assistant
 
@@ -161,24 +161,24 @@ Hoymiles publishes no changelog. Installers update remotely: S-Miles Cloud web p
 | --- | --- | --- |
 | V00.02.19 | 2023 | Fixed DTU crashes from Modbus polling; Modbus works. Support rolls units back to this. |
 | V00.02.22 | Jan 2024 | Modbus TCP queries time out (multiple users, DTU-Pro-S H09.06.01). |
-| V00.02.23 | 2024 | Modbus reported dead by some, working for others; favoured by HM-1500 owners. |
+| V00.02.23 | 2024 | Modbus reported dead by some, working for others; favored by HM-1500 owners. |
 | V00.05.02 | 2025 | Energy spikes; HM-1500 issues. |
 | V00.06.05 | Aug 2025 | HM-1500 inverters switch off; some roll back to 2.23. |
 | V00.07.02 | Jan 2026 | No visible change; DTU crashes 2-4x/day under frequent Modbus polling (support: poll less often). |
 | V00.07.04 | 2026 | Minimum for `ha-hoymiles-dtupro`. |
 
-Our DTU (V00.02.22) is ~2.5 years behind. Polling no more than every 60 s is advisable on any version.
+Our DTU runs V00.02.22, from January 2024. Polling no more than every 60 s is advisable on any version.
 
 No installer access (plant registered by the installer). Workarounds:
 
-1. **S-Miles Cloud with the owner account** (preferred for now). Reverse-engineered API (`/iam/pub/3/auth/login`, v3 login); reference implementation: `homeassistant-hoymiles-cloud` (Python). Gives PV power, today/total energy, per-channel PV. Cloud lags the DTU upload interval, which is fine for screens refreshing every 15-30 min. Risk: unofficial, may break.
+1. **S-Miles Cloud with the owner account** (preferred). Reverse-engineered API (`/iam/pub/3/auth/login`, v3 login); reference implementation: `homeassistant-hoymiles-cloud` (Python). Gives PV power, today/total energy, per-channel PV. Cloud lags the DTU upload interval, which is fine for screens refreshing every 15-30 min. Risk: unofficial, may break.
 2. **Installer** changes RS-485 port config to Remote control and updates firmware, or transfers installer rights.
 3. **Hoymiles support** as owner: report Modbus TCP timeouts on DTU-Pro-S V00.02.22, ask for a working firmware (they have reflashed units remotely before).
 4. **DIY account** in the S-Miles Installer app. Hoymiles FAQ: DIY homeowners may register in the Installer app (beta; NL supported). A DIY account only manages plants it owns; the DTU is bound to the installer's plant. Plant transfers between accounts go through Hoymiles technical support. Route: register DIY account, try Toolkit local connection at the DTU; if refused, ask support to transfer the plant to the DIY account. Gives control over RS-485 config and firmware updates; the installer loses access, which may matter for warranty service.
 
 OpenDTU is a weak fallback: drops S-Miles, reported gaps for HMT 3-phase data, and Hoymiles' Aug 2026 inverter security firmware blocks OpenDTU/AhoyDTU on updated inverters.
 
-Plan: build against S-Miles Cloud behind the same adapter interface as Modbus; switch to Modbus once it answers.
+Plan: build against S-Miles Cloud behind the same adapter interface as Modbus; switch to Modbus when it answers.
 
 ## Car: Hyundai Kona Electric 2024 (Bluelink EU)
 
@@ -226,8 +226,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 1. DTU Modbus: via installer or Hoymiles support (see Solar workarounds).
 2. iCal address of the shared calendar (likely available).
 3. Does the Pleos API return data for the Kona Electric 2024?
-4. Content, layout and placement per screen (deferred).
-5. Daytime hours and refresh interval per screen (deferred).
+4. Content, layout and placement per screen.
 
 ## Sources
 
