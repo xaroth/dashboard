@@ -1,4 +1,4 @@
-FROM golang:1.27 AS go
+FROM golang:1.27.1 AS go
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -14,10 +14,12 @@ RUN bun install --frozen-lockfile --production
 FROM oven/bun:1.4-slim
 WORKDIR /app
 COPY --from=deps /app/node_modules node_modules
-COPY package.json ./
+COPY package.json tsconfig.json ./
 COPY renderer renderer
 COPY pages pages
 COPY --from=go /dashboard /usr/local/bin/dashboard
+# The Go binary makes HTTPS calls; do not depend on the bun image shipping CA certs.
+COPY --from=go /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN mkdir /data && chown bun:bun /data
 USER bun
 VOLUME /data
