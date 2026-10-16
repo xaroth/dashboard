@@ -24,7 +24,7 @@ func TestFrameRequestVector(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	if err := writeFrame(&buf, []byte(`{"id":1,"op":"describe"}`)); err != nil {
-		t.Fatal(err)
+		t.Fatalf("writeFrame: %v", err)
 	}
 	if got := hex.EncodeToString(buf.Bytes()); got != vectorRequest {
 		t.Errorf("got %s, want %s", got, vectorRequest)
@@ -49,7 +49,7 @@ func TestReadFrame(t *testing.T) {
 			t.Parallel()
 			resp, body, err := readFrame(bytes.NewReader(testCase.in))
 			if err != nil {
-				t.Fatalf("got error %v", err)
+				t.Fatalf("got error %v, want nil", err)
 			}
 			if resp.ID != testCase.wantID {
 				t.Errorf("got id %d, want %d", resp.ID, testCase.wantID)

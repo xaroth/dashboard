@@ -60,7 +60,7 @@ func TestNewChecksQueries(t *testing.T) {
 			d := cfg.Devices["hallway"]
 			d.Params = testCase.overrides
 			cfg.Devices["hallway"] = d
-			stub := render.NewFakeRenderer(testCase.page)
+			stub := render.NewFakeRenderer(t, render.ExpectPages(testCase.page))
 			_, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler),
 				WithRenderer(stub), WithRegistrations(clockRegistration()))
 			if testCase.want == "" {
