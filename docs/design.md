@@ -472,7 +472,7 @@ Prometheus metrics on the admin listener at `/metrics`, registered with `promaut
 | `dashboard_module_update_duration_seconds` | `module` | Update duration |
 | `dashboard_module_last_success_timestamp_seconds` | `module` | Last successful update |
 | `dashboard_render_duration_seconds` | `page`, `result` | Page render from resolving data to the finished image; an unknown page is `unknown` |
-| `dashboard_device_wakes_total` | `device`, `source` | Display requests by `Update-Source` |
+| `dashboard_device_wakes_total` | `device`, `source` | Display requests by `Update-Source`: `timer`, `button`, `EXT0`, or `other` |
 | `dashboard_device_battery_volts` | `device` | `Battery-Voltage` of the latest wake |
 | `dashboard_device_rssi_dbm` | `device` | `RSSI` of the latest wake |
 | `dashboard_device_last_wake_timestamp_seconds` | `device` | Latest wake |
@@ -488,7 +488,7 @@ OpenTelemetry traces, exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT`
 | `<METHOD> <pattern>`, per request on both listeners, except `/healthz` and `/metrics` | yes | `render <page>` with a `<module>.<query>` span per page query and the module's outgoing HTTP calls |
 | `<module>.update`, per scheduled update | yes | the module's outgoing HTTP calls |
 
-A manual update (`POST /modules/{module}/update`) is a child of its request. Spans of failed updates, renders and queries have error status.
+A manual update (`POST /modules/{module}/update`) is a child of its request. Spans of failed updates, renders and queries have error status. A failing `Enabled` is logged and recorded in module state, but has no span or update metric.
 
 ## Configuration
 

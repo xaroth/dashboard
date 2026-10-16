@@ -26,12 +26,20 @@ var (
 	}, []string{"device"})
 )
 
+// wakeSources are the Update-Source values kept as label values; others are
+// counted as "other", so a client cannot add series at will.
+var wakeSources = map[string]bool{"timer": true, "button": true, "EXT0": true}
+
 // observe records a wake in the metrics.
 func (d *Devices) observe(name string, w *render.Wake) {
 	if d.simulated {
 		return
 	}
-	wakesTotal.WithLabelValues(name, w.Source).Inc()
+	source := w.Source
+	if !wakeSources[source] {
+		source = "other"
+	}
+	wakesTotal.WithLabelValues(name, source).Inc()
 	lastWake.WithLabelValues(name).Set(float64(w.At.Unix()))
 	if w.Battery != nil {
 		batteryVolts.WithLabelValues(name).Set(*w.Battery)

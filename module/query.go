@@ -110,13 +110,16 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 	defer span.End()
 	inst, q, err := s.lookup(module, name)
 	if err != nil {
+		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return Result{Stale: true, Error: err.Error()}
 	}
-	var res Result
+	res := Result{}
 	if st, err := s.state(ctx, inst); err == nil {
 		res.FetchedAt, res.Stale, res.Error = st.FetchedAt, st.Stale, st.Error
 	} else {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		res.Stale, res.Error = true, fmt.Sprintf("reading module state: %v", err)
 	}
 	raw, err := json.Marshal(params)
@@ -125,6 +128,7 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 		res.Value, err = q.call(qctx, inst.module, raw)
 	}
 	if err != nil {
+		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		res.Value, res.Error = nil, err.Error()
 	}
