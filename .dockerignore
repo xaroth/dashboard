@@ -1,0 +1,11 @@
+.git
+.jj
+.github
+.claude
+node_modules
+data
+config.yaml
+docs
+tools
+**/*_test.go
+**/*.test.ts

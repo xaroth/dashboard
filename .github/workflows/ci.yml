@@ -38,3 +38,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go tool sqlc diff
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t dashboard:ci .
