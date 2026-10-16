@@ -108,10 +108,36 @@ func (s logSignal) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
-func newFake(tb testing.TB, mode string) (*render.Process, logSignal) {
+// Response timeouts of the fake process, told apart from backoff waits by length.
+const (
+	renderTimeout   = time.Hour
+	describeTimeout = 2 * time.Hour
+)
+
+// fired is a timer that has gone off.
+var fired = func() <-chan time.Time {
+	c := make(chan time.Time)
+	close(c)
+	return c
+}()
+
+// newFake returns a Process running the fake renderer in mode. A response
+// timeout goes off when its channel in timeouts does, and never when absent;
+// restart backoff passes at once.
+func newFake(tb testing.TB, mode string, timeouts map[time.Duration]<-chan time.Time) (*render.Process, logSignal) {
 	tb.Helper()
 	logs := make(logSignal, 16)
 	p := render.NewProcess([]string{os.Args[0], "fake-renderer", mode}, "", slog.New(logs))
+	render.SetTimeouts(p, renderTimeout, describeTimeout)
+	render.SetClock(p, time.Now, func(d time.Duration) <-chan time.Time {
+		if c, ok := timeouts[d]; ok {
+			return c
+		}
+		if d == renderTimeout || d == describeTimeout {
+			return nil
+		}
+		return fired
+	})
 	tb.Cleanup(func() { p.Close() })
 	return p, logs
 }
@@ -144,7 +170,7 @@ func waitLog(tb testing.TB, logs logSignal, msg string) {
 
 func TestProcessDescribeAndRender(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "ok")
+	p, _ := newFake(t, "ok", nil)
 	pages, err := p.Describe(t.Context())
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
@@ -164,7 +190,7 @@ func TestProcessDescribeAndRender(t *testing.T) {
 
 func TestProcessErrorResponseKeepsProcess(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "ok")
+	p, _ := newFake(t, "ok", nil)
 	before := pid(t, p)
 	if _, err := p.Render(t.Context(), "nope", render.Props{}); err == nil || !strings.Contains(err.Error(), "unknown page") {
 		t.Errorf("got %v, want unknown page error", err)
@@ -179,7 +205,7 @@ func TestProcessErrorResponseKeepsProcess(t *testing.T) {
 
 func TestProcessBadPropsKeepProcess(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "ok")
+	p, _ := newFake(t, "ok", nil)
 	before := pid(t, p)
 	bad := render.Props{Data: map[string]render.Result{"x": {Value: func() {}}}}
 	if _, err := p.Render(t.Context(), "hello", bad); err == nil {
@@ -195,8 +221,7 @@ func TestProcessBadPropsKeepProcess(t *testing.T) {
 
 func TestProcessRenderTimeoutRestarts(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "hang")
-	render.SetTimeouts(p, 100*time.Millisecond, 10*time.Second)
+	p, _ := newFake(t, "hang", map[time.Duration]<-chan time.Time{renderTimeout: fired})
 	before := pid(t, p)
 	// The caller has no deadline: the renderer's own timeout ends the wait.
 	if _, err := p.Render(t.Context(), "hello", render.Props{}); !errors.Is(err, context.DeadlineExceeded) {
@@ -209,8 +234,7 @@ func TestProcessRenderTimeoutRestarts(t *testing.T) {
 
 func TestProcessDescribeTimeout(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "hangall")
-	render.SetTimeouts(p, 10*time.Second, 100*time.Millisecond)
+	p, _ := newFake(t, "hangall", map[time.Duration]<-chan time.Time{describeTimeout: fired})
 	if _, err := p.Describe(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("got %v, want deadline exceeded", err)
 	}
@@ -222,7 +246,7 @@ func TestProcessCallerLeavingDrainsResponse(t *testing.T) {
 	if err := syscall.Mkfifo(gate, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	p, logs := newFake(t, "gate:"+gate)
+	p, logs := newFake(t, "gate:"+gate, nil)
 	before := pid(t, p)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -255,8 +279,8 @@ func TestProcessCallerLeavingDrainsResponse(t *testing.T) {
 
 func TestProcessCallerLeavingHungRenderRestarts(t *testing.T) {
 	t.Parallel()
-	p, logs := newFake(t, "hang")
-	render.SetTimeouts(p, 100*time.Millisecond, 10*time.Second)
+	expire := make(chan time.Time)
+	p, logs := newFake(t, "hang", map[time.Duration]<-chan time.Time{renderTimeout: expire})
 	before := pid(t, p)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -269,6 +293,8 @@ func TestProcessCallerLeavingHungRenderRestarts(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Errorf("got %v, want canceled", err)
 	}
+	// The drain times out after the caller left.
+	close(expire)
 	if pid(t, p) == before {
 		t.Error("got the same pid after the drain timed out, want a new process")
 	}
@@ -276,23 +302,55 @@ func TestProcessCallerLeavingHungRenderRestarts(t *testing.T) {
 
 func TestProcessCrashBacksOff(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "crash")
-	for range 2 {
+	p, _ := newFake(t, "crash", nil)
+	// A frozen clock: each restart waits its full backoff.
+	now := time.Unix(1792087200, 0)
+	var waits []time.Duration
+	render.SetClock(p, func() time.Time { return now }, func(d time.Duration) <-chan time.Time {
+		if d == renderTimeout || d == describeTimeout {
+			return nil
+		}
+		waits = append(waits, d)
+		return fired
+	})
+	for range 9 {
 		if _, err := p.Describe(t.Context()); err == nil {
 			t.Fatal("got nil error from a crashing renderer, want one")
 		}
 	}
-	// After two failures the next start waits about 1 s, longer than this deadline.
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	if _, err := p.Describe(ctx); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "waiting to restart") {
-		t.Errorf("got %v, want deadline exceeded while waiting to restart", err)
+	want := []time.Duration{
+		500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second,
+		8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second,
+	}
+	if diff := cmp.Diff(want, waits); diff != "" {
+		t.Errorf("restart waits (-want +got):\n%s", diff)
+	}
+}
+
+func TestProcessRestartWaitHonorsContext(t *testing.T) {
+	t.Parallel()
+	p, _ := newFake(t, "crash", nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	now := time.Unix(1792087200, 0)
+	render.SetClock(p, func() time.Time { return now }, func(d time.Duration) <-chan time.Time {
+		if d == renderTimeout || d == describeTimeout {
+			return nil
+		}
+		// The caller leaves while the restart waits.
+		cancel()
+		return nil
+	})
+	if _, err := p.Describe(t.Context()); err == nil {
+		t.Fatal("got nil error from a crashing renderer, want one")
+	}
+	if _, err := p.Describe(ctx); !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "waiting to restart") {
+		t.Errorf("got %v, want canceled while waiting to restart", err)
 	}
 }
 
 func TestProcessResponseIDMismatch(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "badid")
+	p, _ := newFake(t, "badid", nil)
 	if _, err := p.Describe(t.Context()); err == nil || !strings.Contains(err.Error(), "response id") {
 		t.Errorf("got %v, want response id error", err)
 	}
@@ -300,7 +358,7 @@ func TestProcessResponseIDMismatch(t *testing.T) {
 
 func TestProcessCloseDuringHungRender(t *testing.T) {
 	t.Parallel()
-	p, logs := newFake(t, "hang")
+	p, logs := newFake(t, "hang", nil)
 	done := make(chan error, 1)
 	go func() {
 		_, err := p.Render(t.Context(), "hello", render.Props{})
@@ -323,20 +381,20 @@ func TestProcessCloseDuringHungRender(t *testing.T) {
 
 func TestProcessQueuedCallerHonorsContext(t *testing.T) {
 	t.Parallel()
-	p, logs := newFake(t, "hang")
+	p, logs := newFake(t, "hang", nil)
 	go p.Render(t.Context(), "hello", render.Props{})
 	waitLog(t, logs, "hanging")
 
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-	if _, err := p.Describe(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("got %v, want deadline exceeded", err)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := p.Describe(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("got %v, want canceled", err)
 	}
 }
 
 func TestProcessConcurrent(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "ok")
+	p, _ := newFake(t, "ok", nil)
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
@@ -373,7 +431,7 @@ func TestBunRenderer(t *testing.T) {
 		t.Fatalf("Describe: %v", err)
 	}
 	if len(pages) == 0 {
-		t.Fatal("got no pages")
+		t.Fatal("got no pages, want some")
 	}
 	raw, err := p.Render(t.Context(), "e1001/hello", render.Props{
 		Data:     map[string]render.Result{},
