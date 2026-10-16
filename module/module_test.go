@@ -27,8 +27,12 @@ type testConfig struct {
 	Fail string `yaml:"fail"`
 	// FailAfter makes updates fail after this many successes.
 	FailAfter int `yaml:"fail_after"`
+	// FailUntil limits Fail to the first this many updates; 0 is all of them.
+	FailUntil int `yaml:"fail_until"`
 	// SkipSave makes updates succeed without saving a snapshot.
 	SkipSave bool `yaml:"skip_save"`
+	// Panic makes Initialize ("init"), Enabled ("enabled") or Update ("update") panic.
+	Panic string `yaml:"panic"`
 }
 
 type testModule struct {
@@ -40,14 +44,25 @@ func (m *testModule) Initialize(_ context.Context, cfg *testConfig) error {
 	if cfg.Fail == "init" {
 		return errors.New("bad init")
 	}
+	if cfg.Panic == "init" {
+		panic("boom")
+	}
 	m.cfg = cfg
 	return nil
 }
 
-func (m *testModule) Enabled(context.Context) bool { return m.cfg.Key != "" }
+func (m *testModule) Enabled(context.Context) bool {
+	if m.cfg.Panic == "enabled" {
+		panic("boom")
+	}
+	return m.cfg.Key != ""
+}
 
 func (m *testModule) Update(ctx context.Context) error {
 	m.updates++
+	if m.cfg.Panic == "update" {
+		panic("boom")
+	}
 	if !m.cfg.SkipSave || m.updates == 1 {
 		if err := module.SaveSnapshot(ctx, map[string]int{"updates": m.updates}); err != nil {
 			return err
@@ -55,6 +70,9 @@ func (m *testModule) Update(ctx context.Context) error {
 	}
 	if m.cfg.FailAfter > 0 && m.updates > m.cfg.FailAfter {
 		return errors.New("source down")
+	}
+	if m.cfg.FailUntil > 0 && m.updates > m.cfg.FailUntil {
+		return nil
 	}
 	switch m.cfg.Fail {
 	case "update":
@@ -200,6 +218,42 @@ func TestLoadInitializeFailure(t *testing.T) {
 	}
 	// Run returns at once: nothing to schedule.
 	set.Run(t.Context())
+}
+
+func TestLoadInitializePanic(t *testing.T) {
+	t.Parallel()
+	set, _ := load(t.Context(), t, "test: {key: k, panic: init}")
+	if got := status(t, set); got.Phase != module.PhaseInitFail || !strings.Contains(got.Error, "panicked: boom") {
+		t.Errorf("got %s %q, want %s with the panic", got.Phase, got.Error, module.PhaseInitFail)
+	}
+}
+
+func TestUpdatePanic(t *testing.T) {
+	t.Parallel()
+	set, _ := load(t.Context(), t, "test: {key: k, panic: update}")
+	if err := set.Update(t.Context(), "test"); err == nil || !strings.Contains(err.Error(), "panicked: boom") {
+		t.Errorf("got %v, want the panic as an error", err)
+	}
+	if got := status(t, set); got.Error != "panicked: boom" {
+		t.Errorf("got error %q, want the panic recorded", got.Error)
+	}
+}
+
+func TestSchedulePanics(t *testing.T) {
+	for _, in := range []string{"enabled", "update"} {
+		t.Run(in, func(t *testing.T) {
+			run(t, "test: {key: k, panic: "+in+"}", func(t *testing.T, set *module.Set, db *storage.DB) {
+				waitFirstAttempt(t, set)
+				got := status(t, set)
+				if got.Phase != module.PhaseFailed || !strings.Contains(got.Error, "panicked: boom") {
+					t.Errorf("got %+v, want failed with the panic", got)
+				}
+				if d := got.NextRun.Sub(*got.AttemptedAt); d != 30*time.Second {
+					t.Errorf("got retry in %v, want the 30s backoff", d)
+				}
+			})
+		})
+	}
 }
 
 // run starts the schedule in a synctest bubble and stops it at the end.
@@ -350,6 +404,44 @@ func TestScheduleAuthStops(t *testing.T) {
 		}
 		if !got.AttemptedAt.Equal(first) {
 			t.Errorf("got attempt at %v, want only the first at %v: no retries after an auth error", got.AttemptedAt, first)
+		}
+	})
+}
+
+func TestManualUpdateResetsBackoff(t *testing.T) {
+	run(t, "test: {key: k, fail: update, fail_until: 2}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		time.Sleep(30 * time.Second) // second failure, retry in 1m
+		synctest.Wait()
+		if err := set.Update(t.Context(), "test"); err != nil {
+			t.Fatalf("manual update: %v", err)
+		}
+		synctest.Wait()
+		got := status(t, set)
+		if got.Phase != module.PhaseWaiting || !got.NextRun.Equal(time.Now().Add(10*time.Minute)) {
+			t.Errorf("got %s next run %v, want waiting a full interval from now %v", got.Phase, got.NextRun, time.Now())
+		}
+	})
+}
+
+func TestManualUpdateResumesAfterAuth(t *testing.T) {
+	run(t, "test: {key: k, fail: auth, fail_until: 1}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		if got := status(t, set).Phase; got != module.PhaseAuth {
+			t.Fatalf("got phase %s, want %s", got, module.PhaseAuth)
+		}
+		if err := set.Update(t.Context(), "test"); err != nil {
+			t.Fatalf("manual update: %v", err)
+		}
+		synctest.Wait()
+		if got := status(t, set); got.Phase != module.PhaseWaiting || got.NextRun.IsZero() {
+			t.Fatalf("got %+v, want the schedule resumed", got)
+		}
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		// The auth failure, the manual update, then the resumed schedule.
+		if diff := cmp.Diff(map[string]int{"updates": 3}, snapshot(t, db)); diff != "" {
+			t.Errorf("snapshot (-want +got):\n%s", diff)
 		}
 	})
 }

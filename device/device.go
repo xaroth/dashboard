@@ -5,7 +5,11 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"database/sql"
+	"embed"
 	"encoding/hex"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"slices"
 	"strings"
@@ -14,6 +18,15 @@ import (
 
 	"github.com/xaroth/dashboard/render"
 )
+
+//go:embed sql/migrations/*.sql
+var migrations embed.FS
+
+// Migrator applies an owner's goose migrations, the .sql files in dir of
+// fsys; *storage.DB in production.
+type Migrator interface {
+	Migrate(ctx context.Context, owner string, fsys fs.FS, dir string) error
+}
 
 // Config is a configured device.
 type Config struct {
@@ -44,36 +57,31 @@ type Pending struct {
 	Seen time.Time
 }
 
-// Devices holds the configured devices and their in-memory state: API keys,
-// current page, last wake and last image. State is lost on restart.
+// Devices holds the configured devices. API keys are stored in the
+// database; current page, last wake and last image are in memory and lost
+// on restart.
 type Devices struct {
 	pipeline  Pipeline
 	store     *Store
+	queries   *Queries
 	publicURL string
 	schedule  Schedule
 	log       *slog.Logger
 	now       func() time.Time
 
-	mu    sync.Mutex
-	byMAC map[string]*state
-	// Simulator requests get their own state, so they never touch a real
-	// device's key, page or wake.
-	simByMAC map[string]*state
-	byName   map[string]*state
-	pending  map[string]time.Time
+	mu      sync.Mutex
+	byMAC   map[string]*state
+	byName  map[string]*state
+	pending map[string]time.Time
 }
 
 type state struct {
 	cfg      Config
-	apiKey   string
 	model    string
 	wake     *render.Wake
 	page     int
 	filename string
 }
-
-// SimulatorHeader marks a request from the admin simulator.
-const SimulatorHeader = "X-Dashboard-Simulator"
 
 // maxPending caps the unknown MACs remembered, so setup calls cannot grow it without bound.
 const maxPending = 32
@@ -86,6 +94,9 @@ type Options struct {
 	Devices  []Config
 	Pipeline Pipeline
 	Store    *Store
+	// DB stores the API keys; Migrator creates its tables.
+	DB       *sql.DB
+	Migrator Migrator
 	// PublicURL is the base of image_url, as the devices reach this service.
 	PublicURL string
 	Schedule  Schedule
@@ -93,26 +104,30 @@ type Options struct {
 	Now       func() time.Time
 }
 
-func New(o Options) *Devices {
+// Load runs the device migrations and returns the devices. A failing
+// migration is an error.
+func Load(ctx context.Context, o Options) (*Devices, error) {
+	if err := o.Migrator.Migrate(ctx, "device", migrations, "sql/migrations"); err != nil {
+		return nil, fmt.Errorf("device migrations: %w", err)
+	}
 	d := &Devices{
 		pipeline:  o.Pipeline,
 		store:     o.Store,
+		queries:   New(o.DB),
 		publicURL: strings.TrimSuffix(o.PublicURL, "/"),
 		schedule:  o.Schedule,
 		log:       o.Log,
 		now:       o.Now,
 		byMAC:     map[string]*state{},
-		simByMAC:  map[string]*state{},
 		byName:    map[string]*state{},
 		pending:   map[string]time.Time{},
 	}
 	for _, c := range o.Devices {
 		s := &state{cfg: c}
 		d.byMAC[c.MAC] = s
-		d.simByMAC[c.MAC] = &state{cfg: c}
 		d.byName[c.Name] = s
 	}
-	return d
+	return d, nil
 }
 
 // Target is how the named device is rendered: its reported model and wake.

@@ -60,6 +60,33 @@ modules:
 	}
 }
 
+func TestParseConfigEnvTypes(t *testing.T) {
+	t.Parallel()
+	raw := "public_url: http://x\nrenderer:\n  bun: '${BUN}'\n  dir: ${DIR}\n  watch: ${WATCH}\n"
+	testCases := []struct {
+		name  string
+		value string
+		want  RendererConfig
+	}{
+		{"empty", "", RendererConfig{Bun: "", Dir: "", Watch: true}},
+		{"null", "null", RendererConfig{Bun: "null", Dir: "null", Watch: true}},
+		{"tilde", "~", RendererConfig{Bun: "~", Dir: "~", Watch: true}},
+		{"plain", "x", RendererConfig{Bun: "x", Dir: "x", Watch: true}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := parseConfig([]byte(raw), env(map[string]string{"BUN": testCase.value, "DIR": testCase.value, "WATCH": "true"}))
+			if err != nil {
+				t.Fatalf("got error %v", err)
+			}
+			if diff := cmp.Diff(testCase.want, cfg.Renderer); diff != "" {
+				t.Errorf("renderer (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestParseConfigErrors(t *testing.T) {
 	t.Parallel()
 	device := func(fields string) string {

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"image/png"
 	"log/slog"
@@ -11,7 +12,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,6 +125,32 @@ func TestDevicePreview(t *testing.T) {
 	}
 }
 
+func TestSimulatorIsSeparate(t *testing.T) {
+	t.Parallel()
+	s, _ := newService(t, testConfig(t, "", ""))
+	rec := httptest.NewRecorder()
+	s.Admin().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/simulate/hallway/wake?source=button&model=reterminal_e1003", nil))
+	var log []struct {
+		Response map[string]any `json:"response"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &log); err != nil || len(log) != 2 {
+		t.Fatalf("simulated wake: got %d %s", rec.Code, rec.Body)
+	}
+	image := "/images/" + log[1].Response["filename"].(string) + ".png"
+	if rec := get(t, s.Admin(), image); rec.Code != http.StatusOK {
+		t.Errorf("admin listener: got %d for the simulated image, want 200", rec.Code)
+	}
+	// The device listener has its own image store; the simulator never reaches it.
+	if rec := get(t, s.device, image); rec.Code != http.StatusNotFound {
+		t.Errorf("device listener: got %d for the simulated image, want 404", rec.Code)
+	}
+
+	// The real device still has no reported model or wake.
+	if body := get(t, s.Admin(), "/").Body.String(); !strings.Contains(body, "AA:BB:CC:DD:EE:FF · reterminal_e1001") {
+		t.Error("the simulated wake changed the real device's model")
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	t.Parallel()
 	s, _ := newService(t, testConfig(t, "", ""))
@@ -149,6 +178,74 @@ func TestRunStopsOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+// blockingRenderer renders until the request's context ends, and records
+// whether it was closed while a render was running.
+type blockingRenderer struct {
+	*render.FakeRenderer
+	started            chan struct{}
+	rendering          atomic.Bool
+	closedDuringRender atomic.Bool
+}
+
+func (b *blockingRenderer) Render(ctx context.Context, _ string, _ render.Props) ([]byte, error) {
+	b.rendering.Store(true)
+	defer b.rendering.Store(false)
+	close(b.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *blockingRenderer) Close() error {
+	b.closedDuringRender.Store(b.rendering.Load())
+	return b.FakeRenderer.Close()
+}
+
+func TestRunCancelsRequestsAfterDrain(t *testing.T) {
+	t.Parallel()
+	admin := freeAddr(t)
+	r := &blockingRenderer{FakeRenderer: render.NewFakeRenderer(render.PageInfo{Name: "e1001/hello"}), started: make(chan struct{})}
+	s, err := New(t.Context(), testConfig(t, freeAddr(t), admin), slog.New(slog.DiscardHandler), WithRenderer(r))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.shutdownGrace = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// Polls the listener until it is up; the request then blocks in Render.
+	go func() {
+		for ctx.Err() == nil {
+			resp, err := http.Get("http://" + admin + "/preview/page/e1001/hello.png")
+			if err == nil {
+				resp.Body.Close()
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+	select {
+	case <-r.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("render never started")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("got %v, want nil: a drain timeout is not a failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return: the running request was not cancelled")
+	}
+	if r.closedDuringRender.Load() {
+		t.Error("renderer closed while a request was still rendering")
+	}
+	if !r.Closed() {
+		t.Error("renderer not closed after Run")
 	}
 }
 

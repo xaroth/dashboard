@@ -19,6 +19,7 @@ import (
 	"github.com/xaroth/dashboard/device"
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/storage"
 )
 
 // stubPipeline records the target it was asked for. Page "e1001/nope" does not
@@ -78,22 +79,38 @@ func newHandler(tb testing.TB, devices ...device.Config) (http.Handler, *stubPip
 		devices = []device.Config{{Name: "hallway", MAC: "AA:BB:CC:DD:EE:FF", Pages: []string{"e1001/hello"}, Rotation: 90}}
 	}
 	stub := &stubPipeline{}
-	devs := device.New(device.Options{
+	db, err := storage.Open(tb.Context(), tb.TempDir())
+	if err != nil {
+		tb.Fatalf("storage: %v", err)
+	}
+	tb.Cleanup(func() { db.Close() })
+	opts := device.Options{
 		Devices:   devices,
 		Pipeline:  stub,
 		Store:     &device.Store{Max: 4},
+		DB:        db.Writer,
+		Migrator:  db,
 		PublicURL: "http://dash",
 		Schedule:  device.Schedule{First: 7 * time.Hour, Interval: time.Hour, Detail: 5 * time.Minute, Location: time.UTC},
 		Log:       slog.New(slog.DiscardHandler),
 		Now:       func() time.Time { return time.Unix(1792087200, 0) },
-	})
-	deviceAPI := http.NewServeMux()
-	devs.Register(deviceAPI)
+	}
+	devs, err := device.Load(tb.Context(), opts)
+	if err != nil {
+		tb.Fatalf("devices: %v", err)
+	}
+	opts.Store = &device.Store{Max: 4}
+	sim, err := device.Load(tb.Context(), opts)
+	if err != nil {
+		tb.Fatalf("simulator: %v", err)
+	}
+	simulator := http.NewServeMux()
+	sim.Register(simulator)
 	h := &adminHandler{
 		Pipeline:  stub,
 		Devices:   devs,
 		Modules:   stubModules{},
-		DeviceAPI: deviceAPI,
+		Simulator: simulator,
 		Log:       slog.New(slog.DiscardHandler),
 	}
 	mux := http.NewServeMux()

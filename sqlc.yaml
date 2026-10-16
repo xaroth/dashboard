@@ -16,6 +16,14 @@ sql:
         output_models_file_name: sqlc_models.go
         output_files_suffix: _sqlc
   - <<: *owner
+    schema: device/sql/migrations
+    queries: device/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: device
+        out: device
+  - <<: *owner
     schema: modules/weather/sql/migrations
     queries: modules/weather/sql/queries.sql
     gen:

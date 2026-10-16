@@ -30,7 +30,8 @@ storage/                   SQLite: connections, per-owner migrations
 module/                    registration API, module contract, scheduler, query dispatch,
                            module state
 module/sql/                module state migrations and queries
-device/                    TRMNL protocol, health, page selection, screen schedule
+device/                    TRMNL protocol, API keys, health, page selection, screen schedule
+device/sql/                API key migrations and queries
 render/                    page pipeline, renderer process, gray reduction, PNG
 modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
@@ -51,7 +52,7 @@ modules/<name> -> module
 device         -> render
 ```
 
-`module` does not import `storage`: `module.Load` takes the writer and reader connections and a `Migrator`, which `*storage.DB` satisfies.
+`module` and `device` do not import `storage`: `module.Load` and `device.Load` take their connections and a `Migrator`, which `*storage.DB` satisfies.
 
 ## Modules
 
@@ -161,8 +162,8 @@ modules:
       update_interval: 1m
 ```
 
-- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. If `Initialize` returns an error, the module is marked failed and stays off until restart.
-- Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until the config changes or the service restarts, and show on the screens. Modules return a typed error for this (`module.ErrAuth`).
+- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call.
+- Retries: exponential backoff on errors, not capped at the interval. Authentication errors (401/403) stop retries until a manual update (Update in the web UI) succeeds or the service restarts, and show on the screens. Modules return a typed error for this (`module.ErrAuth`). A successful manual update resets the backoff: the next scheduled update is an interval after it.
 
 ### Dependencies
 
@@ -184,7 +185,7 @@ modules/weather/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
-- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each module's, before any `Initialize`. A failing migration stops startup.
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each module's, before any `Initialize`. `device.Load` runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
 - **Tables** are prefixed with their owner (`weather_locations`). An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state, and series through `module.Series(ctx)` for writes (buffered) and reads (bucketed, picking the rollup).
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Anything sampled every minute goes through the series buffer, so it lands in the minute flush. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
@@ -307,8 +308,8 @@ TRMNL BYOS, on the device listener:
 
 | Route | Behavior |
 | --- | --- |
-| `GET /api/setup` | Known MAC: return HTTP 200 with `status: 200`, `api_key`, `friendly_id`. Firmware reruns setup unless it has both. Unknown MAC: HTTP 200 with JSON `status: 404`; the device shows "MAC not registered" and retries every 5 minutes. The MAC is listed as pending in the web UI. |
-| `GET /api/display` | Authenticate by `Access-Token`, record health headers, pick the page, render if needed, return `image_url`, `filename`, `refresh_rate`. |
+| `GET /api/setup` | Known MAC: return HTTP 200 with `status: 200`, `api_key`, `friendly_id`. The key is created on the MAC's first setup and stored in the database (`device_keys`); later setups return the same key. Firmware reruns setup unless it has both. Unknown MAC: HTTP 200 with JSON `status: 404`; the device shows "MAC not registered" and retries every 5 minutes. The MAC is listed as pending in the web UI. |
+| `GET /api/display` | Authenticate by `Access-Token` against the stored key (constant-time compare), record health headers, pick the page, render if needed, return `image_url`, `filename`, `refresh_rate`. |
 | `GET /images/{filename}.png` | Rendered image, from memory. |
 | `POST /api/log` | Store device log entries; kept 30 days. |
 
@@ -316,6 +317,8 @@ TRMNL BYOS, on the device listener:
 - `filename` is at most 31 characters: a 12-hex hash of the rendered PNG plus a Unix timestamp (`3fa9c2e81b07-1792087200`). Longer names are truncated by the firmware; names without a 10-digit timestamp suffix are purged from its cache.
 - Never return JSON `status: 500` from `/api/display`: firmware treats it as a reset and wipes its credentials.
 - When the service is down, devices retry every 5 minutes until it is back. Accepted.
+- Authentication failures on `/api/display` and `/api/log`: an unknown MAC or a missing `Access-Token` is HTTP 404 with JSON `status: 404`; a known MAC whose token does not match the stored key, or that has no stored key, is HTTP 401 with JSON `status: 401`. The firmware keeps its credentials on either and retries on its next wake; it only clears them (and Wi-Fi) on JSON `status: 500`. A device whose key the service does not know (a lost database) runs setup again after a 15 s button hold.
+- The setup response hands the key to whoever presents a configured MAC: the TRMNL protocol has no other identity. Keep the device listener on a trusted network.
 
 ### Health
 
@@ -407,7 +410,8 @@ A long-running Bun process (`renderer/`), started and supervised by the Go servi
 | `{"id":2,"op":"render","page":"overview","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
 - **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
-- **Supervision**: Go restarts the process on exit with backoff and applies a timeout per render. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
+- **Supervision**: Go restarts the process on exit with backoff. Each request has its own timeout, 30 s for a render and 60 s for describe (it may bundle); a process that does not answer in time is killed and restarted, so requests queued behind it are not stuck. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
+- **Callers leaving**: when a caller's context ends (a device disconnects), the caller gets its error at once, while the response is still read in the background, within the same timeout, before the next request uses the process. Only a response that does not arrive in time restarts the process.
 
 ### Pipeline
 
@@ -467,10 +471,14 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `GET /preview/page/{layout}/{page}.png?model=...&rotation=...` | A page on a panel without a device |
 | `GET /queries` | Every registered query with its params and a sample result |
 | `GET /healthz` | Liveness |
+| `GET /simulate/{device}`, `POST /simulate/{device}/wake` | Simulator: plays a device's wake (setup, display) through the device protocol in-process |
+| `GET /images/{filename}.png` | Simulated images |
+
+The simulator runs on its own `device.Devices`, mounted only on the admin listener: its page, wake and image store are separate from the real devices', so it never evicts their images. It shares the stored API keys, which belong to a MAC rather than to a device's state. The device listener has no simulator mode.
 
 ## Configuration
 
-One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values.
+One YAML file on a mount. `${VAR}` references are substituted from the environment, so secrets can be env vars or inline values. A substituted value takes its YAML type (`${PORT}` can be a number), except null: an empty, `null` or `~` value is that string, not a missing key that falls back to the default.
 
 ```yaml
 listen:
@@ -517,6 +525,7 @@ Runtime state (device API keys, module caches) lives in the database, not the co
 - Built by GitHub Actions, pushed to GHCR.
 - Runs on TrueNAS with `/config` (YAML) and `/data` (SQLite, own ZFS dataset, `recordsize=16K`) mounts.
 - Restart policy `unless-stopped` and a Docker health check on `/healthz`.
+- Shutdown (SIGTERM): module schedules stop, both listeners stop accepting, and requests in flight get 5 s to finish (within Docker's 10 s stop timeout). Requests still running then have their context cancelled, which ends renders and manual module updates; the renderer and storage close only after every handler has returned. A drain that runs out is logged as a warning, not a failed exit.
 - Backup: ZFS snapshots of the `/data` dataset.
 
 ## Open questions
