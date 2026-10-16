@@ -10,6 +10,7 @@ import (
 	"maps"
 	"reflect"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"time"
 )
@@ -52,7 +53,7 @@ type Registration struct {
 // goroutines, outside net/http's recovery, where a panic ends the service.
 func recovered(err *error) {
 	if r := recover(); r != nil {
-		*err = fmt.Errorf("panicked: %v", r)
+		*err = fmt.Errorf("panicked: %v\n%s", r, debug.Stack())
 	}
 }
 
