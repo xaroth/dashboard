@@ -119,6 +119,35 @@ func TestPipelineRenderError(t *testing.T) {
 	}
 }
 
+func TestPipelineRenderMetrics(t *testing.T) {
+	t.Parallel()
+	p, fake := newPipeline(t)
+	fake.SetPages(render.PageInfo{Name: "metrics"})
+	target := render.Target{Model: "reterminal_e1001"}
+	unknown := render.RenderCount("unknown", "failure")
+
+	if _, err := p.Render(t.Context(), target, "metrics"); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	fake.FailRenders(errors.New("boom"))
+	p.Render(t.Context(), target, "metrics")
+	p.Render(t.Context(), target, "no-such-page")
+
+	if got := render.RenderCount("metrics", "success"); got != 1 {
+		t.Errorf("got %d successful renders, want 1", got)
+	}
+	if got := render.RenderCount("metrics", "failure"); got != 1 {
+		t.Errorf("got %d failed renders, want 1", got)
+	}
+	// Other tests may also render unknown pages; at least this one counted.
+	if got := render.RenderCount("unknown", "failure"); got <= unknown {
+		t.Errorf("got %d unknown-page renders, want more than %d", got, unknown)
+	}
+	if got := render.RenderCount("no-such-page", "failure"); got != 0 {
+		t.Errorf("got %d renders labelled with the requested page, want 0", got)
+	}
+}
+
 func TestPipelineSeesRebuilds(t *testing.T) {
 	t.Parallel()
 	p, fake := newPipeline(t)

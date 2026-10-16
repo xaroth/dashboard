@@ -89,7 +89,13 @@ var migrations = fstest.MapFS{"sql/migrations/00001_init.sql": {Data: []byte(
 	"-- +goose Up\nCREATE TABLE test_items (id INTEGER PRIMARY KEY);\n")}}
 
 func registration() module.Registration {
-	return module.Define[testModule, testConfig]("test", func() *testConfig { return &testConfig{} },
+	return namedRegistration("test")
+}
+
+// namedRegistration is the test module under another name, for tests that
+// read metrics or spans, which are shared by every test in the package.
+func namedRegistration(name string) module.Registration {
+	return module.Define[testModule, testConfig](name, func() *testConfig { return &testConfig{} },
 		module.WithUpdateInterval(10*time.Minute),
 		module.WithStaleAfter(time.Hour),
 		module.WithMigrations(migrations),

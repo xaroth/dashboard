@@ -84,6 +84,7 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	target := s.target()
 	prev := s.filename
 	d.mu.Unlock()
+	d.observe(target.Name, target.Wake)
 
 	refresh := d.schedule.refresh(d.now(), button)
 	img, err := d.pipeline.Render(r.Context(), target, page)

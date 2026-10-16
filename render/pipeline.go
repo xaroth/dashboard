@@ -8,6 +8,10 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Renderer is the part of Process the pipeline uses.
@@ -167,7 +171,24 @@ func MergeParams(base, override map[string]any) map[string]any {
 }
 
 // Render resolves props, renders and finishes the image for t.
-func (p *Pipeline) Render(ctx context.Context, t Target, page string) (Image, error) {
+func (p *Pipeline) Render(ctx context.Context, t Target, page string) (img Image, err error) {
+	ctx, span := tracer.Start(ctx, "render "+page, trace.WithAttributes(
+		attribute.String("page", page), attribute.String("target", t.Name), attribute.String("model", t.Model)))
+	start := time.Now()
+	defer func() {
+		result := "success"
+		if err != nil {
+			result = "failure"
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		label := page
+		if errors.Is(err, ErrUnknownPage) {
+			label = "unknown" // keep request input out of the label values
+		}
+		renderDuration.WithLabelValues(label, result).Observe(time.Since(start).Seconds())
+		span.End()
+	}()
 	props, err := p.Props(ctx, t, page)
 	if err != nil {
 		return Image{}, err
