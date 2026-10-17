@@ -33,9 +33,10 @@ render/                    page pipeline, renderer process, gray reduction, PNG
 modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
 modules/<name>/sql/        the module's migrations and queries
-modules/<group>/           shared values for a group of modules (eveonline: the ESI
-                           client); the group's modules are its subpackages, named
-                           <group>_<package> (modules/eveonline/status: eveonline_status)
+modules/<group>/<name>/    a group's shared values and modules, each named
+                           <group>_<name>: eveonline/esi (ESI client and characters),
+                           eveonline/sde (static data), eveonline/status (a module)
+module/moduletest/         helpers for module tests
 renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
 pages/components/, lib/    shared by all layouts
@@ -50,7 +51,7 @@ cmd/dashboard  -> storage, module, modules, device, render
 cmd/gentypes   -> module, modules
 modules        -> module, modules/<name>
 modules/<name> -> module
-modules/<group>/<name> -> module, modules/<group>
+modules/<group>/<name> -> module, the group's shared values
 device         -> render
 ```
 
@@ -186,11 +187,11 @@ Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ct
 A value several modules use, such as an API client, is defined once with `module.DefineShared` and configured once, under `modules.<name>` like a module. Modules that use it declare it with `module.WithShared`, optionally with declarations of type `D` (e.g. the API scopes they need), and read it from their context with `Get`:
 
 ```go
-package eveonline
+package esi
 
 type Scopes []string
 
-var ESI = module.DefineShared("eveonline", defaultConfig,
+var Shared = module.DefineShared("eveonline_esi", defaultConfig,
 	func(ctx context.Context, cfg *config, decls []Scopes) (*Client, error) { ... },
 	module.SharedMigrations(migrations))
 ```
@@ -199,41 +200,53 @@ var ESI = module.DefineShared("eveonline", defaultConfig,
 package skills
 
 var Module = module.Define[skills, config]("eveonline_skills", defaultConfig,
-	module.WithShared(eveonline.ESI, eveonline.Scopes{"esi-skills.read_skills.v1"}))
+	module.WithShared(esi.Shared, esi.Scopes{"esi-skills.read_skills.v1"}))
 
-func (*status) Update(ctx context.Context) error {
-	resp, err := getstatus.Request(ctx, eveonline.ESI.Get(ctx))
+func (*skills) Update(ctx context.Context) error {
+	resp, err := getskills.Request(ctx, esi.Shared.Get(ctx), ...)
 	...
 }
 ```
 
 - `Load` builds each shared value once, after migrations and before any `Initialize`, and only if a registered module declares it. The build function gets the decoded config, every declaring module's declarations in module name order, and a context with `Logger`, `HTTPClient` and `Clock`; like `Initialize`, it does no network I/O.
-- `SharedMigrations` gives a shared value tables, migrated like a module's with the shared value's name as owner. It reaches them through the calling module's `module.Database(ctx)`: the writer in `Update`, the read-only pool in queries.
-- A shared value that is an `http.Handler` is served on the admin listener under `/<name>/` (the prefix stripped), with `Database` (the writer), `Logger`, `HTTPClient` and `Clock` on the request context, and linked from the admin index under Accounts. This is how logins work.
-- The config section follows the module rules (defaults, unknown keys stop startup) but has no `schedule` key. A section for a shared value no module declares is an unknown module.
+- `SharedMigrations` gives a shared value tables, migrated like a module's with the shared value's name as owner. It reaches them through `module.Database(ctx)` of the context it is called with: the writer in a module's or its own `Update`, the read-only pool in queries and `Version`.
+- A shared value that is an `http.Handler` is served on the admin listener under `/<name>/` (the prefix stripped), with `Database` (the writer), `Logger`, `HTTPClient` and `Clock` on the request context, and linked from the admin index under Shared. This is how logins work.
+- The config section follows the module rules (defaults, unknown keys stop startup); it has a `schedule` key only when the value has a schedule (below). A section for a shared value no module declares is an unknown module.
 - A build error turns off every module that declares the value, as an `Initialize` error does; the error is prefixed with the shared value's name.
 - `Get` in a module that did not declare the value panics, which surfaces as an error from that call. A shared value's name may not be a module's name.
-- Shared values have no schedule or snapshot.
+- A shared value that implements `module.Versioned` reports the version of the source it serves (`Version(ctx)`, with the read-only pool as `Database`); the admin UI lists every shared value with its version and build error under Shared.
+- Shared values have no snapshot or queries.
+
+`module.SharedSchedule(interval, staleAfter)` gives a shared value a schedule; it must implement `module.Updater` (`Update(ctx) error`), checked when it is defined. It runs like a module under the shared value's name: same status in the admin UI, backoff, `ErrAuth`, Update now, `module_state` row, metrics, 2-minute update timeout and `schedule` config key. `module.SharedUpdateTimeout(d)` raises the timeout. It is always enabled. A build error lists it as failed to initialize. The SDE uses this to check for new builds.
 
 ### EVE Online
 
-`modules/eveonline` holds the shared `eveonline.ESI` (`*eveonline.Client`): the ESI client and the characters logged in through EVE SSO. Requests go through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls; `*Client` is the sender for `lib-esi-go` requests. Config keys under `modules.eveonline`:
+The EVE Online modules share two values, each in a subpackage of `modules/eveonline`:
+
+- `esi.Shared` (`eveonline_esi`): the ESI client and the characters logged in through EVE SSO.
+- `sde.Shared` (`eveonline_sde`): the static data, see [Static data](#static-data).
+
+#### ESI
+
+`esi.Shared` (`*esi.Client`, package `modules/eveonline/esi`) sends requests through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls; `*Client` is the sender for `lib-esi-go` requests. Its version in the admin UI is the ESI compatibility date requests are sent with (`lib-esi-go`'s `CompatibilityDate`). Config keys under `modules.eveonline_esi`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `contact` | none | Contact values in the User-Agent, e.g. `mailto:you@example.com`. Required: without it the client is not built and the EVE modules are off. |
 | `client_id`, `client_secret` | empty | The SSO application from developers.eveonline.com. Empty disables character logins. |
-| `callback_url` | empty | The application's callback URL: the admin listener's address with path `/eveonline/callback`, as the browser reaches it. Set together with the client keys. |
+| `callback_url` | empty | The application's callback URL: the admin listener's address with path `/eveonline_esi/callback`, as the browser reaches it. Set together with the client keys. |
 
 Characters:
 
-- Modules declare the scopes they need: `module.WithShared(eveonline.ESI, eveonline.Scopes{...})`. A login asks for every declared scope.
-- `/eveonline/` on the admin listener lists the characters with the declared scopes they have not granted, their token expiry and a rejected refresh. "Log in a character" goes to EVE SSO; the callback stores the character, its granted scopes and tokens in `eveonline_characters`. Logging in a character again replaces its tokens and scopes and clears its error. Pending logins live in memory for 10 minutes.
+- Modules declare the scopes they need: `module.WithShared(esi.Shared, esi.Scopes{...})`. A login asks for every declared scope.
+- `/eveonline_esi/` on the admin listener lists the characters with the declared scopes they have not granted, their token expiry and a rejected refresh. "Log in a character" goes to EVE SSO; the callback stores the character, its granted scopes and tokens in `eveonline_esi_characters`. Logging in a character again replaces its tokens and scopes and clears its error. Pending logins live in memory for 10 minutes.
 - `Client.Characters(ctx, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it is used from `Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token.
 - A rejected refresh (`invalid_grant`, `invalid_client`) is recorded on the character and fails the update with `module.ErrAuth`. After logging in again, Update now on each affected module resumes it.
 - The access token's claims (character ID, name, scopes) are read without checking the signature: the token comes straight from the token endpoint over TLS, authenticated with the client secret.
 
-`eveonline.NewFakeClient(handler)` is a service HTTP client that serves every request in-process, for tests of EVE modules; it works inside a synctest bubble.
+#### Static data
+
+`sde.Shared` (`*sde.Store`, package `modules/eveonline/sde`, no config keys) imports the datasets modules declare from the Static Data Export into typed tables, checking for a new build every hour, and answers lookups such as `Types(ctx, ids)`. Its version in the admin UI is the imported build. Datasets, tables, update rules and the test fake: [sde.md](sde.md).
 
 #### Server status
 
@@ -261,8 +274,10 @@ modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
 modules/eveonline/status/sql/migrations/00001_samples.sql
 modules/eveonline/status/sql/queries.sql
-modules/eveonline/sql/migrations/00001_characters.sql
-modules/eveonline/sql/queries.sql
+modules/eveonline/esi/sql/migrations/00001_characters.sql
+modules/eveonline/esi/sql/queries.sql
+modules/eveonline/sde/sql/migrations/00001_sde.sql
+modules/eveonline/sde/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
@@ -500,6 +515,7 @@ Each step has its own test with no network:
 | What | Tool | How |
 | --- | --- | --- |
 | Module `Update` and queries | `go test` | `httptest` fake of Open-Meteo with fixtures in `modules/weather/testdata`, storage in a temp dir, assertions on the query results |
+| EVE Online shared values and modules | `go test` | `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble); `sde.NewFake` serves SDE builds |
 | Module loading, scheduler | `go test` | fake modules: config errors, panics, backoff, auth pause, manual updates, snapshots |
 | Storage | `go test` | pragmas and page size, reader cannot write, per-owner migrations |
 | Device protocol | `go test` | setup, keys surviving a restart, auth, page selection, refresh rate (including DST), render failure, image store |
@@ -518,7 +534,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), devices with their last wake and page previews, pending devices, every page on every panel at rotations 0 and 90 |
+| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), shared values with their version, devices with their last wake and page previews, pending devices, every page on every panel at rotations 0 and 90 |
 | `POST /modules/{module}/update` | Run one update of the module now, then redirect to `/` |
 | `GET /preview/{device}/{layout}/{page}.png` | Exactly what the device gets; `?model=` overrides the device's model |
 | `GET /preview/{device}/{layout}/{page}/props.json` | The props the page receives; `?model=` as above |
@@ -526,7 +542,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `GET /simulate/{device}` | Simulator page for a device |
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |
-| `GET /{shared}/...` | Pages of shared values that are `http.Handler`s, e.g. `/eveonline/` (characters, SSO login and callback); linked from `/` under Accounts |
+| `GET /{shared}/...` | Pages of shared values that are `http.Handler`s, e.g. `/eveonline_esi/` (characters, SSO login and callback); linked from `/` under Shared |
 | `GET /healthz` | Liveness, `ok` |
 | `GET /metrics` | Prometheus metrics, see [Observability](#observability) |
 

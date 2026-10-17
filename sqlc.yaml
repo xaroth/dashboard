@@ -40,10 +40,18 @@ sql:
         package: status
         out: modules/eveonline/status
   - <<: *owner
-    schema: modules/eveonline/sql/migrations
-    queries: modules/eveonline/sql/queries.sql
+    schema: modules/eveonline/esi/sql/migrations
+    queries: modules/eveonline/esi/sql/queries.sql
     gen:
       go:
         <<: *go
-        package: eveonline
-        out: modules/eveonline
+        package: esi
+        out: modules/eveonline/esi
+  - <<: *owner
+    schema: modules/eveonline/sde/sql/migrations
+    queries: modules/eveonline/sde/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: sde
+        out: modules/eveonline/sde

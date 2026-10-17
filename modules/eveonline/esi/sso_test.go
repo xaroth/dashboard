@@ -1,4 +1,4 @@
-package eveonline_test
+package esi_test
 
 import (
 	"encoding/base64"
@@ -17,10 +17,10 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/modules/eveonline"
+	"github.com/xaroth/dashboard/modules/eveonline/esi"
 )
 
-const ssoConfig = `eveonline: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline/callback"}`
+const ssoConfig = `eveonline_esi: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline_esi/callback"}`
 
 // fakeEVE is EVE SSO and ESI. Code "skills" logs in Alice with the skills
 // scope, "all" with both scopes. Each token request issues access-<n> and
@@ -112,7 +112,7 @@ func login(tb testing.TB, set *module.Set, code string) *http.ServeMux {
 	tb.Helper()
 	mux := http.NewServeMux()
 	set.RegisterShared(mux)
-	rec := get(tb, mux, "/eveonline/login")
+	rec := get(tb, mux, "/eveonline_esi/login")
 	if rec.Code != http.StatusFound {
 		tb.Fatalf("login: got %d %s, want 302", rec.Code, rec.Body)
 	}
@@ -120,9 +120,9 @@ func login(tb testing.TB, set *module.Set, code string) *http.ServeMux {
 	if err != nil {
 		tb.Fatalf("login redirect: %v", err)
 	}
-	rec = get(tb, mux, "/eveonline/callback?code="+code+"&state="+loc.Query().Get("state"))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/eveonline/" {
-		tb.Fatalf("callback: got %d %s, want 303 to /eveonline/", rec.Code, rec.Body)
+	rec = get(tb, mux, "/eveonline_esi/callback?code="+code+"&state="+loc.Query().Get("state"))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/eveonline_esi/" {
+		tb.Fatalf("callback: got %d %s, want 303 to /eveonline_esi/", rec.Code, rec.Body)
 	}
 	return mux
 }
@@ -132,7 +132,7 @@ func TestLoginRedirect(t *testing.T) {
 	set := load(t, ssoConfig, &fakeEVE{}, probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope, skillsScope))
 	mux := http.NewServeMux()
 	set.RegisterShared(mux)
-	rec := get(t, mux, "/eveonline/login")
+	rec := get(t, mux, "/eveonline_esi/login")
 	loc, err := url.Parse(rec.Header().Get("Location"))
 	if rec.Code != http.StatusFound || err != nil {
 		t.Fatalf("got %d %v, want a redirect", rec.Code, err)
@@ -145,7 +145,7 @@ func TestLoginRedirect(t *testing.T) {
 	want := url.Values{
 		"response_type": {"code"},
 		"client_id":     {"app"},
-		"redirect_uri":  {"http://admin/eveonline/callback"},
+		"redirect_uri":  {"http://admin/eveonline_esi/callback"},
 		"scope":         {skillsScope + " " + walletScope},
 	}
 	if diff := cmp.Diff(want, q); diff != "" {
@@ -163,13 +163,13 @@ func TestLoginAndRefresh(t *testing.T) {
 		set := load(t, ssoConfig, fake, probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope))
 		mux := login(t, set, "skills")
 
-		if res := set.Resolve(t.Context(), "probe", "characters", nil); !cmp.Equal(res.Value, []eveonline.Character{{ID: 90000001, Name: "Alice"}}) {
+		if res := set.Resolve(t.Context(), "probe", "characters", nil); !cmp.Equal(res.Value, []esi.Character{{ID: 90000001, Name: "Alice"}}) {
 			t.Errorf("probe characters: got %v %q, want Alice", res.Value, res.Error)
 		}
-		if res := set.Resolve(t.Context(), "wallet", "characters", nil); !cmp.Equal(res.Value, []eveonline.Character{}) {
+		if res := set.Resolve(t.Context(), "wallet", "characters", nil); !cmp.Equal(res.Value, []esi.Character{}) {
 			t.Errorf("wallet characters: got %v %q, want none: Alice did not grant the wallet scope", res.Value, res.Error)
 		}
-		if page := get(t, mux, "/eveonline/").Body.String(); !strings.Contains(page, "Alice") || !strings.Contains(page, walletScope) {
+		if page := get(t, mux, "/eveonline_esi/").Body.String(); !strings.Contains(page, "Alice") || !strings.Contains(page, walletScope) {
 			t.Errorf("page lacks Alice or her missing wallet scope:\n%s", page)
 		}
 
@@ -213,12 +213,12 @@ func TestRefreshRejected(t *testing.T) {
 		if !errors.Is(err, module.ErrAuth) {
 			t.Fatalf("got %v, want ErrAuth", err)
 		}
-		if page := get(t, mux, "/eveonline/").Body.String(); !strings.Contains(page, "Invalid refresh token.") {
+		if page := get(t, mux, "/eveonline_esi/").Body.String(); !strings.Contains(page, "Invalid refresh token.") {
 			t.Errorf("page lacks the refresh error:\n%s", page)
 		}
 		// Logging in again clears it.
 		login(t, set, "skills")
-		if page := get(t, mux, "/eveonline/").Body.String(); strings.Contains(page, "Invalid refresh token.") {
+		if page := get(t, mux, "/eveonline_esi/").Body.String(); strings.Contains(page, "Invalid refresh token.") {
 			t.Errorf("page still shows the refresh error after logging in again")
 		}
 		if err := set.Update(t.Context(), "probe"); err != nil {
@@ -249,9 +249,9 @@ func TestCallbackErrors(t *testing.T) {
 				set := load(t, ssoConfig, &fakeEVE{})
 				mux := http.NewServeMux()
 				set.RegisterShared(mux)
-				loc, _ := url.Parse(get(t, mux, "/eveonline/login").Header().Get("Location"))
+				loc, _ := url.Parse(get(t, mux, "/eveonline_esi/login").Header().Get("Location"))
 				time.Sleep(testCase.wait)
-				rec := get(t, mux, "/eveonline/callback?"+strings.ReplaceAll(testCase.query, "STATE", loc.Query().Get("state")))
+				rec := get(t, mux, "/eveonline_esi/callback?"+strings.ReplaceAll(testCase.query, "STATE", loc.Query().Get("state")))
 				if rec.Code != testCase.wantCode || rec.Body.String() != testCase.wantBody {
 					t.Errorf("got %d %q, want %d %q", rec.Code, rec.Body, testCase.wantCode, testCase.wantBody)
 				}
@@ -262,13 +262,13 @@ func TestCallbackErrors(t *testing.T) {
 
 func TestLoginWithoutSSO(t *testing.T) {
 	t.Parallel()
-	set := load(t, "eveonline: {contact: [x]}", &fakeEVE{})
+	set := load(t, "eveonline_esi: {contact: [x]}", &fakeEVE{})
 	mux := http.NewServeMux()
 	set.RegisterShared(mux)
-	if rec := get(t, mux, "/eveonline/login"); rec.Code != http.StatusNotFound {
+	if rec := get(t, mux, "/eveonline_esi/login"); rec.Code != http.StatusNotFound {
 		t.Errorf("login: got %d, want 404", rec.Code)
 	}
-	if page := get(t, mux, "/eveonline/").Body.String(); !strings.Contains(page, "SSO is not configured") {
+	if page := get(t, mux, "/eveonline_esi/").Body.String(); !strings.Contains(page, "SSO is not configured") {
 		t.Errorf("page does not say SSO is not configured:\n%s", page)
 	}
 }

@@ -40,8 +40,17 @@
 {{end}}
 
 {{with .Shared}}
-<h2>Accounts</h2>
-<p>Logins and settings shared by modules: {{range .}}<a href="/{{.}}/">{{.}}</a> {{end}}</p>
+<h2>Shared</h2>
+<table>
+  <tr><th>Name</th><th>Version</th><th>Error</th></tr>
+  {{range .}}
+  <tr>
+    <td>{{if .Page}}<a href="/{{.Name}}/">{{.Name}}</a>{{else}}{{.Name}}{{end}}</td>
+    <td>{{.Version}}</td>
+    <td>{{.Error}}</td>
+  </tr>
+  {{end}}
+</table>
 {{end}}
 
 <h2>Devices</h2>

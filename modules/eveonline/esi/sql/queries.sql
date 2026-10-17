@@ -1,11 +1,11 @@
 -- name: ListCharacters :many
-SELECT * FROM eveonline_characters ORDER BY name;
+SELECT * FROM eveonline_esi_characters ORDER BY name;
 
 -- name: GetCharacter :one
-SELECT * FROM eveonline_characters WHERE character_id = ?;
+SELECT * FROM eveonline_esi_characters WHERE character_id = ?;
 
 -- name: SaveLogin :exec
-INSERT INTO eveonline_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error)
+INSERT INTO eveonline_esi_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error)
 VALUES (?, ?, ?, ?, ?, ?, NULL)
 ON CONFLICT (character_id) DO UPDATE SET
     name          = excluded.name,
@@ -16,9 +16,9 @@ ON CONFLICT (character_id) DO UPDATE SET
     auth_error    = NULL;
 
 -- name: SaveRefresh :exec
-UPDATE eveonline_characters
+UPDATE eveonline_esi_characters
 SET refresh_token = ?, access_token = ?, expires_at = ?, auth_error = NULL
 WHERE character_id = ?;
 
 -- name: SaveAuthError :exec
-UPDATE eveonline_characters SET auth_error = ? WHERE character_id = ?;
+UPDATE eveonline_esi_characters SET auth_error = ? WHERE character_id = ?;

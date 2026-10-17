@@ -14,9 +14,9 @@
 <p><a href="/">dashboard</a></p>
 <h1>EVE Online characters</h1>
 {{if .Configured}}
-<p><a href="/eveonline/login">Log in a character</a>, or log in again to grant missing scopes.</p>
+<p><a href="/eveonline_esi/login">Log in a character</a>, or log in again to grant missing scopes.</p>
 {{else}}
-<p>SSO is not configured: set <code>client_id</code>, <code>client_secret</code> and <code>callback_url</code> under <code>modules.eveonline</code>.</p>
+<p>SSO is not configured: set <code>client_id</code>, <code>client_secret</code> and <code>callback_url</code> under <code>modules.eveonline_esi</code>.</p>
 {{end}}
 <p>Scopes the modules need: {{range .Scopes}}<code>{{.}}</code> {{else}}none{{end}}</p>
 {{with .Characters}}

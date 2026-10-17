@@ -1,4 +1,4 @@
-package eveonline_test
+package esi_test
 
 import (
 	"context"
@@ -16,7 +16,8 @@ import (
 	"github.com/eve-online-tools/lib-esi-go/middleware/authentication"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/modules/eveonline"
+	"github.com/xaroth/dashboard/module/moduletest"
+	"github.com/xaroth/dashboard/modules/eveonline/esi"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -26,7 +27,7 @@ import (
 type probe struct{ cfg *probeConfig }
 
 type probeConfig struct {
-	Need eveonline.Scopes `yaml:"need"`
+	Need esi.Scopes `yaml:"need"`
 }
 
 func (m *probe) Initialize(_ context.Context, cfg *probeConfig) error {
@@ -37,7 +38,7 @@ func (m *probe) Initialize(_ context.Context, cfg *probeConfig) error {
 func (*probe) Enabled(context.Context) bool { return false }
 
 func (m *probe) Update(ctx context.Context) error {
-	c := eveonline.ESI.Get(ctx)
+	c := esi.Shared.Get(ctx)
 	if len(m.cfg.Need) == 0 {
 		_, err := getstatus.Request(ctx, c)
 		return err
@@ -58,8 +59,8 @@ func (m *probe) Update(ctx context.Context) error {
 	return nil
 }
 
-func (m *probe) characters(ctx context.Context, _ struct{}) ([]eveonline.Character, error) {
-	return eveonline.ESI.Get(ctx).Characters(ctx, m.cfg.Need)
+func (m *probe) characters(ctx context.Context, _ struct{}) ([]esi.Character, error) {
+	return esi.Shared.Get(ctx).Characters(ctx, m.cfg.Need)
 }
 
 const (
@@ -69,7 +70,7 @@ const (
 
 func probeRegistration(name string, scopes ...string) module.Registration {
 	return module.Define[probe, probeConfig](name, func() *probeConfig { return &probeConfig{Need: scopes} },
-		module.WithShared(eveonline.ESI, eveonline.Scopes(scopes)),
+		module.WithShared(esi.Shared, esi.Scopes(scopes)),
 		module.WithQuery("characters", (*probe).characters))
 }
 
@@ -96,7 +97,7 @@ func load(tb testing.TB, src string, handler http.Handler, regs ...module.Regist
 		Writer:        db.Writer,
 		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    eveonline.NewFakeClient(handler),
+		HTTPClient:    moduletest.HTTPClient(handler),
 		Now:           time.Now,
 	})
 	if err != nil {
@@ -109,7 +110,7 @@ func TestESIRequest(t *testing.T) {
 	t.Parallel()
 	var got http.Header
 	var url string
-	set := load(t, "eveonline: {contact: [mailto:me@example.com, https://example.com]}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	set := load(t, "eveonline_esi: {contact: [mailto:me@example.com, https://example.com]}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, url = r.Header, r.URL.String()
 		fmt.Fprint(w, `{}`)
 	}))
@@ -134,6 +135,15 @@ func TestESIRequest(t *testing.T) {
 	}
 }
 
+func TestVersion(t *testing.T) {
+	t.Parallel()
+	set := load(t, "eveonline_esi: {contact: [x]}", http.NotFoundHandler())
+	want := []module.SharedStatus{{Name: "eveonline_esi", Page: true, Version: "compatibility date " + defaults.CompatibilityDate}}
+	if diff := cmp.Diff(want, set.Shared(t.Context())); diff != "" {
+		t.Errorf("shared (-want +got):\n%s", diff)
+	}
+}
+
 func TestConfigErrors(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -141,16 +151,16 @@ func TestConfigErrors(t *testing.T) {
 		yaml string
 		want string
 	}{
-		{"no contact", "", "eveonline: contact is required"},
+		{"no contact", "", "eveonline_esi: contact is required"},
 		{
 			"partial SSO",
-			"eveonline: {contact: [x], client_id: id}",
-			"eveonline: client_id, client_secret and callback_url are set together",
+			"eveonline_esi: {contact: [x], client_id: id}",
+			"eveonline_esi: client_id, client_secret and callback_url are set together",
 		},
 		{
 			"callback path",
-			"eveonline: {contact: [x], client_id: id, client_secret: s, callback_url: 'http://h/cb'}",
-			`eveonline: callback_url must be an absolute URL with path /eveonline/callback, got "http://h/cb"`,
+			"eveonline_esi: {contact: [x], client_id: id, client_secret: s, callback_url: 'http://h/cb'}",
+			`eveonline_esi: callback_url must be an absolute URL with path /eveonline_esi/callback, got "http://h/cb"`,
 		},
 	}
 	for _, testCase := range testCases {
