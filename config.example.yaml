@@ -26,3 +26,5 @@ modules:
   weather:
     location: "Amsterdam, The Netherlands"   # geocoded on first update, coordinates cached per value
     model: knmi_seamless   # KNMI HARMONIE for 2.5 days, then ECMWF; omit to let Open-Meteo pick
+  eveonline:   # ESI client shared by the eveonline_* modules
+    contact: ["mailto:you@example.com"]   # required; sent in the User-Agent

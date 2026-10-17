@@ -60,6 +60,7 @@ device         -> render
 
 | Module | Source | Data |
 | --- | --- | --- |
+| `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
 Planned modules are listed in [plan.md](plan.md#modules).
@@ -219,6 +220,15 @@ func (*status) Update(ctx context.Context) error {
 
 `eveonline.NewFakeClient(handler)` is a service HTTP client that serves every request in-process, for tests of EVE modules; it works inside a synctest bubble.
 
+#### Server status
+
+`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that times out after 15 s, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Each successful update also stores a sample (time, online, players) in `eveonline_status_samples`, kept indefinitely: about 105,000 rows a year at the default interval.
+
+Queries:
+
+- `eveonline_status.server` takes no params and returns the stored status.
+- `eveonline_status.history` returns the player count over time, one point per step, oldest first: `hours` (default 24, at most 2160) and `stepMinutes` (default 5), at most 2000 points. Steps align to multiples of the step, and the last one holds now. A point is the rounded average of the online samples in its step, or null when the server was offline or not polled throughout it, so a chart shows downtime as a gap.
+
 ## Storage
 
 One SQLite database, `dashboard.sqlite` in `data_dir`, pure-Go driver (`modernc.org/sqlite`), no cgo.
@@ -234,6 +244,8 @@ device/sql/migrations/00001_keys.sql
 device/sql/queries.sql
 modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
+modules/eveonline/status/sql/migrations/00001_samples.sql
+modules/eveonline/status/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
