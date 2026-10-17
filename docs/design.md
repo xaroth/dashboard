@@ -61,6 +61,7 @@ device         -> render
 
 | Module | Source | Data |
 | --- | --- | --- |
+| `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills`, `/universe/names` (logged-in characters) | snapshot (each character's queue, trained skills and skill points) in module state; skill names cached in `eveonline_skills_names` |
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
@@ -256,6 +257,17 @@ Queries:
 
 - `eveonline_status.server` takes no params and returns the stored status.
 - `eveonline_status.history` returns the player count over time, one point per step, oldest first: `hours` (default 24, at most 2160) and `stepMinutes` (default 5), at most 2000 points. Steps align to multiples of the step, and the last one holds now. A point is the rounded average of the online samples in its step, or null when the server was offline or not polled throughout it, so a chart shows downtime as a gap.
+
+#### Skill queues
+
+`eveonline_skills` (`modules/eveonline/skills`) has no config keys. It declares scopes `esi-skills.read_skillqueue.v1` and `esi-skills.read_skills.v1` and is enabled when a logged-in character granted both. `Update` runs every 15 minutes; data is stale after 2 hours. ESI caches both for 60 s, but they only change in game: queries count down from the stored finish dates, so more frequent updates add nothing.
+
+- `Update` fetches every such character's queue, ordered by queue position, and trained skills with total and unallocated skill points, and stores them as ESI returned them. A character whose requests fail keeps its previous data and fetch time, with the error; the update fails only when every character fails, so one rejected token does not pause the others.
+- Skill names are looked up once with `/universe/names` and kept in `eveonline_skills_names`.
+- ESI keeps finished skills in the queue, and does not add them to `/skills`, until the character logs in. Queries drop entries whose finish date has passed, using the current time rather than the update's, so a queue runs out on screen between updates, and add their points (the entry's end points less the skill's stored points) to the total.
+- A paused queue has entries without start and finish dates.
+
+Query `eveonline_skills.queue` takes `skills` (upcoming skills per character, default 5, at most 50) and returns the characters by name: `paused`, `ends` (finish of the last skill; null when empty or paused), `remaining` (skills not finished), `skills` (the first upcoming ones, the one in training first, with level, start and finish), `totalSp`, `unallocatedSp`, `fetchedAt` and `error` per character.
 
 ## Storage
 
@@ -503,8 +515,8 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 
 ### Shared code
 
-- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, temperatures and millimeters with a decimal comma), `weather.ts` (weather code labels, wind direction). Pure functions.
-- `pages/components/`: `LineChart` (a line over optional bars, as inline SVG).
+- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, temperatures and millimeters with a decimal comma), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency). Pure functions.
+- `pages/components/`: `LineChart` (a line over optional bars, as inline SVG), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time).
 
 Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
 
