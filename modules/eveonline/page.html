@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EVE Online characters</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; background: #eee; color: #111; }
+  table { border-collapse: collapse; background: #fff; }
+  td, th { padding: 4px 10px; text-align: left; border-bottom: 1px solid #ddd; vertical-align: top; }
+  .error { color: #a00; }
+</style>
+</head>
+<body>
+<p><a href="/">dashboard</a></p>
+<h1>EVE Online characters</h1>
+{{if .Configured}}
+<p><a href="/eveonline/login">Log in a character</a>, or log in again to grant missing scopes.</p>
+{{else}}
+<p>SSO is not configured: set <code>client_id</code>, <code>client_secret</code> and <code>callback_url</code> under <code>modules.eveonline</code>.</p>
+{{end}}
+<p>Scopes the modules need: {{range .Scopes}}<code>{{.}}</code> {{else}}none{{end}}</p>
+{{with .Characters}}
+<table>
+  <tr><th>Character</th><th>ID</th><th>Missing scopes</th><th>Token expires</th><th>Error</th></tr>
+  {{range .}}
+  <tr>
+    <td>{{.Name}}</td>
+    <td>{{.ID}}</td>
+    <td>{{range .Missing}}<code>{{.}}</code><br>{{else}}-{{end}}</td>
+    <td>{{.ExpiresAt.Local.Format "01-02 15:04:05"}}</td>
+    <td class="error">{{.AuthError}}</td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p>No characters logged in.</p>
+{{end}}
+</body>
+</html>

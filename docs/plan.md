@@ -32,7 +32,7 @@ Authentication errors from these sources (HTTP 401/403) are returned as `module.
 
 ### Contract additions
 
-Added to the module contract when a module needs them: HTTP routes (OAuth, login forms), active hours, backfill hooks, a shared key-value store.
+Added to the module contract when a module needs them: HTTP routes for modules (shared values have them; see [design.md](design.md#shared-values)), active hours, backfill hooks, a shared key-value store.
 
 ## Time series
 
