@@ -34,10 +34,11 @@ func (s *Set) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// schedule runs one module: jittered start, then Update every interval while
-// enabled. Failures back off exponentially from 30 s, not capped at the
-// interval; ErrAuth pauses the schedule. A successful manual update resets
-// the backoff and resumes a paused schedule, an interval later.
+// schedule runs one module: jittered start, then Update every interval, or
+// the delay it set with NextUpdate, while enabled. Failures back off
+// exponentially from 30 s, not capped at the interval; ErrAuth pauses the
+// schedule. A successful manual update resets the backoff and resumes a
+// paused schedule, as a scheduled one would.
 func (s *Set) schedule(ctx context.Context, inst *instance) {
 	delay := rand.N(min(inst.interval, maxJitter))
 	failures := 0
@@ -53,15 +54,16 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-inst.kick:
+		case next := <-inst.kick:
 			failures = 0
-			phase, delay = PhaseWaiting, inst.interval
+			phase, delay = PhaseWaiting, next
 			continue
 		case <-timer:
 		}
 
 		uctx, _ := s.context(ctx, inst, s.writer, false)
 		on, err := inst.reg.enabled(uctx, inst.module)
+		next := inst.interval
 		if err != nil {
 			err = fmt.Errorf("enabled: %w", err)
 			s.recordFailure(ctx, inst, err)
@@ -70,14 +72,14 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 			continue
 		} else {
 			inst.set(PhaseUpdating, time.Time{})
-			err = s.runUpdate(ctx, inst)
+			next, err = s.runUpdate(ctx, inst)
 		}
 		if ctx.Err() != nil {
 			return
 		}
 		if err == nil {
 			failures = 0
-			phase, delay = PhaseWaiting, inst.interval
+			phase, delay = PhaseWaiting, next
 			continue
 		}
 		if errors.Is(err, ErrAuth) {
@@ -102,11 +104,12 @@ func (s *Set) Update(ctx context.Context, name string) error {
 		if inst.initErr != nil {
 			return fmt.Errorf("%s: initialize failed: %w", name, inst.initErr)
 		}
-		if err := s.runUpdate(ctx, inst); err != nil {
+		next, err := s.runUpdate(ctx, inst)
+		if err != nil {
 			return err
 		}
 		select {
-		case inst.kick <- struct{}{}:
+		case inst.kick <- next:
 		default: // a kick is already pending
 		}
 		return nil
@@ -115,9 +118,10 @@ func (s *Set) Update(ctx context.Context, name string) error {
 }
 
 // runUpdate calls Update with a timeout and records success, with the
-// snapshot it saved, or failure. A scheduled update starts its own trace; a
-// manual one is part of the request's.
-func (s *Set) runUpdate(ctx context.Context, inst *instance) (err error) {
+// snapshot it saved, or failure. It returns the delay to the next update. A
+// scheduled update starts its own trace; a manual one is part of the
+// request's.
+func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration, err error) {
 	inst.updating.Lock()
 	defer inst.updating.Unlock()
 	ctx, span := tracer.Start(ctx, inst.reg.name+".update", trace.WithAttributes(attribute.String("module", inst.reg.name)))
@@ -134,7 +138,7 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (err error) {
 	start := time.Now()
 	err = inst.reg.update(uctx, inst.module)
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return 0, ctx.Err()
 	}
 	updateDuration.WithLabelValues(inst.reg.name).Observe(time.Since(start).Seconds())
 	if err != nil {
@@ -144,7 +148,7 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (err error) {
 		}
 		updatesTotal.WithLabelValues(inst.reg.name, result).Inc()
 		s.recordFailure(ctx, inst, err)
-		return err
+		return 0, err
 	}
 	updatesTotal.WithLabelValues(inst.reg.name, "success").Inc()
 	at := s.now()
@@ -153,7 +157,7 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (err error) {
 	if err := New(s.writer).RecordSuccess(ctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
 		inst.log.Error("recording update", "err", err)
 	}
-	return nil
+	return cmp.Or(state.next, inst.interval), nil
 }
 
 func (s *Set) recordFailure(ctx context.Context, inst *instance, err error) {

@@ -175,11 +175,11 @@ modules:
 
 - A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call.
 - Start: each schedule starts after a random delay of up to 30 s (or the interval, if shorter).
-- Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval after it.
+- Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval (or the delay set with `NextUpdate`) after it.
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)).
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `module.NextUpdate(ctx, d)` (from `Update`) runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual, and has no effect on the backoff after a failure.
 
 ### Shared values
 
