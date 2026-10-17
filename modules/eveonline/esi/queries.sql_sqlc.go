@@ -3,7 +3,7 @@
 //   sqlc v1.31.1
 // source: queries.sql
 
-package eveonline
+package esi
 
 import (
 	"context"
@@ -11,12 +11,12 @@ import (
 )
 
 const getCharacter = `-- name: GetCharacter :one
-SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error FROM eveonline_characters WHERE character_id = ?
+SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error FROM eveonline_esi_characters WHERE character_id = ?
 `
 
-func (q *Queries) GetCharacter(ctx context.Context, characterID int64) (EveonlineCharacter, error) {
+func (q *Queries) GetCharacter(ctx context.Context, characterID int64) (EveonlineEsiCharacter, error) {
 	row := q.db.QueryRowContext(ctx, getCharacter, characterID)
-	var i EveonlineCharacter
+	var i EveonlineEsiCharacter
 	err := row.Scan(
 		&i.CharacterID,
 		&i.Name,
@@ -30,18 +30,18 @@ func (q *Queries) GetCharacter(ctx context.Context, characterID int64) (Eveonlin
 }
 
 const listCharacters = `-- name: ListCharacters :many
-SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error FROM eveonline_characters ORDER BY name
+SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error FROM eveonline_esi_characters ORDER BY name
 `
 
-func (q *Queries) ListCharacters(ctx context.Context) ([]EveonlineCharacter, error) {
+func (q *Queries) ListCharacters(ctx context.Context) ([]EveonlineEsiCharacter, error) {
 	rows, err := q.db.QueryContext(ctx, listCharacters)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []EveonlineCharacter
+	var items []EveonlineEsiCharacter
 	for rows.Next() {
-		var i EveonlineCharacter
+		var i EveonlineEsiCharacter
 		if err := rows.Scan(
 			&i.CharacterID,
 			&i.Name,
@@ -65,7 +65,7 @@ func (q *Queries) ListCharacters(ctx context.Context) ([]EveonlineCharacter, err
 }
 
 const saveAuthError = `-- name: SaveAuthError :exec
-UPDATE eveonline_characters SET auth_error = ? WHERE character_id = ?
+UPDATE eveonline_esi_characters SET auth_error = ? WHERE character_id = ?
 `
 
 type SaveAuthErrorParams struct {
@@ -79,7 +79,7 @@ func (q *Queries) SaveAuthError(ctx context.Context, arg SaveAuthErrorParams) er
 }
 
 const saveLogin = `-- name: SaveLogin :exec
-INSERT INTO eveonline_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error)
+INSERT INTO eveonline_esi_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error)
 VALUES (?, ?, ?, ?, ?, ?, NULL)
 ON CONFLICT (character_id) DO UPDATE SET
     name          = excluded.name,
@@ -112,7 +112,7 @@ func (q *Queries) SaveLogin(ctx context.Context, arg SaveLoginParams) error {
 }
 
 const saveRefresh = `-- name: SaveRefresh :exec
-UPDATE eveonline_characters
+UPDATE eveonline_esi_characters
 SET refresh_token = ?, access_token = ?, expires_at = ?, auth_error = NULL
 WHERE character_id = ?
 `

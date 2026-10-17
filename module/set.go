@@ -71,7 +71,9 @@ type instance struct {
 	module     any
 	interval   time.Duration
 	staleAfter time.Duration
-	log        *slog.Logger
+	// timeout bounds one update; zero is the default.
+	timeout time.Duration
+	log     *slog.Logger
 
 	// updating serializes scheduled and manual updates; modules are not
 	// required to be safe for concurrent Update calls.
@@ -100,7 +102,8 @@ const (
 // Load decodes each registered module's config, runs its migrations, builds
 // the shared values the modules declare and initializes the modules. Config
 // and migration errors stop startup; an Initialize or shared build error only
-// turns the modules involved off.
+// turns the modules involved off. A scheduled shared value runs alongside the
+// modules, under its own name.
 func Load(ctx context.Context, o Options) (*Set, error) {
 	regs := slices.SortedFunc(slices.Values(o.Registrations), func(a, b Registration) int { return cmp.Compare(a.name, b.name) })
 	known := map[string]bool{}
@@ -124,21 +127,21 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	// Three passes, so a config error stops startup before any migration, and
 	// every module's tables exist before any Initialize.
 	sharedConfigs := make([]any, len(shared))
+	sharedScheds := make([]Schedule, len(shared))
 	for i, d := range shared {
 		cfg := d.config()
-		if err := decodeShared(o.Configs[d.sharedName()], cfg); err != nil {
+		sched, err := decodeConfig(o.Configs[d.sharedName()], cfg, d.schedule() != nil)
+		if err != nil {
 			return nil, fmt.Errorf("modules.%s: %w", d.sharedName(), err)
 		}
-		sharedConfigs[i] = cfg
+		sharedConfigs[i], sharedScheds[i] = cfg, sched
 	}
 	configs := make([]any, len(regs))
 	for i, r := range regs {
-		cfg, sched, err := decodeConfig(r, o.Configs[r.name])
+		cfg := r.newConfig()
+		sched, err := decodeConfig(o.Configs[r.name], cfg, true)
 		if err != nil {
 			return nil, fmt.Errorf("modules.%s: %w", r.name, err)
-		}
-		if sched.UpdateInterval < 0 || sched.StaleAfter < 0 {
-			return nil, fmt.Errorf("modules.%s.schedule: durations must be positive", r.name)
 		}
 		configs[i] = cfg
 		s.instances = append(s.instances, &instance{
@@ -192,7 +195,42 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 			inst.phase = PhaseInitFail
 		}
 	}
+	for i, d := range shared {
+		if sc := d.schedule(); sc != nil {
+			s.instances = append(s.instances, s.sharedInstance(d, sc, sharedScheds[i]))
+		}
+	}
+	slices.SortFunc(s.instances, func(a, b *instance) int { return cmp.Compare(a.reg.name, b.reg.name) })
 	return s, nil
+}
+
+// sharedInstance schedules a shared value's Update as a module. One that
+// failed to build is listed as failed to initialize.
+func (s *Set) sharedInstance(d sharedDef, sc *sharedSchedule, sched Schedule) *instance {
+	b := s.shared[d]
+	inst := &instance{
+		reg: Registration{
+			name:    d.sharedName(),
+			queries: map[string]query{},
+			shared:  []sharedUse{{def: d}},
+			enabled: func(context.Context, any) (bool, error) { return true, nil },
+			update: func(ctx context.Context, v any) (err error) {
+				defer recovered(&err)
+				return v.(Updater).Update(ctx)
+			},
+		},
+		module:     b.value,
+		interval:   cmp.Or(sched.UpdateInterval, sc.interval),
+		staleAfter: cmp.Or(sched.StaleAfter, sc.staleAfter),
+		timeout:    sc.timeout,
+		log:        s.log.With("shared", d.sharedName()),
+		kick:       make(chan struct{}, 1),
+		phase:      PhaseWaiting,
+	}
+	if b.err != nil {
+		inst.initErr, inst.phase = b.err, PhaseInitFail
+	}
+	return inst
 }
 
 // sharedDefs returns the shared values regs declare, sorted by name. A name
@@ -234,45 +272,34 @@ func isEmpty(node yaml.Node) bool {
 	return node.Kind == 0 || (node.Kind == yaml.ScalarNode && node.Tag == "!!null")
 }
 
-// decodeShared overlays node on a shared value's defaults in cfg. It has no
-// schedule key. Unknown keys are errors.
-func decodeShared(node yaml.Node, cfg any) error {
-	if isEmpty(node) {
-		return nil
-	}
-	if node.Kind != yaml.MappingNode {
-		return errors.New("must be a mapping")
-	}
-	return strictDecode(&node, cfg)
-}
-
-// decodeConfig overlays node on the module's defaults. Unknown keys are errors.
-func decodeConfig(r Registration, node yaml.Node) (any, Schedule, error) {
-	cfg := r.newConfig()
+// decodeConfig overlays node on the defaults in cfg. With scheduled, the
+// reserved schedule key is decoded into the returned Schedule; without, it is
+// an unknown key. Unknown keys are errors.
+func decodeConfig(node yaml.Node, cfg any, scheduled bool) (Schedule, error) {
 	var sched Schedule
 	if isEmpty(node) {
-		return cfg, sched, nil
+		return sched, nil
 	}
 	if node.Kind != yaml.MappingNode {
-		return nil, sched, errors.New("must be a mapping")
+		return sched, errors.New("must be a mapping")
 	}
 	// Take the reserved schedule key out before decoding the module's own keys.
 	rest := node
 	rest.Content = nil
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		k, v := node.Content[i], node.Content[i+1]
-		if k.Value == "schedule" {
+		if scheduled && k.Value == "schedule" {
 			if err := strictDecode(v, &sched); err != nil {
-				return nil, sched, fmt.Errorf("schedule: %w", err)
+				return sched, fmt.Errorf("schedule: %w", err)
+			}
+			if sched.UpdateInterval < 0 || sched.StaleAfter < 0 {
+				return sched, errors.New("schedule: durations must be positive")
 			}
 			continue
 		}
 		rest.Content = append(rest.Content, k, v)
 	}
-	if err := strictDecode(&rest, cfg); err != nil {
-		return nil, sched, err
-	}
-	return cfg, sched, nil
+	return sched, strictDecode(&rest, cfg)
 }
 
 // strictDecode decodes n into v, rejecting unknown keys; Node.Decode cannot.

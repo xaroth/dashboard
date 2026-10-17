@@ -2,13 +2,13 @@
 // versions:
 //   sqlc v1.31.1
 
-package eveonline
+package esi
 
 import (
 	"time"
 )
 
-type EveonlineCharacter struct {
+type EveonlineEsiCharacter struct {
 	CharacterID  int64     `json:"characterId"`
 	Name         string    `json:"name"`
 	Scopes       string    `json:"scopes"`

@@ -1,4 +1,5 @@
-package eveonline
+// Package moduletest helps test modules.
+package moduletest
 
 import (
 	"net/http"
@@ -6,10 +7,10 @@ import (
 	"time"
 )
 
-// NewFakeClient returns a service HTTP client that serves every request
-// in-process with handler, for tests of modules using ESI. Unlike
+// HTTPClient returns a service HTTP client that serves every request
+// in-process with handler, whatever its host, for module.Options. Unlike
 // httptest.Server it works inside a synctest bubble.
-func NewFakeClient(handler http.Handler) *http.Client {
+func HTTPClient(handler http.Handler) *http.Client {
 	return &http.Client{Timeout: 30 * time.Second, Transport: fakeTransport{handler}}
 }
 

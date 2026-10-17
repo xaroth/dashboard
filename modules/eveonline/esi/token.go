@@ -1,4 +1,4 @@
-package eveonline
+package esi
 
 import (
 	"context"
@@ -71,7 +71,7 @@ type Token struct {
 	scopes  []string
 }
 
-func (t *Token) set(row EveonlineCharacter) {
+func (t *Token) set(row EveonlineEsiCharacter) {
 	t.access, t.expires, t.scopes = row.AccessToken, row.ExpiresAt, strings.Fields(row.Scopes)
 }
 

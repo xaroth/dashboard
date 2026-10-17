@@ -28,7 +28,7 @@ type Pipeline interface {
 type Modules interface {
 	Statuses(ctx context.Context) ([]module.Status, error)
 	Update(ctx context.Context, name string) error
-	SharedPages() []string
+	Shared(ctx context.Context) []module.SharedStatus
 }
 
 // adminHandler serves the admin UI: status and previews of what devices get.
@@ -88,7 +88,7 @@ func (h *adminHandler) index(w http.ResponseWriter, r *http.Request) {
 		"Devices": h.Devices.Statuses(),
 		"Pending": h.Devices.Pending(),
 		"Modules": mods,
-		"Shared":  h.Modules.SharedPages(),
+		"Shared":  h.Modules.Shared(r.Context()),
 		"Pages":   pages,
 		"Panels":  panels,
 	})

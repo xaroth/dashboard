@@ -26,9 +26,9 @@ modules:
   weather:
     location: "Uithoorn, The Netherlands"   # geocoded on first update, coordinates cached per value
     model: knmi_seamless   # KNMI HARMONIE for 2.5 days, then ECMWF; omit to let Open-Meteo pick
-  eveonline:   # ESI client shared by the eveonline_* modules
+  eveonline_esi:   # ESI client shared by the eveonline_* modules
     contact: ["mailto:you@example.com"]   # required; sent in the User-Agent
-    # SSO application from developers.eveonline.com, for character logins at /eveonline/ on the admin listener
+    # SSO application from developers.eveonline.com, for character logins at /eveonline_esi/ on the admin listener
     # client_id: ...
     # client_secret: ...
-    # callback_url: http://127.0.0.1:8081/eveonline/callback   # must match the application's callback
+    # callback_url: http://127.0.0.1:8081/eveonline_esi/callback   # must match the application's callback

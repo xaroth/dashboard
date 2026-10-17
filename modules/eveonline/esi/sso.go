@@ -1,4 +1,4 @@
-package eveonline
+package esi
 
 import (
 	"cmp"
@@ -33,7 +33,7 @@ var pageHTML string
 var pageTmpl = template.Must(template.New("page").Parse(pageHTML))
 
 // ServeHTTP serves the characters page, the SSO login and its callback,
-// under /eveonline/ on the admin listener.
+// under /eveonline_esi/ on the admin listener.
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/":
@@ -144,7 +144,7 @@ func (c *Client) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	module.Logger(ctx).Info("character logged in", "character", ch.name, "id", ch.id, "scopes", len(ch.scopes))
-	http.Redirect(w, r, "/eveonline/", http.StatusSeeOther)
+	http.Redirect(w, r, "/eveonline_esi/", http.StatusSeeOther)
 }
 
 func (c *Client) fail(w http.ResponseWriter, r *http.Request, code int, err error) {

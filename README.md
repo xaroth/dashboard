@@ -8,6 +8,7 @@ E-ink dashboards for two Seeed reTerminal displays at home, running TRMNL firmwa
 Pages: weather (Open-Meteo), `eveonline` (EVE Online server status) and `hello`, a page showing what the service knows about the device. Car status, calendar, power usage and solar production are planned.
 
 - [docs/design.md](docs/design.md): service design, as built
+- [docs/sde.md](docs/sde.md): EVE Online static data: datasets, tables and updates
 - [docs/plan.md](docs/plan.md): planned modules and features
 - [docs/research.md](docs/research.md): firmware options, data sources, requirements
 - `tools/dtu_read.py <host>`: read-only Modbus check against the Hoymiles DTU
