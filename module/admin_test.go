@@ -51,17 +51,42 @@ func pagerRegistration(name string, opts ...module.Option) module.Registration {
 	return module.Define[pager, pagerConfig](name, func() *pagerConfig { return &pagerConfig{} }, opts...)
 }
 
+// ticker is a scheduled shared value with a page: an instance like a
+// module, served once, as a shared value.
+type ticker struct{}
+
+func (ticker) Update(context.Context) error { return nil }
+
+func (ticker) ServeHTTP(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ticker ", r.URL.Path) }
+
+var tickerShared = module.DefineShared("ticker", func() *struct{} { return &struct{}{} },
+	func(context.Context, *struct{}, []struct{}) (ticker, error) { return ticker{}, nil },
+	module.SharedSchedule(time.Hour, 2*time.Hour))
+
 func TestAdminPages(t *testing.T) {
 	t.Parallel()
 	set, err := tryLoad(t, "broken: {fail: true}",
-		pagerRegistration("pages", module.WithMigrations(migrations)), pagerRegistration("broken"), greeterRegistration("plain", module.WithShared(greetingShared)))
+		pagerRegistration("pages", module.WithMigrations(migrations)), pagerRegistration("broken"),
+		greeterRegistration("plain", module.WithShared(greetingShared), module.WithShared(tickerShared)))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	// Modules and shared values together, without the failed module or the
-	// one that is no handler.
-	if diff := cmp.Diff([]string{"greeting", "pages"}, set.AdminPages()); diff != "" {
+	// one that is no handler; a scheduled shared value once.
+	if diff := cmp.Diff([]string{"greeting", "pages", "ticker"}, set.AdminPages()); diff != "" {
 		t.Errorf("admin pages (-want +got):\n%s", diff)
+	}
+	// Module statuses link their own page; the ticker's is a shared one.
+	st, err := set.Statuses(t.Context())
+	if err != nil {
+		t.Fatalf("Statuses: %v", err)
+	}
+	pages := map[string]bool{}
+	for _, m := range st {
+		pages[m.Name] = m.Page
+	}
+	if diff := cmp.Diff(map[string]bool{"broken": false, "pages": true, "plain": false, "ticker": false}, pages); diff != "" {
+		t.Errorf("status pages (-want +got):\n%s", diff)
 	}
 	if err := set.Update(t.Context(), "pages"); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -76,6 +101,7 @@ func TestAdminPages(t *testing.T) {
 	}{
 		{"module", "/pages/x", http.StatusOK, `/x hello <nil> "saved by update" <nil> | snapshots are saved from Update | the next update is set from Update`},
 		{"shared value", "/greeting/x", http.StatusOK, "/x hello 0 <nil>"},
+		{"scheduled shared value", "/ticker/x", http.StatusOK, "ticker /x"},
 		{"failed module", "/broken/x", http.StatusNotFound, "404 page not found\n"},
 	}
 	for _, testCase := range testCases {
