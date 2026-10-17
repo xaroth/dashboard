@@ -13,7 +13,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/modules/eveonline"
+	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/eveonline/status"
 	"github.com/xaroth/dashboard/storage"
 )
@@ -26,7 +26,7 @@ func load(tb testing.TB, handler http.Handler) *module.Set {
 	}
 	tb.Cleanup(func() { db.Close() })
 	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte("eveonline: {contact: [mailto:me@example.com]}"), &configs); err != nil {
+	if err := yaml.Unmarshal([]byte("eveonline_esi: {contact: [mailto:me@example.com]}"), &configs); err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
@@ -36,7 +36,7 @@ func load(tb testing.TB, handler http.Handler) *module.Set {
 		Writer:        db.Writer,
 		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    eveonline.NewFakeClient(handler),
+		HTTPClient:    moduletest.HTTPClient(handler),
 		Now:           time.Now,
 	})
 	if err != nil {

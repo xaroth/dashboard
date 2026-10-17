@@ -1,7 +1,6 @@
-// Package eveonline holds what the EVE Online modules share: the ESI client
-// and the characters logged in through EVE SSO. The modules are its
-// subpackages.
-package eveonline
+// Package esi is the shared EVE Online ESI client and the characters logged
+// in through EVE SSO.
+package esi
 
 import (
 	"cmp"
@@ -26,7 +25,7 @@ import (
 var migrations embed.FS
 
 // callbackPath is where the SSO callback is served on the admin listener.
-const callbackPath = "/eveonline/callback"
+const callbackPath = "/eveonline_esi/callback"
 
 type config struct {
 	// Contact goes in the User-Agent so CCP can reach the operator, e.g.
@@ -37,17 +36,17 @@ type config struct {
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"`
 	// CallbackURL is the application's callback: the admin listener's
-	// address with path /eveonline/callback.
+	// address with path /eveonline_esi/callback.
 	CallbackURL string `yaml:"callback_url"`
 }
 
 // Scopes are the ESI scopes a module needs, declared with
-// module.WithShared(eveonline.ESI, eveonline.Scopes{...}).
+// module.WithShared(esi.Shared, esi.Scopes{...}).
 type Scopes []string
 
-// ESI is the ESI client, configured under modules.eveonline. Modules declare
-// it with module.WithShared and read it with ESI.Get(ctx).
-var ESI = module.DefineShared("eveonline", func() *config { return &config{} }, newClient,
+// Shared is the ESI client, configured under modules.eveonline_esi. Modules
+// declare it with module.WithShared and read it with Shared.Get(ctx).
+var Shared = module.DefineShared("eveonline_esi", func() *config { return &config{} }, newClient,
 	module.SharedMigrations(migrations))
 
 // Client sends ESI requests and holds the logged-in characters' tokens.
@@ -104,6 +103,12 @@ func checkSSO(cfg *config) error {
 		return fmt.Errorf("callback_url must be an absolute URL with path %s, got %q", callbackPath, cfg.CallbackURL)
 	}
 	return nil
+}
+
+// Version reports the ESI compatibility date requests are sent with: the
+// version of the routes the client was built against.
+func (c *Client) Version(context.Context) (string, error) {
+	return "compatibility date " + defaults.CompatibilityDate, nil
 }
 
 // Do sends an ESI request; Client is the sender for lib-esi-go requests.

@@ -14,7 +14,7 @@ import (
 	"github.com/eve-online-tools/lib-esi-go/esi/getstatus"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/modules/eveonline"
+	"github.com/xaroth/dashboard/modules/eveonline/esi"
 )
 
 //go:embed sql/migrations/*.sql
@@ -40,7 +40,7 @@ var Module = module.Define[status, config](
 	// ESI caches /status for 30 s; screens refresh far less often.
 	module.WithUpdateInterval(5*time.Minute),
 	module.WithStaleAfter(30*time.Minute),
-	module.WithShared(eveonline.ESI),
+	module.WithShared(esi.Shared),
 	module.WithMigrations(migrations),
 	module.WithQuery("server", (*status).server),
 	module.WithQuery("history", (*status).history),
@@ -65,7 +65,7 @@ func (*status) Update(ctx context.Context) error {
 }
 
 func fetch(ctx context.Context) (Status, error) {
-	resp, err := getstatus.Request(ctx, eveonline.ESI.Get(ctx))
+	resp, err := getstatus.Request(ctx, esi.Shared.Get(ctx))
 	if err != nil {
 		// ESI does not answer /status while the cluster is offline: the
 		// request hits lib-esi-go's timeout, which matches ESI's own.

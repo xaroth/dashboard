@@ -322,10 +322,16 @@ func TestSchedulePanics(t *testing.T) {
 // run starts the schedule in a synctest bubble and stops it at the end.
 func run(t *testing.T, src string, check func(t *testing.T, set *module.Set, db *storage.DB)) {
 	t.Helper()
+	runRegs(t, src, []module.Registration{registration()}, check)
+}
+
+// runRegs is run with regs.
+func runRegs(t *testing.T, src string, regs []module.Registration, check func(t *testing.T, set *module.Set, db *storage.DB)) {
+	t.Helper()
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		set, db := load(ctx, t, src)
+		set, db := loadRegs(ctx, t, src, regs)
 		done := make(chan struct{})
 		go func() {
 			set.Run(ctx)

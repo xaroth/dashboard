@@ -50,18 +50,18 @@ func adminRegistration(name string, opts ...module.Option) module.Registration {
 	return module.Define[adminModule, adminConfig](name, func() *adminConfig { return &adminConfig{} }, opts...)
 }
 
-// accountsPage is a shared value with a page, like a login flow.
-type accountsPage struct{}
+// loginsPage is a shared value with a page, like a login flow.
+type loginsPage struct{}
 
-func (accountsPage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "accounts at ", r.URL.Path)
+func (loginsPage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprint(w, "logins at ", r.URL.Path)
 }
 
-var accounts = module.DefineShared("accounts", func() *struct{} { return &struct{}{} },
-	func(context.Context, *struct{}, []struct{}) (accountsPage, error) { return accountsPage{}, nil })
+var logins = module.DefineShared("logins", func() *struct{} { return &struct{}{} },
+	func(context.Context, *struct{}, []struct{}) (loginsPage, error) { return loginsPage{}, nil })
 
 // fixture is the admin UI on a real pipeline, devices and module set: modules
-// "sun", which uses the shared accounts page, and "car", whose updates fail,
+// "sun", which uses the shared logins page, and "car", whose updates fail,
 // and pages from a fake renderer.
 type fixture struct {
 	handler  http.Handler
@@ -88,7 +88,7 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 		tb.Fatalf("module config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
-		Registrations: []module.Registration{adminRegistration("sun", module.WithShared(accounts)), adminRegistration("car")},
+		Registrations: []module.Registration{adminRegistration("sun", module.WithShared(logins)), adminRegistration("car")},
 		Configs:       configs,
 		Migrator:      db,
 		Writer:        db.Writer,
@@ -170,7 +170,7 @@ func TestIndex(t *testing.T) {
 		"<td>car</td>\n    <td>waiting <span class=\"stale\">stale</span></td>",
 		`<td>15m0s</td>`,
 		`<td>token refused</td>`,
-		`<a href="/accounts/">accounts</a>`,
+		`<a href="/logins/">logins</a>`,
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("got index without %s, want it", want)
@@ -181,8 +181,8 @@ func TestIndex(t *testing.T) {
 func TestSharedPage(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, nil)
-	if rec := get(t, f.handler, "/accounts/login"); rec.Code != http.StatusOK || rec.Body.String() != "accounts at /login" {
-		t.Errorf("got %d %q, want 200 \"accounts at /login\"", rec.Code, rec.Body)
+	if rec := get(t, f.handler, "/logins/login"); rec.Code != http.StatusOK || rec.Body.String() != "logins at /login" {
+		t.Errorf("got %d %q, want 200 \"logins at /login\"", rec.Code, rec.Body)
 	}
 }
 

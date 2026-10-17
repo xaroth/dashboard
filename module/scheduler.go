@@ -129,7 +129,7 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (err error) {
 		span.End()
 	}()
 	uctx, state := s.context(ctx, inst, s.writer, true)
-	uctx, cancel := context.WithTimeout(uctx, updateTimeout)
+	uctx, cancel := context.WithTimeout(uctx, cmp.Or(inst.timeout, updateTimeout))
 	defer cancel()
 	start := time.Now()
 	err = inst.reg.update(uctx, inst.module)

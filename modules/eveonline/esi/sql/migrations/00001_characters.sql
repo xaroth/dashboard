@@ -1,6 +1,6 @@
 -- +goose Up
 -- Characters logged in through EVE SSO, with their tokens.
-CREATE TABLE eveonline_characters (
+CREATE TABLE eveonline_esi_characters (
     character_id  INTEGER PRIMARY KEY,
     name          TEXT NOT NULL,
     -- Granted scopes, space-separated.
@@ -13,4 +13,4 @@ CREATE TABLE eveonline_characters (
 );
 
 -- +goose Down
-DROP TABLE eveonline_characters;
+DROP TABLE eveonline_esi_characters;
