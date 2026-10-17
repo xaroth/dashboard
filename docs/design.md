@@ -63,6 +63,7 @@ device         -> render
 | --- | --- | --- |
 | `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills` (logged-in characters); SDE types for skill names | snapshot (each character's queue, trained skills and skill points) in module state |
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
+| `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
 Planned modules are listed in [plan.md](plan.md#modules).
@@ -80,6 +81,44 @@ Config keys under `modules.weather`:
 | `forecast_url` | `https://api.open-meteo.com/v1/forecast` | Forecast endpoint |
 
 `Update` runs every 15 minutes; data is stale after 2 hours. The location is geocoded on the first update and cached per `location` string, so a changed value is looked up again. Query `weather.forecast` takes `hours` (hourly entries from the current hour, default 24) and `days` (daily entries from today, default 3).
+
+### Car
+
+Reads Hyundai, Kia and Genesis vehicles through Pleos with private My Vehicle API keys (Pleos Playground, account menu > My Vehicle Data API > brand tab; Europe only, no approval). A key covers the vehicles of one brand account (Bluelink, Kia Connect, Genesis Connect), is valid for 90 days after it is issued and cannot be extended: it is reissued in Playground and entered again. Config keys under `modules.car`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `api_url` | `https://api.pleos.ai` | Pleos API base URL |
+| `active_interval` | `15m` | Poll interval while a car is in use |
+| `max_interval` | `12h` | Longest poll interval when every car is parked |
+
+The module is enabled once a key is entered.
+
+Admin page `/car/`:
+
+- Add or replace a key: brand, client ID, client secret and issue date (default today). Saving checks the key with Pleos by issuing a token and listing its vehicles, then stores the key and its vehicles in `car_keys` and `car_vehicles` in one transaction; a key Pleos rejects, or one listing no vehicles, is not saved. Saving a client ID that exists replaces it and clears its error. The issue date is a day in the process's local time zone (`TZ`), and the key expires at the start of the 90th day after it. Secrets are stored in plain text, like the EVE tokens.
+- Per key: issue and expiry date and days left, with a warning from 10 days before expiry; the last rejection; its vehicles. Delete removes the key and its vehicles in one transaction.
+- Per vehicle: a short name (1 to 32 of `a-z`, `0-9`, `-`, `_`; unique; empty clears it), by which pages select it.
+- Besides checking a key on save, the page only changes the database, and shares nothing else with updates. A changed key is picked up by the next update; after every key was rejected and the module paused, Update now (linked after saving) resumes it. An update first removes vehicles whose key was deleted while it ran.
+
+Updates:
+
+- Auth: `POST /v1/auth/personal-token` exchanges a key for an access token, kept in memory per key. There is no refresh token; tokens are JWTs valid for 1 hour (observed, undocumented). A token is issued on first use and again when a data call rejects it (`40003`, `40004`, `4011`, HTTP 401), then the call is retried once. Every call carries the key's brand in the `Brand` header.
+- Vehicles: a key's vehicles are fixed when it is issued. The first update after start, or after a key's secret or brand changed, lists them (`GET /v1/vehicles/consent`) and drops ones no longer listed. A data call answering no consent (`5006`) or unknown VIN (`4101`) fails the update and makes the next one list again.
+- Each update reads `/driving`, `/locations`, `/powertrains` and `/status` per vehicle, and `/batteries` for types `EV`, `PE` and `UNKNOWN`. A section answering No Data (`4045`) is null in the snapshot: models report different subsets.
+- Keys fail on their own; the vehicles of a failed key keep the data of the last update. A key Pleos rejects (400, 401, 403 or 404 from the token endpoint, or a fresh token rejected), or one listing no vehicles, is recorded on the key and shown on the page until the key is saved again; a rejected key past its expiry date is not tried again. Other failures of a key (upstream errors, timeouts, 429) are logged and retried with the next update. The update fails only when no key worked: with `module.ErrAuth` when every key was rejected, which pauses the module, otherwise with the errors, which back off.
+- Polling: a car is active on a poll when its ignition is on, it is charging, it moved 200 m or more since the previous poll (GPS fixes of a parked car wander), or its odometer rose 1 km or more (for cars without a position). The first poll of a car counts as active. After each update, `NextUpdate` sets the delay to a quarter of the time since the most recently active car was last active, between `active_interval` and `max_interval`: 15 minutes while in use, 1 hour after 4 hours parked, 12 hours after 2 days. Position and odometer of the previous poll are kept in `car_vehicles`, so this survives restarts. Data is stale after 13 hours; with a `max_interval` of 13 hours or more, raise `schedule.stale_after` above it.
+- Reads return the last state the car sent, not a live reading: every section carries the time the car sent it (`updatedAt` is the newest), and a sleeping car answers with data from when it went to sleep. Waking the car is undocumented and not observed.
+- Observed on a Hyundai KONA Electric (2024, `SX2HV`): every section answers. `outsideTemperature`, tires and sunroof are null, and `engine.fuelLevel` is 0 rather than null; the module reports no fuel level for type `EV`. Measurements with a null value are null in the snapshot.
+
+Queries:
+
+- `car.vehicle` takes `id`, a short name (any case) or VIN; empty is the first vehicle. A device selects its car by overriding `id` for the page. An unknown `id` is an error.
+- `car.vehicles` takes no params and returns every vehicle, named ones first by short name, then by VIN.
+
+A vehicle has: `vin`, `shortName`, `brand`, `nickname` (from the brand's app, often empty), `keyExpiresAt`, `model` (sales name), `modelCode`, `type`, `updatedAt`, `activeAt`, `ignitionOn`, `odometerKm`, `location`, `stateOfCharge`, `fuelLevel`, `ranges` (km per energy source), `charge` (plugged in, charging, status, AC/DC targets, minutes remaining), `locked` (all doors locked), `open` (doors, hood, trunk, sunroof), `climateOn`, `outsideTemperature` (°C) and `warnings`. Fields a car does not report are null. Short names and key expiry are read at query time, so changes on the admin page show without an update.
+
+`car.NewFake(tb, opts...)` serves the Pleos API in-process for a Hyundai key with one car, plus a Kia key with `ExpectKey_Kia`, from the documented example responses in `modules/car/testdata` with each car's state on top. It checks brands, tokens and which key a VIN belongs to; `Expect*` options and methods set up failures. It works inside a synctest bubble.
 
 ### Registration
 
