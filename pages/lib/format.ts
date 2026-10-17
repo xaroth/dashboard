@@ -33,3 +33,19 @@ export function formatDayShort(iso: string, timezone: string): string {
 export function formatMillimeters(mm: number): string {
   return `${number1.format(mm)} mm`;
 }
+
+/** 26.017 */
+export function formatCount(n: number): string {
+  return number0.format(n);
+}
+
+/** 2 d 3 u, 5 u 12 m, 12 m; rounded down to the minute. */
+export function formatDuration(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  const d = Math.floor(minutes / 1440);
+  const h = Math.floor((minutes % 1440) / 60);
+  const m = minutes % 60;
+  if (d > 0) return `${d} d ${h} u`;
+  if (h > 0) return `${h} u ${m} m`;
+  return `${m} m`;
+}
