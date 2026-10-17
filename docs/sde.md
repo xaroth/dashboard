@@ -7,7 +7,6 @@
 - Every hour `Update` reads the build number from `https://developers.eveonline.com/static-data/tranquility/latest.jsonl` (record `sde`). When it differs from the imported build, or the imported build lacks a declared dataset, it downloads `eve-online-static-data-<build>-jsonl.zip` (about 100 MB) to a temporary file and imports it.
 - The import checks that the archive's `_sde.jsonl` has the expected build, then replaces every table in one transaction: readers see the previous build or the new one, never a mix. A failed import keeps the previous build. The transaction holds the only writer connection, so other modules' writes wait for it; keep imported datasets small.
 - Status, backoff, Update now and `schedule` overrides work as for modules, under the name `eveonline_sde`. Data is stale after 6 hours without a successful check. One update may take 10 minutes.
-- Measured on build 3607705: download and import of both datasets in about 4 s, an unchanged check in about 12 ms.
 
 ## Datasets
 

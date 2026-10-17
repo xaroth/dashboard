@@ -128,7 +128,7 @@ func (s *Store) importBuild(ctx context.Context, build int64) error {
 // replace replaces the tables with the archive's build of the declared
 // datasets in one transaction, so readers see either the previous build or
 // this one. Tables of other datasets are emptied.
-func (s *Store) replace(ctx context.Context, zr *zip.Reader, want int64) (err error) {
+func (s *Store) replace(ctx context.Context, zr *zip.Reader, want int64) error {
 	f, err := zr.Open("_sde.jsonl")
 	if err != nil {
 		return err
@@ -146,11 +146,8 @@ func (s *Store) replace(ctx context.Context, zr *zip.Reader, want int64) (err er
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err != nil {
-			tx.Rollback()
-		}
-	}()
+	// Also on a panic: the transaction holds the only writer connection.
+	defer tx.Rollback()
 	q := New(tx)
 	if err := q.DeleteDatasets(ctx); err != nil {
 		return err
