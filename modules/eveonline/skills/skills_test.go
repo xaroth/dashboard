@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,28 +19,32 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/modules/eveonline"
+	"github.com/xaroth/dashboard/module/moduletest"
+	"github.com/xaroth/dashboard/modules/eveonline/sde"
 	"github.com/xaroth/dashboard/modules/eveonline/skills"
 	"github.com/xaroth/dashboard/storage"
 )
 
 var scopes = []string{"esi-skills.read_skillqueue.v1", "esi-skills.read_skills.v1"}
 
-// fakeEVE is EVE SSO and ESI. Login code "<id>:<name>" logs in that
+// fakeEVE is EVE SSO, ESI and the SDE downloads. Login code "<id>:<name>" logs in that
 // character; its refresh token is "refresh-<id>". queues are the
 // skillqueue bodies by character ID; a missing one is a 500. skills are the
 // skills bodies; a missing one is no skills. revoked characters' refreshes
-// are rejected, and namesDown fails name lookups.
+// are rejected.
 type fakeEVE struct {
-	mu          sync.Mutex
-	revoked     map[string]bool
-	namesDown   bool
-	queues      map[string]string
-	skills      map[string]string
-	nameLookups [][]int64
+	mu      sync.Mutex
+	sde     *sde.Fake
+	revoked map[string]bool
+	queues  map[string]string
+	skills  map[string]string
 }
 
 func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Host == "developers.eveonline.com" {
+		f.sde.ServeHTTP(w, r)
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := r.URL.Host + r.URL.Path
@@ -63,20 +66,6 @@ func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"token_type":    "Bearer",
 			"refresh_token": "refresh-" + id,
 		})
-	case path == "esi.evetech.net/universe/names":
-		if f.namesDown {
-			http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
-			return
-		}
-		var ids []int64
-		b, _ := io.ReadAll(r.Body)
-		json.Unmarshal(b, &ids)
-		f.nameLookups = append(f.nameLookups, ids)
-		var out []map[string]any
-		for _, id := range ids {
-			out = append(out, map[string]any{"id": id, "name": fmt.Sprintf("Skill %d", id), "category": "inventory_type"})
-		}
-		json.NewEncoder(w).Encode(out)
 	case strings.HasPrefix(path, "esi.evetech.net/characters/") && strings.HasSuffix(path, "/skillqueue"):
 		id := strings.Split(r.URL.Path, "/")[2]
 		if r.Header.Get("Authorization") == "" {
@@ -116,10 +105,13 @@ func (f *fakeEVE) set(fn func(f *fakeEVE)) {
 	fn(f)
 }
 
-func (f *fakeEVE) lookups() [][]int64 {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.nameLookups
+// skillTypes is a types.jsonl with "Skill <id>" for each ID.
+func skillTypes(ids ...int) sde.FakeOption {
+	var lines []string
+	for _, id := range ids {
+		lines = append(lines, fmt.Sprintf(`{"_key": %d, "groupID": 255, "name": {"en": "Skill %d"}, "published": true}`, id, id))
+	}
+	return sde.WithFile("types.jsonl", strings.Join(lines, "\n"))
 }
 
 func jwt(claims map[string]any) string {
@@ -128,15 +120,20 @@ func jwt(claims map[string]any) string {
 	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc(b) + "." + enc([]byte("sig"))
 }
 
+// load loads the module with the SDE imported: skills 100 to 102.
 func load(tb testing.TB, fake *fakeEVE) *module.Set {
 	tb.Helper()
+	fake.sde = sde.NewFake(tb,
+		sde.WithFile("categories.jsonl", `{"_key": 16, "name": {"en": "Skill"}, "published": true}`),
+		sde.WithFile("groups.jsonl", `{"_key": 255, "categoryID": 16, "name": {"en": "Gunnery"}, "published": true}`),
+		skillTypes(100, 101, 102))
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
 	var configs map[string]yaml.Node
-	cfg := `eveonline: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline/callback"}`
+	cfg := `eveonline_esi: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline_esi/callback"}`
 	if err := yaml.Unmarshal([]byte(cfg), &configs); err != nil {
 		tb.Fatalf("config: %v", err)
 	}
@@ -147,11 +144,14 @@ func load(tb testing.TB, fake *fakeEVE) *module.Set {
 		Writer:        db.Writer,
 		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    eveonline.NewFakeClient(fake),
+		HTTPClient:    moduletest.HTTPClient(fake),
 		Now:           time.Now,
 	})
 	if err != nil {
 		tb.Fatalf("Load: %v", err)
+	}
+	if err := set.Update(tb.Context(), "eveonline_sde"); err != nil {
+		tb.Fatalf("SDE Update: %v", err)
 	}
 	return set
 }
@@ -166,11 +166,11 @@ func login(tb testing.TB, set *module.Set, code string) {
 		mux.ServeHTTP(rec, httptest.NewRequestWithContext(tb.Context(), http.MethodGet, target, nil))
 		return rec
 	}
-	loc, err := url.Parse(get("/eveonline/login").Header().Get("Location"))
+	loc, err := url.Parse(get("/eveonline_esi/login").Header().Get("Location"))
 	if err != nil {
 		tb.Fatalf("login redirect: %v", err)
 	}
-	if rec := get("/eveonline/callback?code=" + url.QueryEscape(code) + "&state=" + loc.Query().Get("state")); rec.Code != http.StatusSeeOther {
+	if rec := get("/eveonline_esi/callback?code=" + url.QueryEscape(code) + "&state=" + loc.Query().Get("state")); rec.Code != http.StatusSeeOther {
 		tb.Fatalf("callback: got %d %s, want 303", rec.Code, rec.Body)
 	}
 }
@@ -246,14 +246,6 @@ func TestQueue(t *testing.T) {
 		if got := queue(t, set, nil)[0]; got.Remaining != 0 || got.Ends != nil || len(got.Skills) != 0 {
 			t.Errorf("Alice after 6 hours: got %+v, want an empty queue", got)
 		}
-
-		// Names are looked up once.
-		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
-			t.Fatalf("second Update: %v", err)
-		}
-		if diff := cmp.Diff([][]int64{{100, 101, 102}}, fake.lookups()); diff != "" {
-			t.Errorf("name lookups (-want +got):\n%s", diff)
-		}
 	})
 }
 
@@ -295,24 +287,25 @@ func TestQueueErrors(t *testing.T) {
 	})
 }
 
-func TestQueueNamesDown(t *testing.T) {
+func TestQueueNames(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		now := time.Now()
-		fake := &fakeEVE{namesDown: true, queues: map[string]string{"1": "[" + entry(0, 100, 5, at(now, 0), at(now, time.Hour)) + "]"}}
+		fake := &fakeEVE{queues: map[string]string{"1": "[" + entry(0, 103, 1, at(now, 0), at(now, time.Hour)) + "]"}}
 		set := load(t, fake)
 		login(t, set, "1:Alice")
 		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
-			t.Fatalf("Update with names down: %v", err)
-		}
-		if got := queue(t, set, nil)[0].Skills; len(got) != 1 || got[0].Name != "" {
-			t.Errorf("got %+v, want the skill without a name", got)
-		}
-		fake.set(func(f *fakeEVE) { f.namesDown = false })
-		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
-		if got := queue(t, set, nil)[0].Skills; len(got) != 1 || got[0].Name != "Skill 100" {
+		if got := queue(t, set, nil)[0].Skills; len(got) != 1 || got[0].Name != "" {
+			t.Errorf("got %+v, want the skill without a name: the SDE does not have it", got)
+		}
+		// A new SDE build names it without a skills update.
+		fake.sde.Set(t, sde.WithBuild(2), skillTypes(100, 101, 102, 103))
+		if err := set.Update(t.Context(), "eveonline_sde"); err != nil {
+			t.Fatalf("SDE Update: %v", err)
+		}
+		if got := queue(t, set, nil)[0].Skills; len(got) != 1 || got[0].Name != "Skill 103" {
 			t.Errorf("got %+v, want the skill named", got)
 		}
 	})

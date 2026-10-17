@@ -61,7 +61,7 @@ device         -> render
 
 | Module | Source | Data |
 | --- | --- | --- |
-| `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills`, `/universe/names` (logged-in characters) | snapshot (each character's queue, trained skills and skill points) in module state; skill names cached in `eveonline_skills_names` |
+| `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills` (logged-in characters); SDE types for skill names | snapshot (each character's queue, trained skills and skill points) in module state |
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
@@ -260,10 +260,10 @@ Queries:
 
 #### Skill queues
 
-`eveonline_skills` (`modules/eveonline/skills`) has no config keys. It declares scopes `esi-skills.read_skillqueue.v1` and `esi-skills.read_skills.v1` and is enabled when a logged-in character granted both. `Update` runs every 15 minutes; data is stale after 2 hours. ESI caches both for 60 s, but they only change in game: queries count down from the stored finish dates, so more frequent updates add nothing.
+`eveonline_skills` (`modules/eveonline/skills`) has no config keys. It declares scopes `esi-skills.read_skillqueue.v1` and `esi-skills.read_skills.v1` and is enabled when a logged-in character granted both. It declares `sde.Types` for skill names. `Update` runs every 15 minutes; data is stale after 2 hours. ESI caches both for 60 s, but they only change in game: queries count down from the stored finish dates, so more frequent updates add nothing.
 
 - `Update` fetches every such character's queue, ordered by queue position, and trained skills with total and unallocated skill points, and stores them as ESI returned them. A character whose requests fail keeps its previous data and fetch time, with the error; the update fails only when every character fails, so one rejected token does not pause the others. It fails with `module.ErrAuth` only when every character's refresh was rejected.
-- Skill names are looked up once with `/universe/names` and kept in `eveonline_skills_names`. A failed lookup is logged and leaves the names empty until the next update.
+- Skill names come from the SDE when the query runs, so a new SDE build names skills without a skills update. A skill the imported build does not have, or any skill before the first import, has an empty name; the page shows `Skill <id>`.
 - ESI keeps finished skills in the queue, and does not add them to `/skills`, until the character logs in. Queries drop entries whose finish date has passed, using the current time rather than the update's, so a queue runs out on screen between updates, and add their points (the entry's end points less the skill's stored points) to the total.
 - A paused queue has entries without start and finish dates.
 

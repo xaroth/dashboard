@@ -5,7 +5,6 @@ package skills
 import (
 	"cmp"
 	"context"
-	"embed"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,18 +14,15 @@ import (
 	"github.com/eve-online-tools/lib-esi-go/common/character"
 	"github.com/eve-online-tools/lib-esi-go/esi/getcharacterscharacteridskillqueue"
 	"github.com/eve-online-tools/lib-esi-go/esi/getcharacterscharacteridskills"
-	"github.com/eve-online-tools/lib-esi-go/esi/postuniversenames"
 	"github.com/eve-online-tools/lib-esi-go/middleware/authentication"
 	"github.com/eve-online-tools/lib-esi-go/request"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/modules/eveonline"
+	"github.com/xaroth/dashboard/modules/eveonline/esi"
+	"github.com/xaroth/dashboard/modules/eveonline/sde"
 )
 
-//go:embed sql/migrations/*.sql
-var migrations embed.FS
-
-var scopes = eveonline.Scopes{"esi-skills.read_skillqueue.v1", "esi-skills.read_skills.v1"}
+var scopes = esi.Scopes{"esi-skills.read_skillqueue.v1", "esi-skills.read_skills.v1"}
 
 type config struct{}
 
@@ -40,8 +36,8 @@ var Module = module.Define[skills, config](
 	// finish dates, so polling more often than ESI's 60 s cache adds nothing.
 	module.WithUpdateInterval(15*time.Minute),
 	module.WithStaleAfter(2*time.Hour),
-	module.WithShared(eveonline.ESI, scopes),
-	module.WithMigrations(migrations),
+	module.WithShared(esi.Shared, scopes),
+	module.WithShared(sde.Shared, sde.Types),
 	module.WithQuery("queue", (*skills).queue),
 )
 
@@ -69,7 +65,10 @@ type fetched struct {
 }
 
 type entry struct {
-	Skill
+	ID     int64      `json:"id"`
+	Level  int64      `json:"level"`
+	Start  *time.Time `json:"start"`
+	Finish *time.Time `json:"finish"`
 	// EndSP is the skill's points once the entry finishes.
 	EndSP *int64 `json:"endSp"`
 }
@@ -80,8 +79,8 @@ type trained struct {
 	SP    int64 `json:"sp"`
 }
 
-// Skill is one queue entry. Start and Finish are null while the queue is
-// paused.
+// Skill is one queue entry. Name is empty for a skill the SDE does not have
+// yet. Start and Finish are null while the queue is paused.
 type Skill struct {
 	ID     int64      `json:"id"`
 	Name   string     `json:"name"`
@@ -93,14 +92,14 @@ type Skill struct {
 func (*skills) Initialize(context.Context, *config) error { return nil }
 
 func (*skills) Enabled(ctx context.Context) bool {
-	chars, err := eveonline.ESI.Get(ctx).Characters(ctx, scopes)
+	chars, err := esi.Shared.Get(ctx).Characters(ctx, scopes)
 	return err == nil && len(chars) > 0
 }
 
 // Update fetches every character's queue and skills. A character that fails
 // keeps its previous data with the error; the update fails only when all do.
 func (*skills) Update(ctx context.Context) error {
-	c := eveonline.ESI.Get(ctx)
+	c := esi.Shared.Get(ctx)
 	chars, err := c.Characters(ctx, scopes)
 	if err != nil {
 		return err
@@ -136,14 +135,10 @@ func (*skills) Update(ctx context.Context) error {
 		}
 		return errors.New(err.Error())
 	}
-	// Names are cosmetic: a failed lookup is retried on the next update.
-	if err := name(ctx, c, out.Characters); err != nil {
-		module.Logger(ctx).Warn("naming skills", "err", err)
-	}
 	return module.SaveSnapshot(ctx, out)
 }
 
-func fetch(ctx context.Context, c *eveonline.Client, id int64) (fetched, error) {
+func fetch(ctx context.Context, c *esi.Client, id int64) (fetched, error) {
 	tok, err := c.Token(ctx, id)
 	if err != nil {
 		return fetched{}, err
@@ -173,8 +168,7 @@ func fetch(ctx context.Context, c *eveonline.Client, id int64) (fetched, error) 
 	out := fetched{Queue: make([]entry, 0, len(entries)), Skills: []trained{}}
 	for _, e := range entries {
 		out.Queue = append(out.Queue, entry{
-			Skill: Skill{ID: int64(e.Skill), Level: e.FinishedLevel, Start: e.StartDate, Finish: e.FinishDate},
-			EndSP: e.LevelEndSp,
+			ID: int64(e.Skill), Level: e.FinishedLevel, Start: e.StartDate, Finish: e.FinishDate, EndSP: e.LevelEndSp,
 		})
 	}
 	if d := sresp.Data; d != nil {
@@ -198,53 +192,6 @@ func check[T any](resp *request.Response[T]) error {
 		msg += ": " + resp.ErrorData.Error()
 	}
 	return errors.New(msg)
-}
-
-// name fills in skill names, looking up the ones not stored yet. On error
-// the names it could not find stay empty.
-func name(ctx context.Context, c *eveonline.Client, chars []stored) error {
-	q := New(module.Database(ctx))
-	rows, err := q.ListNames(ctx)
-	if err != nil {
-		return fmt.Errorf("reading skill names: %w", err)
-	}
-	names := make(map[int64]string, len(rows))
-	for _, r := range rows {
-		names[r.SkillID] = r.Name
-	}
-	var unknown []int64
-	for _, ch := range chars {
-		for _, s := range ch.Data.Queue {
-			if _, ok := names[s.ID]; !ok && !slices.Contains(unknown, s.ID) {
-				unknown = append(unknown, s.ID)
-			}
-		}
-	}
-	defer func() {
-		for _, ch := range chars {
-			for i := range ch.Data.Queue {
-				ch.Data.Queue[i].Name = names[ch.Data.Queue[i].ID]
-			}
-		}
-	}()
-	if len(unknown) == 0 {
-		return nil
-	}
-	// At most 50 skills per queue, so well under ESI's 1000 IDs per request.
-	resp, err := postuniversenames.Request(ctx, c, &postuniversenames.Input{Body: unknown})
-	if err == nil {
-		err = check(resp)
-	}
-	if err != nil {
-		return fmt.Errorf("requesting skill names: %w", err)
-	}
-	for _, n := range resp.Data {
-		if err := q.SaveName(ctx, SaveNameParams{SkillID: n.Id, Name: n.Name}); err != nil {
-			return fmt.Errorf("saving skill name: %w", err)
-		}
-		names[n.Id] = n.Name
-	}
-	return nil
 }
 
 const maxSkills = 50
@@ -279,7 +226,8 @@ type Character struct {
 // queue returns every character's queue by name. ESI keeps finished skills
 // in the queue, and out of /skills, until the character logs in, and the
 // stored queue ages between updates: skills that finished by now are left
-// out of the queue here and added to the skill points.
+// out of the queue here and added to the skill points. Skill names come from
+// the SDE.
 func (*skills) queue(ctx context.Context, p queueParams) ([]Character, error) {
 	if p.Skills < 0 || p.Skills > maxSkills {
 		return nil, fmt.Errorf("skills must be 0 to %d, got %d", maxSkills, p.Skills)
@@ -300,7 +248,7 @@ func (*skills) queue(ctx context.Context, p queueParams) ([]Character, error) {
 		left := []Skill{}
 		for _, e := range s.Data.Queue {
 			if e.Finish == nil || e.Finish.After(now) {
-				left = append(left, e.Skill)
+				left = append(left, Skill{ID: e.ID, Level: e.Level, Start: e.Start, Finish: e.Finish})
 				continue
 			}
 			if e.EndSP != nil && *e.EndSP > sp[e.ID] {
@@ -320,5 +268,28 @@ func (*skills) queue(ctx context.Context, p queueParams) ([]Character, error) {
 		}
 		out = append(out, ch)
 	}
-	return out, nil
+	return out, name(ctx, out)
+}
+
+// name fills in the skill names from the SDE.
+func name(ctx context.Context, chars []Character) error {
+	var ids []int64
+	for _, ch := range chars {
+		for _, k := range ch.Skills {
+			ids = append(ids, k.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	types, err := sde.Shared.Get(ctx).Types(ctx, slices.Compact(slices.Sorted(slices.Values(ids))))
+	if err != nil {
+		return err
+	}
+	for _, ch := range chars {
+		for i := range ch.Skills {
+			ch.Skills[i].Name = types[ch.Skills[i].ID].Name
+		}
+	}
+	return nil
 }
