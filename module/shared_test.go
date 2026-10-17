@@ -3,9 +3,14 @@ package module_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -19,15 +24,27 @@ type greetingConfig struct {
 	Fail bool   `yaml:"fail"`
 }
 
+// greeting greets the names the modules declare. As an http.Handler it
+// serves its text and the number of migration rows it can see.
 type greeting struct{ Text string }
 
+func (g *greeting) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var n int
+	err := module.Database(r.Context()).QueryRowContext(r.Context(), "SELECT COUNT(*) FROM greeting_log").Scan(&n)
+	fmt.Fprintf(w, "%s %s %d %v", r.URL.Path, g.Text, n, err)
+}
+
+var greetingMigrations = fstest.MapFS{"sql/migrations/00001_init.sql": {Data: []byte(
+	"-- +goose Up\nCREATE TABLE greeting_log (id INTEGER PRIMARY KEY);\n")}}
+
 var greetingShared = module.DefineShared("greeting", func() *greetingConfig { return &greetingConfig{Text: "hello"} },
-	func(_ context.Context, cfg *greetingConfig) (*greeting, error) {
+	func(_ context.Context, cfg *greetingConfig, names []string) (*greeting, error) {
 		if cfg.Fail {
 			return nil, errors.New("no words")
 		}
-		return &greeting{Text: cfg.Text}, nil
-	})
+		return &greeting{Text: strings.Join(append([]string{cfg.Text}, names...), " ")}, nil
+	},
+	module.SharedMigrations(greetingMigrations))
 
 // greeter reads the shared greeting in Initialize and in its query.
 type greeter struct{}
@@ -71,8 +88,8 @@ func tryLoad(tb testing.TB, src string, regs ...module.Registration) (*module.Se
 func TestShared(t *testing.T) {
 	t.Parallel()
 	set, err := tryLoad(t, "greeting: {text: hi}",
-		greeterRegistration("a", module.WithShared(greetingShared)),
-		greeterRegistration("b", module.WithShared(greetingShared)),
+		greeterRegistration("b", module.WithShared(greetingShared, "bob")),
+		greeterRegistration("a", module.WithShared(greetingShared, "alice", "ann")),
 	)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -82,11 +99,22 @@ func TestShared(t *testing.T) {
 	if a.Error != "" || b.Error != "" {
 		t.Fatalf("got errors %q, %q, want none", a.Error, b.Error)
 	}
-	if diff := cmp.Diff(&greeting{Text: "hi"}, a.Value); diff != "" {
+	if diff := cmp.Diff(&greeting{Text: "hi alice ann bob"}, a.Value); diff != "" {
 		t.Errorf("greeting (-want +got):\n%s", diff)
 	}
 	if a.Value != b.Value {
 		t.Errorf("got two greetings, want one built once and shared")
+	}
+
+	if got, want := set.SharedPages(), []string{"greeting"}; !slices.Equal(got, want) {
+		t.Errorf("got shared pages %v, want %v", got, want)
+	}
+	mux := http.NewServeMux()
+	set.RegisterShared(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/greeting/x", nil))
+	if got, want := rec.Body.String(), "/x hi alice ann bob 0 <nil>"; got != want {
+		t.Errorf("got page %q, want %q", got, want)
 	}
 }
 
@@ -132,7 +160,7 @@ func TestSharedFailures(t *testing.T) {
 				greeterRegistration("a", module.WithShared(greetingShared)),
 				greeterRegistration("b", module.WithShared(module.DefineShared("greeting",
 					func() *greetingConfig { return &greetingConfig{} },
-					func(context.Context, *greetingConfig) (int, error) { return 0, nil }))),
+					func(context.Context, *greetingConfig, []string) (int, error) { return 0, nil }))),
 			},
 			wantLoad: "shared greeting: defined twice",
 		},
@@ -165,6 +193,9 @@ func TestSharedFailures(t *testing.T) {
 			if got.Phase != module.PhaseInitFail || got.Error != testCase.wantInit {
 				t.Errorf("got %s %q, want %s %q", got.Phase, got.Error, module.PhaseInitFail, testCase.wantInit)
 			}
+			if pages := set.SharedPages(); len(pages) != 0 {
+				t.Errorf("got shared pages %v, want none", pages)
+			}
 		})
 	}
 }
@@ -177,5 +208,5 @@ func TestDefineSharedRejectsInvalidName(t *testing.T) {
 		}
 	}()
 	module.DefineShared("Bad-Name", func() *greetingConfig { return nil },
-		func(context.Context, *greetingConfig) (int, error) { return 0, nil })
+		func(context.Context, *greetingConfig, []string) (int, error) { return 0, nil })
 }

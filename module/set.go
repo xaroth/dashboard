@@ -62,6 +62,8 @@ type Set struct {
 	now        func() time.Time
 	instances  []*instance
 	shared     map[sharedDef]built
+	// sharedOrder is the shared values by name.
+	sharedOrder []sharedDef
 }
 
 type instance struct {
@@ -118,7 +120,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		}
 	}
 
-	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, now: o.Now, shared: map[sharedDef]built{}}
+	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, now: o.Now, shared: map[sharedDef]built{}, sharedOrder: shared}
 	// Three passes, so a config error stops startup before any migration, and
 	// every module's tables exist before any Initialize.
 	sharedConfigs := make([]any, len(shared))
@@ -152,6 +154,13 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	if err := o.Migrator.Migrate(ctx, stateOwner, stateMigrations, "sql/migrations"); err != nil {
 		return nil, err
 	}
+	for _, d := range shared {
+		if fsys := d.sharedMigrations(); fsys != nil {
+			if err := o.Migrator.Migrate(ctx, d.sharedName(), fsys, "sql/migrations"); err != nil {
+				return nil, err
+			}
+		}
+	}
 	for _, r := range regs {
 		if r.migrations == nil {
 			continue
@@ -162,7 +171,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	}
 	for i, d := range shared {
 		log := o.Log.With("shared", d.sharedName())
-		v, err := d.buildAny(s.baseContext(ctx, log), sharedConfigs[i])
+		v, err := d.buildAny(s.baseContext(ctx, log), sharedConfigs[i], declarations(regs, d))
 		if err != nil {
 			log.Error("build failed; modules using it off until restart", "err", err)
 			err = fmt.Errorf("%s: %w", d.sharedName(), err)
@@ -191,7 +200,8 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 func sharedDefs(regs []Registration, modules map[string]bool) ([]sharedDef, error) {
 	byName := map[string]sharedDef{}
 	for _, r := range regs {
-		for _, d := range r.shared {
+		for _, u := range r.shared {
+			d := u.def
 			name := d.sharedName()
 			if modules[name] {
 				return nil, fmt.Errorf("shared %s: name is also a module", name)
@@ -203,6 +213,19 @@ func sharedDefs(regs []Registration, modules map[string]bool) ([]sharedDef, erro
 		}
 	}
 	return slices.SortedFunc(maps.Values(byName), func(a, b sharedDef) int { return cmp.Compare(a.sharedName(), b.sharedName()) }), nil
+}
+
+// declarations returns what regs declare for d, in module name order.
+func declarations(regs []Registration, d sharedDef) []any {
+	var out []any
+	for _, r := range regs {
+		for _, u := range r.shared {
+			if u.def == d {
+				out = append(out, u.decls...)
+			}
+		}
+	}
+	return out
 }
 
 // isEmpty reports whether a config section is absent, or present without
@@ -265,8 +288,8 @@ func strictDecode(n *yaml.Node, v any) error {
 
 // sharedErr is the first error among the shared values inst declares.
 func (s *Set) sharedErr(inst *instance) error {
-	for _, d := range inst.reg.shared {
-		if err := s.shared[d].err; err != nil {
+	for _, u := range inst.reg.shared {
+		if err := s.shared[u.def].err; err != nil {
 			return err
 		}
 	}
@@ -286,8 +309,8 @@ func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB, update bo
 	state := &stateStore{q: New(db), module: inst.reg.name, update: update}
 	ctx = s.baseContext(ctx, inst.log)
 	ctx = context.WithValue(ctx, keyDatabase, db)
-	for _, d := range inst.reg.shared {
-		ctx = context.WithValue(ctx, d, s.shared[d].value)
+	for _, u := range inst.reg.shared {
+		ctx = context.WithValue(ctx, u.def, s.shared[u.def].value)
 	}
 	return context.WithValue(ctx, keyState, state), state
 }

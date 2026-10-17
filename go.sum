@@ -22,8 +22,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
-github.com/eve-online-tools/lib-esi-go v1.0.1-0.20261014211435-7e4cdb050533 h1:3NLTyirCe9rxhI5A8OClwMTO7mG0UfLP8oSRoO3370Q=
-github.com/eve-online-tools/lib-esi-go v1.0.1-0.20261014211435-7e4cdb050533/go.mod h1:ugcpGgWgXnpGxCMy5vzWdTof9p4Vl192HcUcLGzXjOM=
+github.com/eve-online-tools/lib-esi-go v1.0.1-0.20261017122905-6145d15c8771 h1:iae8pt9xPVweGuSjKe+K/lQbkYDKnEhSD1pxgSq9Ta4=
+github.com/eve-online-tools/lib-esi-go v1.0.1-0.20261017122905-6145d15c8771/go.mod h1:PEIkoY+9/U5OxnRb2g+gFfXTtuIp6cOz3gp2GI3viJM=
 github.com/fatih/structtag v1.2.0 h1:/OdNE99OxoI/PqaW/SuSK9uxxT3f/tcSZgon/ssNSx4=
 github.com/fatih/structtag v1.2.0/go.mod h1:mBJUNpUnHmRKrKlQQlmCrh5PuhftFbNv8Ys4/aAZl94=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=

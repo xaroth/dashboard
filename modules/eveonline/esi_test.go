@@ -13,30 +13,73 @@ import (
 
 	defaults "github.com/eve-online-tools/lib-esi-go"
 	"github.com/eve-online-tools/lib-esi-go/esi/getstatus"
+	"github.com/eve-online-tools/lib-esi-go/middleware/authentication"
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/modules/eveonline"
 	"github.com/xaroth/dashboard/storage"
 )
 
-// probe sends one ESI request per update.
-type probe struct{}
+// probe sends ESI requests: one without a token when it needs no scopes,
+// else one per character that granted them. Its characters query lists
+// those characters.
+type probe struct{ cfg *probeConfig }
 
-type probeConfig struct{}
-
-func (*probe) Initialize(context.Context, *probeConfig) error { return nil }
-func (*probe) Enabled(context.Context) bool                   { return false }
-
-func (*probe) Update(ctx context.Context) error {
-	_, err := getstatus.Request(ctx, eveonline.ESI.Get(ctx))
-	return err
+type probeConfig struct {
+	Need eveonline.Scopes `yaml:"need"`
 }
 
-var probeModule = module.Define[probe, probeConfig]("probe", func() *probeConfig { return &probeConfig{} },
-	module.WithShared(eveonline.ESI))
+func (m *probe) Initialize(_ context.Context, cfg *probeConfig) error {
+	m.cfg = cfg
+	return nil
+}
 
-func load(tb testing.TB, src string, handler http.Handler) *module.Set {
+func (*probe) Enabled(context.Context) bool { return false }
+
+func (m *probe) Update(ctx context.Context) error {
+	c := eveonline.ESI.Get(ctx)
+	if len(m.cfg.Need) == 0 {
+		_, err := getstatus.Request(ctx, c)
+		return err
+	}
+	chars, err := c.Characters(ctx, m.cfg.Need)
+	if err != nil {
+		return err
+	}
+	for _, ch := range chars {
+		tok, err := c.Token(ctx, ch.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := getstatus.Request(ctx, c, authentication.WithToken(tok)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *probe) characters(ctx context.Context, _ struct{}) ([]eveonline.Character, error) {
+	return eveonline.ESI.Get(ctx).Characters(ctx, m.cfg.Need)
+}
+
+const (
+	skillsScope = "esi-skills.read_skills.v1"
+	walletScope = "esi-wallet.read_character_wallet.v1"
+)
+
+func probeRegistration(name string, scopes ...string) module.Registration {
+	return module.Define[probe, probeConfig](name, func() *probeConfig { return &probeConfig{Need: scopes} },
+		module.WithShared(eveonline.ESI, eveonline.Scopes(scopes)),
+		module.WithQuery("characters", (*probe).characters))
+}
+
+var probeModule = probeRegistration("probe")
+
+func load(tb testing.TB, src string, handler http.Handler, regs ...module.Registration) *module.Set {
 	tb.Helper()
+	if len(regs) == 0 {
+		regs = []module.Registration{probeModule}
+	}
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
@@ -47,7 +90,7 @@ func load(tb testing.TB, src string, handler http.Handler) *module.Set {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
-		Registrations: []module.Registration{probeModule},
+		Registrations: regs,
 		Configs:       configs,
 		Migrator:      db,
 		Writer:        db.Writer,
@@ -91,14 +134,36 @@ func TestESIRequest(t *testing.T) {
 	}
 }
 
-func TestESIRequiresContact(t *testing.T) {
+func TestConfigErrors(t *testing.T) {
 	t.Parallel()
-	set := load(t, "", http.NotFoundHandler())
-	st, err := set.Statuses(t.Context())
-	if err != nil || len(st) != 1 {
-		t.Fatalf("Statuses: %v, %v", st, err)
+	testCases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"no contact", "", "eveonline: contact is required"},
+		{
+			"partial SSO",
+			"eveonline: {contact: [x], client_id: id}",
+			"eveonline: client_id, client_secret and callback_url are set together",
+		},
+		{
+			"callback path",
+			"eveonline: {contact: [x], client_id: id, client_secret: s, callback_url: 'http://h/cb'}",
+			`eveonline: callback_url must be an absolute URL with path /eveonline/callback, got "http://h/cb"`,
+		},
 	}
-	if want := "eveonline: contact is required"; st[0].Phase != module.PhaseInitFail || st[0].Error != want {
-		t.Errorf("got %s %q, want %s %q", st[0].Phase, st[0].Error, module.PhaseInitFail, want)
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			set := load(t, testCase.yaml, http.NotFoundHandler())
+			st, err := set.Statuses(t.Context())
+			if err != nil || len(st) != 1 {
+				t.Fatalf("Statuses: %v, %v", st, err)
+			}
+			if st[0].Phase != module.PhaseInitFail || st[0].Error != testCase.want {
+				t.Errorf("got %s %q, want %s %q", st[0].Phase, st[0].Error, module.PhaseInitFail, testCase.want)
+			}
+		})
 	}
 }

@@ -39,6 +39,11 @@
 <p>No modules registered.</p>
 {{end}}
 
+{{with .Shared}}
+<h2>Accounts</h2>
+<p>Logins and settings shared by modules: {{range .}}<a href="/{{.}}/">{{.}}</a> {{end}}</p>
+{{end}}
+
 <h2>Devices</h2>
 {{range .Devices}}{{$d := .}}
 <h3>{{.Name}} <small>{{.MAC}} · {{.Model}} · rotation {{.Rotation}} · <a href="/simulate/{{.Name}}">simulate</a></small></h3>

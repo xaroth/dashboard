@@ -39,3 +39,11 @@ sql:
         <<: *go
         package: status
         out: modules/eveonline/status
+  - <<: *owner
+    schema: modules/eveonline/sql/migrations
+    queries: modules/eveonline/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: eveonline
+        out: modules/eveonline
