@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -28,12 +29,21 @@ func (p *pager) Initialize(_ context.Context, cfg *pagerConfig) error {
 	return nil
 }
 func (*pager) Enabled(context.Context) bool { return false }
-func (*pager) Update(context.Context) error { return nil }
+func (*pager) Update(ctx context.Context) error {
+	return module.SaveSnapshot(ctx, "saved by update")
+}
 
+// ServeHTTP shows the page has the module's own context: the writer, its
+// shared values, a logger, its snapshot to read, but no snapshot to save
+// or next update to set, which belong to Update.
 func (*pager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	module.Logger(ctx).Info("page")
 	_, err := module.Database(ctx).ExecContext(ctx, "INSERT INTO test_items DEFAULT VALUES")
-	fmt.Fprintf(w, "%s %s %v", r.URL.Path, greetingShared.Get(ctx).Text, err)
+	var snap string
+	_, lerr := module.LoadSnapshot(ctx, &snap)
+	fmt.Fprintf(w, "%s %s %v %q %v | %v | %v", r.URL.Path, greetingShared.Get(ctx).Text, err, snap, lerr,
+		module.SaveSnapshot(ctx, "x"), module.NextUpdate(ctx, time.Minute))
 }
 
 func pagerRegistration(name string, opts ...module.Option) module.Registration {
@@ -53,6 +63,9 @@ func TestAdminPages(t *testing.T) {
 	if diff := cmp.Diff([]string{"greeting", "pages"}, set.AdminPages()); diff != "" {
 		t.Errorf("admin pages (-want +got):\n%s", diff)
 	}
+	if err := set.Update(t.Context(), "pages"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
 	mux := http.NewServeMux()
 	set.RegisterAdmin(mux)
 	testCases := []struct {
@@ -61,7 +74,8 @@ func TestAdminPages(t *testing.T) {
 		code int
 		body string
 	}{
-		{"module", "/pages/x", http.StatusOK, "/x hello <nil>"},
+		{"module", "/pages/x", http.StatusOK, `/x hello <nil> "saved by update" <nil> | snapshots are saved from Update | the next update is set from Update`},
+		{"shared value", "/greeting/x", http.StatusOK, "/x hello 0 <nil>"},
 		{"failed module", "/broken/x", http.StatusNotFound, "404 page not found\n"},
 	}
 	for _, testCase := range testCases {
