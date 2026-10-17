@@ -386,12 +386,21 @@ func TestExpiredKeyNotRetried(t *testing.T) {
 		t.Fatalf("saving key: got %d %s", rec.Code, rec.Body)
 	}
 	e.fake.RejectKey(car.FakeClientID)
-	for range 2 {
+	var pages []string
+	for range 3 {
 		if err := e.set.Update(t.Context(), "car"); !errors.Is(err, module.ErrAuth) {
 			t.Fatalf("got %v, want ErrAuth", err)
 		}
+		body := e.serve(t, http.MethodGet, "/car/", nil).Body.String()
+		_, rejection, _ := strings.Cut(body, "Last rejected: ")
+		rejection, _, _ = strings.Cut(rejection, "</p>")
+		pages = append(pages, rejection)
 	}
-	// The page's check, then one attempt; the second update asks nothing.
+	// The rejection stays as recorded by the first attempt.
+	if pages[0] == "" || pages[1] != pages[0] || pages[2] != pages[0] {
+		t.Errorf("got rejections %q, want the first one three times", pages)
+	}
+	// The page's check, then one attempt; later updates ask nothing.
 	want := []string{"hyundai POST /v1/auth/personal-token", "hyundai GET /v1/vehicles/consent", "hyundai POST /v1/auth/personal-token"}
 	if diff := cmp.Diff(want, e.fake.Requests()); diff != "" {
 		t.Errorf("requests (-want +got):\n%s", diff)

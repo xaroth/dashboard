@@ -178,7 +178,8 @@ func (m *car) Update(ctx context.Context) error {
 // after it was rejected is not tried again.
 func (m *car) updateKey(ctx context.Context, q *Queries, k CarKey, now time.Time) ([]Vehicle, time.Time, error) {
 	if k.AuthError != nil && now.After(keyExpiry(k)) {
-		return nil, time.Time{}, errKey{fmt.Errorf("expired on %s: %s", keyExpiry(k).Format(time.DateOnly), *k.AuthError)}
+		// The recorded rejection as it is; the page shows the expiry.
+		return nil, time.Time{}, errKey{errors.New(*k.AuthError)}
 	}
 	c := m.clients[k.ClientID]
 	if c == nil || c.clientSecret != k.ClientSecret || c.brand != k.Brand {
