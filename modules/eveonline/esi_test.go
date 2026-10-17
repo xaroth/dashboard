@@ -66,7 +66,7 @@ func TestESIRequest(t *testing.T) {
 	t.Parallel()
 	var got http.Header
 	var url string
-	set := load(t, "eve: {contact: [mailto:me@example.com, https://example.com]}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	set := load(t, "eveonline: {contact: [mailto:me@example.com, https://example.com]}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got, url = r.Header, r.URL.String()
 		fmt.Fprint(w, `{}`)
 	}))
@@ -98,7 +98,7 @@ func TestESIRequiresContact(t *testing.T) {
 	if err != nil || len(st) != 1 {
 		t.Fatalf("Statuses: %v, %v", st, err)
 	}
-	if want := "eve: contact is required"; st[0].Phase != module.PhaseInitFail || st[0].Error != want {
+	if want := "eveonline: contact is required"; st[0].Phase != module.PhaseInitFail || st[0].Error != want {
 		t.Errorf("got %s %q, want %s %q", st[0].Phase, st[0].Error, module.PhaseInitFail, want)
 	}
 }

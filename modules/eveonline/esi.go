@@ -26,9 +26,9 @@ type config struct {
 	Contact []string `yaml:"contact"`
 }
 
-// ESI is the ESI client, configured under modules.eve. Modules declare it
+// ESI is the ESI client, configured under modules.eveonline. Modules declare it
 // with module.WithShared(eveonline.ESI) and read it with ESI.Get(ctx).
-var ESI = module.DefineShared("eve", func() *config { return &config{} }, newClient)
+var ESI = module.DefineShared("eveonline", func() *config { return &config{} }, newClient)
 
 func newClient(ctx context.Context, cfg *config) (*http.Client, error) {
 	if len(cfg.Contact) == 0 {

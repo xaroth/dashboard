@@ -34,7 +34,8 @@ modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
 modules/<name>/sql/        the module's migrations and queries
 modules/<group>/           shared values for a group of modules (eveonline: the ESI
-                           client); the group's modules are its subpackages
+                           client); the group's modules are its subpackages, named
+                           <group>_<package> (modules/eveonline/status: eveonline_status)
 renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
 pages/components/, lib/    shared by all layouts
@@ -186,14 +187,14 @@ A value several modules use, such as an API client, is defined once with `module
 ```go
 package eveonline
 
-var ESI = module.DefineShared("eve", defaultConfig,
+var ESI = module.DefineShared("eveonline", defaultConfig,
 	func(ctx context.Context, cfg *config) (*http.Client, error) { ... })
 ```
 
 ```go
 package status
 
-var Module = module.Define[status, config]("eve_status", defaultConfig,
+var Module = module.Define[status, config]("eveonline_status", defaultConfig,
 	module.WithShared(eveonline.ESI))
 
 func (*status) Update(ctx context.Context) error {
@@ -210,7 +211,7 @@ func (*status) Update(ctx context.Context) error {
 
 ### EVE Online
 
-`modules/eveonline` holds the shared ESI client `eveonline.ESI` (`*http.Client`, built with `lib-esi-go`). It sends through the service's HTTP client transport, so ESI calls are traced like other calls, and sets the User-Agent, compatibility date, language and tenant headers. Config keys under `modules.eve`:
+`modules/eveonline` holds the shared ESI client `eveonline.ESI` (`*http.Client`, built with `lib-esi-go`). It sends through the service's HTTP client transport, so ESI calls are traced like other calls, and sets the User-Agent, compatibility date, language and tenant headers. Config keys under `modules.eveonline`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
