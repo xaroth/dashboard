@@ -157,6 +157,8 @@ Deliberately small; capabilities are added when a module needs them.
 | `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
+A module whose type also implements `http.Handler` gets an admin page: it is served on the admin listener under `/<name>/` (the prefix stripped), with the module's context on the request (as in `Update`: the writer, its shared values), and linked from the admin index under Accounts. Requests run concurrently with updates, so state they share goes through the database or is synchronized. A module whose `Initialize` failed is not served. This is how settings like an API key are entered.
+
 Options: `WithUpdateInterval` (default 15 minutes), `WithStaleAfter` (default 1 hour), `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)), `WithShared` (see [Shared values](#shared-values)).
 
 Update and queries are split so a slow or failing source never blocks a screen: pages render from the last stored data.

@@ -134,7 +134,7 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 	}
 	mux := http.NewServeMux()
 	h.Register(mux)
-	set.RegisterShared(mux)
+	set.RegisterAdmin(mux)
 	return &fixture{handler: mux, renderer: renderer, db: db}
 }
 

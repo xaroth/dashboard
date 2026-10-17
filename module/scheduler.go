@@ -188,7 +188,9 @@ func (i *instance) set(p Phase, next time.Time) {
 
 // Status is a module's state for the admin UI and the screens.
 type Status struct {
-	Name        string
+	Name string
+	// Page is whether the module has an admin page under /<name>/.
+	Page        bool
 	Phase       Phase
 	Interval    time.Duration
 	NextRun     time.Time // zero while updating or stopped
@@ -241,6 +243,7 @@ func (s *Set) state(ctx context.Context, inst *instance) (Status, error) {
 func (s *Set) status(inst *instance, row ModuleState) Status {
 	inst.mu.Lock()
 	st := Status{Name: inst.reg.name, Phase: inst.phase, Interval: inst.interval, NextRun: inst.nextRun}
+	_, st.Page = inst.page()
 	inst.mu.Unlock()
 	st.AttemptedAt, st.FetchedAt = row.AttemptedAt, row.FetchedAt
 	st.Error = cmp.Or(errString(inst.initErr), deref(row.Error))

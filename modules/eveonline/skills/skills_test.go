@@ -160,7 +160,7 @@ func load(tb testing.TB, fake *fakeEVE) *module.Set {
 func login(tb testing.TB, set *module.Set, code string) {
 	tb.Helper()
 	mux := http.NewServeMux()
-	set.RegisterShared(mux)
+	set.RegisterAdmin(mux)
 	get := func(target string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequestWithContext(tb.Context(), http.MethodGet, target, nil))

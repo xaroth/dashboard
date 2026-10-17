@@ -159,7 +159,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Log:       log.With("component", "web"),
 	}
 	ui.Register(s.admin)
-	s.modules.RegisterShared(s.admin)
+	s.modules.RegisterAdmin(s.admin)
 	return s, nil
 }
 

@@ -118,7 +118,7 @@ func TestShared(t *testing.T) {
 		t.Errorf("shared (-want +got):\n%s", diff)
 	}
 	mux := http.NewServeMux()
-	set.RegisterShared(mux)
+	set.RegisterAdmin(mux)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/greeting/x", nil))
 	if got, want := rec.Body.String(), "/x hi alice ann bob 0 <nil>"; got != want {
