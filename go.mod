@@ -3,6 +3,7 @@ module github.com/xaroth/dashboard
 go 1.27.1
 
 require (
+	github.com/eve-online-tools/lib-esi-go v1.0.1-0.20261014211435-7e4cdb050533
 	github.com/felixge/httpsnoop v1.1.0
 	github.com/google/go-cmp v0.7.0
 	github.com/pressly/goose/v3 v3.29.0

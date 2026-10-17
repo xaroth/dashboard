@@ -61,6 +61,7 @@ type Set struct {
 	httpClient *http.Client
 	now        func() time.Time
 	instances  []*instance
+	shared     map[sharedDef]built
 }
 
 type instance struct {
@@ -94,14 +95,22 @@ const (
 	PhaseInitFail Phase = "init failed" // Initialize failed; off until restart
 )
 
-// Load decodes each registered module's config, runs its migrations and
-// initializes it. Config and migration errors stop startup; an Initialize
-// error only turns that module off.
+// Load decodes each registered module's config, runs its migrations, builds
+// the shared values the modules declare and initializes the modules. Config
+// and migration errors stop startup; an Initialize or shared build error only
+// turns the modules involved off.
 func Load(ctx context.Context, o Options) (*Set, error) {
 	regs := slices.SortedFunc(slices.Values(o.Registrations), func(a, b Registration) int { return cmp.Compare(a.name, b.name) })
 	known := map[string]bool{}
 	for _, r := range regs {
 		known[r.name] = true
+	}
+	shared, err := sharedDefs(regs, known)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range shared {
+		known[d.sharedName()] = true
 	}
 	for name := range o.Configs {
 		if !known[name] {
@@ -109,9 +118,17 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		}
 	}
 
-	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, now: o.Now}
+	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, now: o.Now, shared: map[sharedDef]built{}}
 	// Three passes, so a config error stops startup before any migration, and
 	// every module's tables exist before any Initialize.
+	sharedConfigs := make([]any, len(shared))
+	for i, d := range shared {
+		cfg := d.config()
+		if err := decodeShared(o.Configs[d.sharedName()], cfg); err != nil {
+			return nil, fmt.Errorf("modules.%s: %w", d.sharedName(), err)
+		}
+		sharedConfigs[i] = cfg
+	}
 	configs := make([]any, len(regs))
 	for i, r := range regs {
 		cfg, sched, err := decodeConfig(r, o.Configs[r.name])
@@ -143,7 +160,22 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 			return nil, err
 		}
 	}
+	for i, d := range shared {
+		log := o.Log.With("shared", d.sharedName())
+		v, err := d.buildAny(s.baseContext(ctx, log), sharedConfigs[i])
+		if err != nil {
+			log.Error("build failed; modules using it off until restart", "err", err)
+			err = fmt.Errorf("%s: %w", d.sharedName(), err)
+		}
+		s.shared[d] = built{value: v, err: err}
+	}
 	for i, inst := range s.instances {
+		if err := s.sharedErr(inst); err != nil {
+			inst.log.Error("shared value failed; module off until restart", "err", err)
+			inst.initErr = err
+			inst.phase = PhaseInitFail
+			continue
+		}
 		ictx, _ := s.context(ctx, inst, o.Writer, false)
 		if err := inst.reg.initialize(ictx, inst.module, configs[i]); err != nil {
 			inst.log.Error("initialize failed; module off until restart", "err", err)
@@ -154,12 +186,48 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	return s, nil
 }
 
+// sharedDefs returns the shared values regs declare, sorted by name. A name
+// may not be used by two definitions or by a module.
+func sharedDefs(regs []Registration, modules map[string]bool) ([]sharedDef, error) {
+	byName := map[string]sharedDef{}
+	for _, r := range regs {
+		for _, d := range r.shared {
+			name := d.sharedName()
+			if modules[name] {
+				return nil, fmt.Errorf("shared %s: name is also a module", name)
+			}
+			if prev, ok := byName[name]; ok && prev != d {
+				return nil, fmt.Errorf("shared %s: defined twice", name)
+			}
+			byName[name] = d
+		}
+	}
+	return slices.SortedFunc(maps.Values(byName), func(a, b sharedDef) int { return cmp.Compare(a.sharedName(), b.sharedName()) }), nil
+}
+
+// isEmpty reports whether a config section is absent, or present without
+// keys ("weather:"); both mean defaults.
+func isEmpty(node yaml.Node) bool {
+	return node.Kind == 0 || (node.Kind == yaml.ScalarNode && node.Tag == "!!null")
+}
+
+// decodeShared overlays node on a shared value's defaults in cfg. It has no
+// schedule key. Unknown keys are errors.
+func decodeShared(node yaml.Node, cfg any) error {
+	if isEmpty(node) {
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return errors.New("must be a mapping")
+	}
+	return strictDecode(&node, cfg)
+}
+
 // decodeConfig overlays node on the module's defaults. Unknown keys are errors.
 func decodeConfig(r Registration, node yaml.Node) (any, Schedule, error) {
 	cfg := r.newConfig()
 	var sched Schedule
-	// Absent, or present without keys ("weather:"): defaults.
-	if node.Kind == 0 || (node.Kind == yaml.ScalarNode && node.Tag == "!!null") {
+	if isEmpty(node) {
 		return cfg, sched, nil
 	}
 	if node.Kind != yaml.MappingNode {
@@ -195,14 +263,32 @@ func strictDecode(n *yaml.Node, v any) error {
 	return dec.Decode(v)
 }
 
+// sharedErr is the first error among the shared values inst declares.
+func (s *Set) sharedErr(inst *instance) error {
+	for _, d := range inst.reg.shared {
+		if err := s.shared[d].err; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// baseContext returns ctx carrying the dependencies that need no module.
+func (s *Set) baseContext(ctx context.Context, log *slog.Logger) context.Context {
+	ctx = context.WithValue(ctx, keyLogger, log)
+	ctx = context.WithValue(ctx, keyHTTPClient, s.httpClient)
+	return context.WithValue(ctx, keyClock, s.now)
+}
+
 // context returns ctx carrying the module's dependencies, with db as its
 // connection. Only an update's context can save a snapshot.
 func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB, update bool) (context.Context, *stateStore) {
 	state := &stateStore{q: New(db), module: inst.reg.name, update: update}
+	ctx = s.baseContext(ctx, inst.log)
 	ctx = context.WithValue(ctx, keyDatabase, db)
-	ctx = context.WithValue(ctx, keyLogger, inst.log)
-	ctx = context.WithValue(ctx, keyHTTPClient, s.httpClient)
-	ctx = context.WithValue(ctx, keyClock, s.now)
+	for _, d := range inst.reg.shared {
+		ctx = context.WithValue(ctx, d, s.shared[d].value)
+	}
 	return context.WithValue(ctx, keyState, state), state
 }
 
