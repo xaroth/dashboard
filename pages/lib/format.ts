@@ -49,3 +49,8 @@ export function formatDuration(ms: number): string {
   if (h > 0) return `${h} u ${m} m`;
   return `${m} m`;
 }
+
+/** vr 16 07:30 */
+export function formatDayTime(iso: string, timezone: string): string {
+  return `${formatDayShort(iso, timezone)} ${formatTime(iso, timezone)}`;
+}
