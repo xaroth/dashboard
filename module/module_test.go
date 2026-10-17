@@ -23,7 +23,8 @@ import (
 
 type testConfig struct {
 	Key string `yaml:"key"`
-	// Fail makes Initialize ("init") or Update ("update", "auth") fail.
+	// Fail makes Initialize ("init") or Update ("update", "auth") fail;
+	// "next_in_init" calls NextUpdate from Initialize.
 	Fail string `yaml:"fail"`
 	// FailAfter makes updates fail after this many successes.
 	FailAfter int `yaml:"fail_after"`
@@ -33,6 +34,9 @@ type testConfig struct {
 	SkipSave bool `yaml:"skip_save"`
 	// Panic makes Initialize ("init"), Enabled ("enabled") or Update ("update") panic.
 	Panic string `yaml:"panic"`
+	// Next is passed to NextUpdate from every update; the n-th update asks
+	// for n times Next.
+	Next time.Duration `yaml:"next"`
 }
 
 type testModule struct {
@@ -42,9 +46,12 @@ type testModule struct {
 
 var errBadInit = errors.New("bad init")
 
-func (m *testModule) Initialize(_ context.Context, cfg *testConfig) error {
+func (m *testModule) Initialize(ctx context.Context, cfg *testConfig) error {
 	if cfg.Fail == "init" {
 		return errBadInit
+	}
+	if cfg.Fail == "next_in_init" {
+		return module.NextUpdate(ctx, time.Minute)
 	}
 	if cfg.Panic == "init" {
 		panic("boom")
@@ -67,6 +74,11 @@ func (m *testModule) Update(ctx context.Context) error {
 	}
 	if !m.cfg.SkipSave || m.updates == 1 {
 		if err := module.SaveSnapshot(ctx, map[string]int{"updates": m.updates}); err != nil {
+			return err
+		}
+	}
+	if m.cfg.Next != 0 {
+		if err := module.NextUpdate(ctx, time.Duration(m.updates)*m.cfg.Next); err != nil {
 			return err
 		}
 	}
@@ -383,6 +395,54 @@ func TestScheduleSuccess(t *testing.T) {
 			t.Errorf("snapshot (-want +got):\n%s", diff)
 		}
 	})
+}
+
+func TestScheduleNextUpdate(t *testing.T) {
+	run(t, "test: {key: k, next: 3m}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		got := status(t, set)
+		if d := got.NextRun.Sub(*got.FetchedAt); d != 3*time.Minute {
+			t.Errorf("after the first update: got next run in %v, want the 3m it asked for", d)
+		}
+		time.Sleep(3 * time.Minute)
+		synctest.Wait()
+		got = status(t, set)
+		if d := got.NextRun.Sub(*got.FetchedAt); d != 6*time.Minute {
+			t.Errorf("after the second update: got next run in %v, want 6m", d)
+		}
+		// A manual update's request counts too; of two in a row, the last.
+		for range 2 {
+			if err := set.Update(t.Context(), "test"); err != nil {
+				t.Fatalf("manual update: %v", err)
+			}
+		}
+		synctest.Wait()
+		if got := status(t, set); !got.NextRun.Equal(time.Now().Add(12 * time.Minute)) {
+			t.Errorf("after two manual updates: got next run %v, want 12m from now %v", got.NextRun, time.Now())
+		}
+	})
+}
+
+func TestScheduleNextUpdateIgnoredOnFailure(t *testing.T) {
+	run(t, "test: {key: k, next: 3h, fail: update}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		got := status(t, set)
+		if d := got.NextRun.Sub(*got.AttemptedAt); d != 30*time.Second {
+			t.Errorf("got retry in %v, want the 30s backoff", d)
+		}
+	})
+}
+
+func TestNextUpdateErrors(t *testing.T) {
+	t.Parallel()
+	set, _ := load(t.Context(), t, "test: {key: k, next: -1m}")
+	if err := set.Update(t.Context(), "test"); err == nil || !strings.Contains(err.Error(), "must be positive") {
+		t.Errorf("got %v, want an error for a negative delay", err)
+	}
+	set, _ = load(t.Context(), t, "test: {key: k, fail: next_in_init}")
+	if got := status(t, set); got.Phase != module.PhaseInitFail || !strings.Contains(got.Error, "set from Update") {
+		t.Errorf("from Initialize: got %+v, want initialize failed with the error", got)
+	}
 }
 
 func TestScheduleDisabled(t *testing.T) {
