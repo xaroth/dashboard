@@ -111,7 +111,7 @@ func get(tb testing.TB, mux *http.ServeMux, target string) *httptest.ResponseRec
 func login(tb testing.TB, set *module.Set, code string) *http.ServeMux {
 	tb.Helper()
 	mux := http.NewServeMux()
-	set.RegisterShared(mux)
+	set.RegisterAdmin(mux)
 	rec := get(tb, mux, "/eveonline_esi/login")
 	if rec.Code != http.StatusFound {
 		tb.Fatalf("login: got %d %s, want 302", rec.Code, rec.Body)
@@ -131,7 +131,7 @@ func TestLoginRedirect(t *testing.T) {
 	t.Parallel()
 	set := load(t, ssoConfig, &fakeEVE{}, probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope, skillsScope))
 	mux := http.NewServeMux()
-	set.RegisterShared(mux)
+	set.RegisterAdmin(mux)
 	rec := get(t, mux, "/eveonline_esi/login")
 	loc, err := url.Parse(rec.Header().Get("Location"))
 	if rec.Code != http.StatusFound || err != nil {
@@ -248,7 +248,7 @@ func TestCallbackErrors(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				set := load(t, ssoConfig, &fakeEVE{})
 				mux := http.NewServeMux()
-				set.RegisterShared(mux)
+				set.RegisterAdmin(mux)
 				loc, _ := url.Parse(get(t, mux, "/eveonline_esi/login").Header().Get("Location"))
 				time.Sleep(testCase.wait)
 				rec := get(t, mux, "/eveonline_esi/callback?"+strings.ReplaceAll(testCase.query, "STATE", loc.Query().Get("state")))
@@ -264,7 +264,7 @@ func TestLoginWithoutSSO(t *testing.T) {
 	t.Parallel()
 	set := load(t, "eveonline_esi: {contact: [x]}", &fakeEVE{})
 	mux := http.NewServeMux()
-	set.RegisterShared(mux)
+	set.RegisterAdmin(mux)
 	if rec := get(t, mux, "/eveonline_esi/login"); rec.Code != http.StatusNotFound {
 		t.Errorf("login: got %d, want 404", rec.Code)
 	}

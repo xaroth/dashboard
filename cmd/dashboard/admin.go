@@ -45,6 +45,10 @@ type adminHandler struct {
 	simKeys map[string]string // device name -> api_key from setup
 }
 
+// adminPrefixes are the first path segments Register uses; a module page
+// under one would shadow part of it.
+var adminPrefixes = []string{"modules", "simulate", "images", "preview"}
+
 func (h *adminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", h.index)
 	mux.HandleFunc("POST /modules/{module}/update", h.updateModule)

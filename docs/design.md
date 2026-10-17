@@ -157,6 +157,8 @@ Deliberately small; capabilities are added when a module needs them.
 | `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
+A module whose type also implements `http.Handler` gets an admin page: it is served on the admin listener under `/<name>/` (the prefix stripped), with the module's context on the request (as in `Update`: the writer, its shared values), and linked from its name in the admin index's module table. Requests run concurrently with updates, so state they share goes through the database or is synchronized. A module whose `Initialize` failed is not served. A module or shared value page named after one of the admin UI's own path prefixes (`modules`, `simulate`, `images`, `preview`) stops startup. This is how settings like an API key are entered.
+
 Options: `WithUpdateInterval` (default 15 minutes), `WithStaleAfter` (default 1 hour), `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)), `WithShared` (see [Shared values](#shared-values)).
 
 Update and queries are split so a slow or failing source never blocks a screen: pages render from the last stored data.
@@ -554,7 +556,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `GET /simulate/{device}` | Simulator page for a device |
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |
-| `GET /{shared}/...` | Pages of shared values that are `http.Handler`s, e.g. `/eveonline_esi/` (characters, SSO login and callback); linked from `/` under Shared |
+| `/{name}/...` | Pages of modules and shared values that are `http.Handler`s, e.g. `/eveonline_esi/` (characters, SSO login and callback); linked from `/` in the module and Shared tables |
 | `GET /healthz` | Liveness, `ok` |
 | `GET /metrics` | Prometheus metrics, see [Observability](#observability) |
 

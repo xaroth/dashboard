@@ -158,8 +158,13 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Simulator: simulator,
 		Log:       log.With("component", "web"),
 	}
+	for _, name := range s.modules.AdminPages() {
+		if slices.Contains(adminPrefixes, name) {
+			return nil, fmt.Errorf("module or shared value %q has an admin page at /%s/, which the admin UI uses", name, name)
+		}
+	}
 	ui.Register(s.admin)
-	s.modules.RegisterShared(s.admin)
+	s.modules.RegisterAdmin(s.admin)
 	return s, nil
 }
 

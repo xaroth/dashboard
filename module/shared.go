@@ -163,23 +163,6 @@ type built struct {
 	err   error
 }
 
-// RegisterShared serves the shared values that are http.Handlers on mux,
-// each under /<name>/. One that failed to build is not served.
-func (s *Set) RegisterShared(mux *http.ServeMux) {
-	for _, d := range s.sharedOrder {
-		h, ok := s.handler(d)
-		if !ok {
-			continue
-		}
-		name := d.sharedName()
-		log := s.log.With("shared", name)
-		mux.Handle("/"+name+"/", http.StripPrefix("/"+name, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := context.WithValue(s.baseContext(r.Context(), log), keyDatabase, s.writer)
-			h.ServeHTTP(w, r.WithContext(ctx))
-		})))
-	}
-}
-
 // SharedStatus is a shared value's state for the admin UI.
 type SharedStatus struct {
 	Name string
@@ -196,7 +179,7 @@ func (s *Set) Shared(ctx context.Context) []SharedStatus {
 	out := make([]SharedStatus, 0, len(s.sharedOrder))
 	for _, d := range s.sharedOrder {
 		st := SharedStatus{Name: d.sharedName()}
-		_, st.Page = s.handler(d)
+		_, st.Page = s.sharedHandler(d)
 		b := s.shared[d]
 		if b.err != nil {
 			st.Error = b.err.Error()
@@ -217,7 +200,7 @@ func versionOf(ctx context.Context, v Versioned) (version string, err error) {
 	return v.Version(ctx)
 }
 
-func (s *Set) handler(d sharedDef) (http.Handler, bool) {
+func (s *Set) sharedHandler(d sharedDef) (http.Handler, bool) {
 	b := s.shared[d]
 	if b.err != nil {
 		return nil, false
