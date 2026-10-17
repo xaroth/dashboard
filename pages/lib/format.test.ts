@@ -3,6 +3,7 @@ import {
   formatCount,
   formatDateTime,
   formatDayShort,
+  formatDayTime,
   formatDuration,
   formatMillimeters,
   formatTemperature,
@@ -35,4 +36,8 @@ test("durations in the two largest units", () => {
   expect(formatDuration(12 * 60_000 + 59_999)).toBe("12 m");
   expect(formatDuration((5 * 60 + 12) * 60_000)).toBe("5 u 12 m");
   expect(formatDuration((2 * 1440 + 3 * 60 + 40) * 60_000)).toBe("2 d 3 u");
+});
+
+test("day and time", () => {
+  expect(formatDayTime("2026-10-16T05:30:00Z", "Europe/Amsterdam")).toBe("vr 16 07:30");
 });
