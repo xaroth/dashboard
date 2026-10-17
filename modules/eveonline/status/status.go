@@ -20,10 +20,6 @@ import (
 //go:embed sql/migrations/*.sql
 var migrations embed.FS
 
-// requestTimeout is when a status request counts as the cluster being
-// offline: ESI does not answer /status then, it times out.
-const requestTimeout = 15 * time.Second
-
 // Status is the snapshot one update stores and the server query returns.
 type Status struct {
 	Online        bool       `json:"online"`
@@ -69,10 +65,10 @@ func (*status) Update(ctx context.Context) error {
 }
 
 func fetch(ctx context.Context) (Status, error) {
-	rctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
-	resp, err := getstatus.Request(rctx, eveonline.ESI.Get(ctx))
+	resp, err := getstatus.Request(ctx, eveonline.ESI.Get(ctx))
 	if err != nil {
+		// ESI does not answer /status while the cluster is offline: the
+		// request hits lib-esi-go's timeout, which matches ESI's own.
 		var ne net.Error
 		if ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()) {
 			return Status{}, nil

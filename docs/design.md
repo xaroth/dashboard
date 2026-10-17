@@ -183,20 +183,23 @@ Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ct
 
 ### Shared values
 
-A value several modules use, such as an API client, is defined once with `module.DefineShared` and configured once, under `modules.<name>` like a module. Modules that use it declare it with `module.WithShared` and read it from their context with `Get`:
+A value several modules use, such as an API client, is defined once with `module.DefineShared` and configured once, under `modules.<name>` like a module. Modules that use it declare it with `module.WithShared`, optionally with declarations of type `D` (e.g. the API scopes they need), and read it from their context with `Get`:
 
 ```go
 package eveonline
 
+type Scopes []string
+
 var ESI = module.DefineShared("eveonline", defaultConfig,
-	func(ctx context.Context, cfg *config) (*http.Client, error) { ... })
+	func(ctx context.Context, cfg *config, decls []Scopes) (*Client, error) { ... },
+	module.SharedMigrations(migrations))
 ```
 
 ```go
-package status
+package skills
 
-var Module = module.Define[status, config]("eveonline_status", defaultConfig,
-	module.WithShared(eveonline.ESI))
+var Module = module.Define[skills, config]("eveonline_skills", defaultConfig,
+	module.WithShared(eveonline.ESI, eveonline.Scopes{"esi-skills.read_skills.v1"}))
 
 func (*status) Update(ctx context.Context) error {
 	resp, err := getstatus.Request(ctx, eveonline.ESI.Get(ctx))
@@ -204,25 +207,37 @@ func (*status) Update(ctx context.Context) error {
 }
 ```
 
-- `Load` builds each shared value once, after migrations and before any `Initialize`, and only if a registered module declares it. The build function gets the decoded config and a context with `Logger`, `HTTPClient` and `Clock`; like `Initialize`, it does no network I/O.
+- `Load` builds each shared value once, after migrations and before any `Initialize`, and only if a registered module declares it. The build function gets the decoded config, every declaring module's declarations in module name order, and a context with `Logger`, `HTTPClient` and `Clock`; like `Initialize`, it does no network I/O.
+- `SharedMigrations` gives a shared value tables, migrated like a module's with the shared value's name as owner. It reaches them through the calling module's `module.Database(ctx)`: the writer in `Update`, the read-only pool in queries.
+- A shared value that is an `http.Handler` is served on the admin listener under `/<name>/` (the prefix stripped), with `Database` (the writer), `Logger`, `HTTPClient` and `Clock` on the request context, and linked from the admin index under Accounts. This is how logins work.
 - The config section follows the module rules (defaults, unknown keys stop startup) but has no `schedule` key. A section for a shared value no module declares is an unknown module.
 - A build error turns off every module that declares the value, as an `Initialize` error does; the error is prefixed with the shared value's name.
 - `Get` in a module that did not declare the value panics, which surfaces as an error from that call. A shared value's name may not be a module's name.
-- Shared values have no schedule, tables or state, and do not show in the admin UI.
+- Shared values have no schedule or snapshot.
 
 ### EVE Online
 
-`modules/eveonline` holds the shared ESI client `eveonline.ESI` (`*http.Client`, built with `lib-esi-go`). It sends through the service's HTTP client transport, so ESI calls are traced like other calls, and sets the User-Agent, compatibility date, language and tenant headers. Config keys under `modules.eveonline`:
+`modules/eveonline` holds the shared `eveonline.ESI` (`*eveonline.Client`): the ESI client and the characters logged in through EVE SSO. Requests go through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls; `*Client` is the sender for `lib-esi-go` requests. Config keys under `modules.eveonline`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `contact` | none | Contact values in the User-Agent, e.g. `mailto:you@example.com`. Required: without it the client is not built and the EVE modules are off. |
+| `client_id`, `client_secret` | empty | The SSO application from developers.eveonline.com. Empty disables character logins. |
+| `callback_url` | empty | The application's callback URL: the admin listener's address with path `/eveonline/callback`, as the browser reaches it. Set together with the client keys. |
+
+Characters:
+
+- Modules declare the scopes they need: `module.WithShared(eveonline.ESI, eveonline.Scopes{...})`. A login asks for every declared scope.
+- `/eveonline/` on the admin listener lists the characters with the declared scopes they have not granted, their token expiry and a rejected refresh. "Log in a character" goes to EVE SSO; the callback stores the character, its granted scopes and tokens in `eveonline_characters`. Logging in a character again replaces its tokens and scopes and clears its error. Pending logins live in memory for 10 minutes.
+- `Client.Characters(ctx, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it is used from `Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token.
+- A rejected refresh (`invalid_grant`, `invalid_client`) is recorded on the character and fails the update with `module.ErrAuth`. After logging in again, Update now on each affected module resumes it.
+- The access token's claims (character ID, name, scopes) are read without checking the signature: the token comes straight from the token endpoint over TLS, authenticated with the client secret.
 
 `eveonline.NewFakeClient(handler)` is a service HTTP client that serves every request in-process, for tests of EVE modules; it works inside a synctest bubble.
 
 #### Server status
 
-`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that times out after 15 s, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Each successful update also stores a sample (time, online, players) in `eveonline_status_samples`, kept indefinitely: about 105,000 rows a year at the default interval.
+`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that hits lib-esi-go's 10 s timeout (ESI's own), or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Each successful update also stores a sample (time, online, players) in `eveonline_status_samples`, kept indefinitely: about 105,000 rows a year at the default interval.
 
 Queries:
 
@@ -246,10 +261,12 @@ modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
 modules/eveonline/status/sql/migrations/00001_samples.sql
 modules/eveonline/status/sql/queries.sql
+modules/eveonline/sql/migrations/00001_characters.sql
+modules/eveonline/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
-- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each module's, before any `Initialize`. `device.Load` runs the API key migrations (owner `device`). A failing migration stops startup.
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each shared value's, then each module's, before any `Initialize`. `device.Load` runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
 - **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `module.SaveSnapshot` and `module.LoadSnapshot`.
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
@@ -509,6 +526,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `GET /simulate/{device}` | Simulator page for a device |
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |
+| `GET /{shared}/...` | Pages of shared values that are `http.Handler`s, e.g. `/eveonline/` (characters, SSO login and callback); linked from `/` under Accounts |
 | `GET /healthz` | Liveness, `ok` |
 | `GET /metrics` | Prometheus metrics, see [Observability](#observability) |
 

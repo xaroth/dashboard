@@ -1,50 +1,114 @@
-// Package eveonline holds what the EVE Online modules share: the ESI client.
-// The modules are its subpackages.
+// Package eveonline holds what the EVE Online modules share: the ESI client
+// and the characters logged in through EVE SSO. The modules are its
+// subpackages.
 package eveonline
 
 import (
 	"cmp"
 	"context"
+	"embed"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"runtime/debug"
+	"slices"
+	"sync"
+	"time"
 
 	defaults "github.com/eve-online-tools/lib-esi-go"
-	"github.com/eve-online-tools/lib-esi-go/middleware/authentication"
-	"github.com/eve-online-tools/lib-esi-go/middleware/compatibilitydate"
-	"github.com/eve-online-tools/lib-esi-go/middleware/language"
-	"github.com/eve-online-tools/lib-esi-go/middleware/tenant"
-	"github.com/eve-online-tools/lib-esi-go/middleware/useragent"
 	"github.com/eve-online-tools/lib-esi-go/transport"
 
 	"github.com/xaroth/dashboard/module"
 )
 
+//go:embed sql/migrations/*.sql
+var migrations embed.FS
+
+// callbackPath is where the SSO callback is served on the admin listener.
+const callbackPath = "/eveonline/callback"
+
 type config struct {
 	// Contact goes in the User-Agent so CCP can reach the operator, e.g.
 	// mailto:you@example.com.
 	Contact []string `yaml:"contact"`
+	// The SSO application from developers.eveonline.com. Empty disables
+	// character logins.
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	// CallbackURL is the application's callback: the admin listener's
+	// address with path /eveonline/callback.
+	CallbackURL string `yaml:"callback_url"`
 }
 
-// ESI is the ESI client, configured under modules.eveonline. Modules declare it
-// with module.WithShared(eveonline.ESI) and read it with ESI.Get(ctx).
-var ESI = module.DefineShared("eveonline", func() *config { return &config{} }, newClient)
+// Scopes are the ESI scopes a module needs, declared with
+// module.WithShared(eveonline.ESI, eveonline.Scopes{...}).
+type Scopes []string
 
-func newClient(ctx context.Context, cfg *config) (*http.Client, error) {
+// ESI is the ESI client, configured under modules.eveonline. Modules declare
+// it with module.WithShared and read it with ESI.Get(ctx).
+var ESI = module.DefineShared("eveonline", func() *config { return &config{} }, newClient,
+	module.SharedMigrations(migrations))
+
+// Client sends ESI requests and holds the logged-in characters' tokens.
+type Client struct {
+	esi *http.Client
+	// sso is the service's client, for login.eveonline.com.
+	sso *http.Client
+	cfg *config
+	// scopes is every scope a module declared, sorted; logins ask for all.
+	scopes []string
+
+	mu sync.Mutex
+	// states are the pending logins' OAuth states, to when they expire.
+	states map[string]time.Time
+	// refreshing serializes refreshes per character: a refresh may rotate
+	// the refresh token, so two at once would lose one.
+	refreshing map[int64]*sync.Mutex
+}
+
+func newClient(ctx context.Context, cfg *config, decls []Scopes) (*Client, error) {
 	if len(cfg.Contact) == 0 {
 		return nil, errors.New("contact is required")
 	}
+	if err := checkSSO(cfg); err != nil {
+		return nil, err
+	}
+	var scopes []string
+	for _, d := range decls {
+		scopes = append(scopes, d...)
+	}
+	slices.Sort(scopes)
 	base := module.HTTPClient(ctx)
-	// transport.New ignores WithTransport and always sends through
-	// http.DefaultTransport; NewChain keeps the service's traced transport.
-	rt := transport.NewChain(cmp.Or(base.Transport, http.DefaultTransport),
-		useragent.Middleware("dashboard", version(), cfg.Contact...),
-		compatibilitydate.Middleware(defaults.CompatibilityDate),
-		language.Middleware(defaults.Language),
-		tenant.Middleware(defaults.Tenant),
-		authentication.Middleware,
-	)
-	return &http.Client{Timeout: base.Timeout, Transport: rt}, nil
+	rt := transport.New("dashboard", version(), cfg.Contact, defaults.CompatibilityDate,
+		transport.WithTransport(cmp.Or(base.Transport, http.DefaultTransport)))
+	return &Client{
+		esi:        &http.Client{Timeout: base.Timeout, Transport: rt},
+		sso:        base,
+		cfg:        cfg,
+		scopes:     slices.Compact(scopes),
+		states:     map[string]time.Time{},
+		refreshing: map[int64]*sync.Mutex{},
+	}, nil
+}
+
+func checkSSO(cfg *config) error {
+	if cfg.ClientID == "" && cfg.ClientSecret == "" && cfg.CallbackURL == "" {
+		return nil
+	}
+	if cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.CallbackURL == "" {
+		return errors.New("client_id, client_secret and callback_url are set together")
+	}
+	u, err := url.Parse(cfg.CallbackURL)
+	if err != nil || !u.IsAbs() || u.Path != callbackPath {
+		return fmt.Errorf("callback_url must be an absolute URL with path %s, got %q", callbackPath, cfg.CallbackURL)
+	}
+	return nil
+}
+
+// Do sends an ESI request; Client is the sender for lib-esi-go requests.
+func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	return c.esi.Do(req)
 }
 
 func version() string {
