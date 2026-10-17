@@ -61,7 +61,9 @@ func SaveSnapshot(ctx context.Context, v any) error {
 
 // NextUpdate sets when the schedule runs Update next: d after this update,
 // instead of the update interval. Called from Update; it applies when Update
-// returns nil, to scheduled and manual updates alike.
+// returns nil, to scheduled and manual updates alike, and the last call
+// wins. Keep d under the stale_after time, or the data shows as stale while
+// the module waits.
 func NextUpdate(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return fmt.Errorf("next update in %v: must be positive", d)

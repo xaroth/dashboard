@@ -54,7 +54,12 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		select {
 		case <-ctx.Done():
 			return
-		case next := <-inst.kick:
+		case <-inst.kick:
+			// The latest success wins, if a scheduled update ran after
+			// the manual one that kicked.
+			inst.mu.Lock()
+			next := inst.next
+			inst.mu.Unlock()
 			failures = 0
 			phase, delay = PhaseWaiting, next
 			continue
@@ -104,13 +109,12 @@ func (s *Set) Update(ctx context.Context, name string) error {
 		if inst.initErr != nil {
 			return fmt.Errorf("%s: initialize failed: %w", name, inst.initErr)
 		}
-		next, err := s.runUpdate(ctx, inst)
-		if err != nil {
+		if _, err := s.runUpdate(ctx, inst); err != nil {
 			return err
 		}
 		select {
-		case inst.kick <- next:
-		default: // a kick is already pending
+		case inst.kick <- struct{}{}:
+		default: // a kick is already pending; it reads the latest delay
 		}
 		return nil
 	}
@@ -157,7 +161,11 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 	if err := New(s.writer).RecordSuccess(ctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
 		inst.log.Error("recording update", "err", err)
 	}
-	return cmp.Or(state.next, inst.interval), nil
+	next = cmp.Or(state.next, inst.interval)
+	inst.mu.Lock()
+	inst.next = next
+	inst.mu.Unlock()
+	return next, nil
 }
 
 func (s *Set) recordFailure(ctx context.Context, inst *instance, err error) {

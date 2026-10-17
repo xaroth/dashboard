@@ -179,7 +179,7 @@ modules:
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `module.NextUpdate(ctx, d)` (from `Update`) runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual, and has no effect on the backoff after a failure.
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `module.NextUpdate(ctx, d)` (from `Update`) runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual (the most recent success decides), the last call wins, and it has no effect on the backoff after a failure. A delay longer than `stale_after` shows the data as stale while the module waits.
 
 ### Shared values
 

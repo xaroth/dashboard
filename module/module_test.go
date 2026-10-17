@@ -23,7 +23,8 @@ import (
 
 type testConfig struct {
 	Key string `yaml:"key"`
-	// Fail makes Initialize ("init") or Update ("update", "auth") fail.
+	// Fail makes Initialize ("init") or Update ("update", "auth") fail;
+	// "next_in_init" calls NextUpdate from Initialize.
 	Fail string `yaml:"fail"`
 	// FailAfter makes updates fail after this many successes.
 	FailAfter int `yaml:"fail_after"`
@@ -45,9 +46,12 @@ type testModule struct {
 
 var errBadInit = errors.New("bad init")
 
-func (m *testModule) Initialize(_ context.Context, cfg *testConfig) error {
+func (m *testModule) Initialize(ctx context.Context, cfg *testConfig) error {
 	if cfg.Fail == "init" {
 		return errBadInit
+	}
+	if cfg.Fail == "next_in_init" {
+		return module.NextUpdate(ctx, time.Minute)
 	}
 	if cfg.Panic == "init" {
 		panic("boom")
@@ -400,13 +404,15 @@ func TestScheduleNextUpdate(t *testing.T) {
 		if d := got.NextRun.Sub(*got.FetchedAt); d != 6*time.Minute {
 			t.Errorf("after the second update: got next run in %v, want 6m", d)
 		}
-		// A manual update's request counts too.
-		if err := set.Update(t.Context(), "test"); err != nil {
-			t.Fatalf("manual update: %v", err)
+		// A manual update's request counts too; of two in a row, the last.
+		for range 2 {
+			if err := set.Update(t.Context(), "test"); err != nil {
+				t.Fatalf("manual update: %v", err)
+			}
 		}
 		synctest.Wait()
-		if got := status(t, set); !got.NextRun.Equal(time.Now().Add(9 * time.Minute)) {
-			t.Errorf("after a manual update: got next run %v, want 9m from now %v", got.NextRun, time.Now())
+		if got := status(t, set); !got.NextRun.Equal(time.Now().Add(12 * time.Minute)) {
+			t.Errorf("after two manual updates: got next run %v, want 12m from now %v", got.NextRun, time.Now())
 		}
 	})
 }
@@ -426,6 +432,10 @@ func TestNextUpdateErrors(t *testing.T) {
 	set, _ := load(t.Context(), t, "test: {key: k, next: -1m}")
 	if err := set.Update(t.Context(), "test"); err == nil || !strings.Contains(err.Error(), "must be positive") {
 		t.Errorf("got %v, want an error for a negative delay", err)
+	}
+	set, _ = load(t.Context(), t, "test: {key: k, fail: next_in_init}")
+	if got := status(t, set); got.Phase != module.PhaseInitFail || !strings.Contains(got.Error, "set from Update") {
+		t.Errorf("from Initialize: got %+v, want initialize failed with the error", got)
 	}
 }
 

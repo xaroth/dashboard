@@ -76,14 +76,16 @@ type instance struct {
 	// updating serializes scheduled and manual updates; modules are not
 	// required to be safe for concurrent Update calls.
 	updating sync.Mutex
-	// kick tells the schedule a manual update succeeded, with the delay to
-	// the next one.
-	kick chan time.Duration
+	// kick tells the schedule a manual update succeeded.
+	kick chan struct{}
 
 	mu      sync.Mutex
 	initErr error
 	phase   Phase
 	nextRun time.Time
+	// next is the delay after the last successful update, scheduled or
+	// manual: the interval, or what it set with NextUpdate.
+	next time.Duration
 }
 
 // Phase is where a module's schedule stands.
@@ -148,7 +150,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 			interval:   cmp.Or(sched.UpdateInterval, r.interval),
 			staleAfter: cmp.Or(sched.StaleAfter, r.staleAfter),
 			log:        o.Log.With("module", r.name),
-			kick:       make(chan time.Duration, 1),
+			kick:       make(chan struct{}, 1),
 			phase:      PhaseWaiting,
 		})
 	}
