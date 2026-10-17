@@ -1,0 +1,15 @@
+{
+  "data": {
+    "charge": {
+      "plugin": "connected",
+      "status": "notCharging",
+      "charging": false,
+      "stateOfCharge": 80.5,
+      "batteryCapacity": 273960,
+      "targetStateOfCharge": {"standard": 90, "quick": 80},
+      "remainTime": 0
+    },
+    "timestamp": "2026-10-17T08:05:00Z"
+  },
+  "meta": {"code": 200, "message": "Success", "success": "true", "timestamp": "2026-10-17T08:10:00Z", "requestId": "835bdbd4-1105-4a8c-b438-a1b2c3d4f5g6"}
+}

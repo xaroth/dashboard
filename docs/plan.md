@@ -9,7 +9,6 @@ Specification of the parts of the service that are designed but not built. The b
 | `p1` | Smartstuff P1 dongle, local HTTP | state + series (import/export power, energy, gas) |
 | `solar` | Hoymiles: S-Miles Cloud, or DTU Modbus once the DTU answers | state + series (production per inverter, alarms) |
 | `calendar` | Google Calendar secret iCal URL | snapshot (upcoming events) |
-| `car` | Pleos Vehicle Data API, fallback Bluelink | snapshot (SoC, range, charging, locks); enabled when credentials are set |
 
 Further candidates: Plex recently added, waste collection, public transport.
 
@@ -23,9 +22,6 @@ modules:
       update_interval: 1m
   calendar:
     ical_url: ${CALENDAR_ICAL_URL}
-  car:
-    client_id: ${PLEOS_CLIENT_ID}
-    client_secret: ${PLEOS_CLIENT_SECRET}
 ```
 
 Authentication errors from these sources (HTTP 401/403) are returned as `module.ErrAuth`.
