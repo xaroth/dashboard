@@ -85,6 +85,9 @@ type instance struct {
 	initErr error
 	phase   Phase
 	nextRun time.Time
+	// next is the delay after the last successful update, scheduled or
+	// manual: the interval, or what it set with NextUpdate.
+	next time.Duration
 }
 
 // Phase is where a module's schedule stands.
@@ -350,6 +353,8 @@ type stateStore struct {
 	module  string
 	update  bool
 	pending *string
+	// next is the delay NextUpdate set; zero means the update interval.
+	next time.Duration
 }
 
 func (s *stateStore) save(data []byte) error {
@@ -358,6 +363,14 @@ func (s *stateStore) save(data []byte) error {
 	}
 	str := string(data)
 	s.pending = &str
+	return nil
+}
+
+func (s *stateStore) setNext(d time.Duration) error {
+	if !s.update {
+		return errors.New("the next update is set from Update")
+	}
+	s.next = d
 	return nil
 }
 
