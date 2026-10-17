@@ -20,6 +20,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/render"
 	"github.com/xaroth/dashboard/storage"
 )
@@ -89,6 +90,18 @@ func TestNewErrors(t *testing.T) {
 				t.Error("got renderer open after a failed New, want it closed")
 			}
 		})
+	}
+}
+
+func TestNewRejectsReservedAdminPage(t *testing.T) {
+	t.Parallel()
+	images := module.DefineShared("images", func() *struct{} { return &struct{}{} },
+		func(context.Context, *struct{}, []struct{}) (loginsPage, error) { return loginsPage{}, nil })
+	stub := render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "e1001/hello"}))
+	_, err := New(t.Context(), testConfig(t, "", ""), slog.New(slog.DiscardHandler),
+		WithRenderer(stub), WithRegistrations(adminRegistration("sun", module.WithShared(images))))
+	if err == nil || !strings.Contains(err.Error(), `"images" has an admin page at /images/`) {
+		t.Errorf("got %v, want the reserved prefix rejected", err)
 	}
 }
 
