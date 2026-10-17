@@ -1,0 +1,20 @@
+{
+  "data": {
+    "doors": [{"left": "locked", "right": "locked"}, {"left": "locked", "right": "locked"}],
+    "hood": "closed",
+    "trunk": "closed",
+    "sunroof": null,
+    "tire": [{"left": null, "right": null, "unit": null}, {"left": null, "right": null, "unit": null}],
+    "warnings": [],
+    "climateControl": {"mode": "off", "status": "off", "speed": 0, "temperature": {"value": null, "unit": "C"}},
+    "windshield": {"defrost": "off"},
+    "steeringWheelHeat": "off",
+    "seats": [
+      {"left": {"heat": "off", "ventilation": "off"}, "right": {"heat": "off", "ventilation": "off"}},
+      {"left": {"heat": "off", "ventilation": "off"}, "right": {"heat": "off", "ventilation": "off"}}
+    ],
+    "outsideTemperature": {"value": null, "unit": "C"},
+    "timestamp": "2026-10-17T08:00:00Z"
+  },
+  "meta": {"code": 200, "message": "Success", "success": true, "timestamp": "2026-10-17T08:10:00Z", "requestId": "835bdbd4-1105-4a8c-b438-a1b2c3d4f5g6"}
+}

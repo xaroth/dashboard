@@ -55,3 +55,11 @@ sql:
         <<: *go
         package: sde
         out: modules/eveonline/sde
+  - <<: *owner
+    schema: modules/car/sql/migrations
+    queries: modules/car/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: car
+        out: modules/car

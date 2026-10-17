@@ -193,6 +193,7 @@ Hyundai Motor Group's EU Data Act API, read-only, Europe only (NL included).
 - Vehicles: `GET /v1/vehicles/consent` lists VINs.
 - Data: `/v1/vehicles/{vin}/batteries` (plug, charging, SoC, time to full), `/powertrains` (fuel level, range), `/locations`, `/driving` (ignition, odometer, park), `/status` (doors, trunk, warnings, climate).
 - Docs do not state rate limits or data freshness.
+- Verified 2026-10-17 with a key: the 2024 Kona (`SX2HV`, type EV) returns location, ignition, odometer, SoC, range, charging, locks and climate; outside temperature and tires are null. Reads return the last state the car sent (a sleeping car's data is hours old). Access tokens are JWTs valid 1 hour.
 - Compatibility table (Oct 2026) lists ELANTRA, INSTER, IONIQ 5/6, IONIQ, and "KONA Electric (HEV)" with every field marked N. The 2024 Kona (SX2) is not listed. Issuing a key and calling it is the only way to know what returns data.
 
 ### Unofficial: hyundai_kia_connect_api
@@ -225,7 +226,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 
 1. DTU Modbus: via installer or Hoymiles support (see Solar workarounds).
 2. iCal address of the shared calendar (likely available).
-3. Does the Pleos API return data for the Kona Electric 2024?
+3. Does the Pleos API return data for the Kona Electric 2024? Yes, verified 2026-10-17.
 4. Content, layout and placement per screen.
 
 ## Sources

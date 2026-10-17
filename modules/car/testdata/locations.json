@@ -1,0 +1,7 @@
+{
+  "data": {
+    "location": {"latitude": 52.2375, "longitude": 4.8264, "altitude": 0, "heading": 180, "speed": {"value": 0, "unit": "kph"}, "type": 0},
+    "timestamp": "2026-10-17T08:00:00.082Z"
+  },
+  "meta": {"code": 200, "message": "Success", "success": "true", "timestamp": "2026-10-17T08:10:00Z", "requestId": "835bdbd4-1105-4a8c-b438-a1b2c3d4f5g6"}
+}

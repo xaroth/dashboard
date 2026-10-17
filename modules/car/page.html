@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cars</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; background: #eee; color: #111; }
+  table { border-collapse: collapse; background: #fff; margin-bottom: 12px; }
+  td, th { padding: 4px 10px; text-align: left; border-bottom: 1px solid #ddd; vertical-align: top; }
+  form { display: inline; }
+  fieldset { background: #fff; border: 1px solid #ccc; max-width: 640px; }
+  label { display: block; margin: 6px 0; }
+  .error, .warn { color: #a00; }
+  .saved { color: #060; }
+</style>
+</head>
+<body>
+<p><a href="/">dashboard</a></p>
+<h1>Cars</h1>
+{{with .Problem}}<p class="error">{{.}}</p>{{end}}
+{{with .Saved}}<p class="saved">Key {{.}} saved. Update now to poll its vehicles, or to resume after every key was rejected.</p>
+<form method="post" action="/modules/car/update"><button>Update now</button></form>{{end}}
+
+{{range .Keys}}
+<h2>{{.Brand}} key <code>{{.ClientID}}</code></h2>
+<p>
+  Issued {{.IssuedAt.Format "2006-01-02"}}, expires {{.ExpiresAt.Format "2006-01-02"}}:
+  {{if lt .DaysLeft 1}}<span class="warn">expired; reissue it in Pleos Playground and save it below.</span>
+  {{else if .Warn}}<span class="warn">{{.DaysLeft}} days left; reissue it in Pleos Playground and save it below.</span>
+  {{else}}{{.DaysLeft}} days left.{{end}}
+</p>
+<form method="post" action="/car/keys/delete" onsubmit="return confirm('Delete this key and its vehicles?')">
+  <input type="hidden" name="client_id" value="{{.ClientID}}"><button>Delete key</button>
+</form>
+{{with .AuthError}}<p class="error">Last rejected: {{.}}</p>{{end}}
+<table>
+  <tr><th>Vehicle</th><th>VIN</th><th>Type</th><th>Short name</th></tr>
+  {{range .Vehicles}}
+  <tr>
+    <td>{{.Sellname}}{{with .Nickname}} ({{.}}){{end}}</td>
+    <td><code>{{.Vin}}</code></td>
+    <td>{{.Type}}</td>
+    <td>
+      <form method="post" action="/car/vehicles/name">
+        <input type="hidden" name="vin" value="{{.Vin}}">
+        <input name="short_name" value="{{with .ShortName}}{{.}}{{end}}" size="16" placeholder="e.g. kona">
+        <button>Save</button>
+      </form>
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<p>No keys yet.</p>
+{{end}}
+
+<form method="post" action="/car/keys">
+<fieldset>
+  <legend>Add or replace a key</legend>
+  <p>In Pleos Playground: account menu, My Vehicle Data API, the brand's tab, Get API Key. A key works for 90 days. Saving a client ID that exists replaces it.</p>
+  <label>Brand <select name="brand">{{range .Brands}}<option>{{.}}</option>{{end}}</select></label>
+  <label>Client ID <input name="client_id" size="40" required></label>
+  <label>Client secret <input name="client_secret" type="password" size="40" required autocomplete="off"></label>
+  <label>Issued <input name="issued" type="date" value="{{.Today}}" required></label>
+  <button>Check and save</button>
+</fieldset>
+</form>
+</body>
+</html>
