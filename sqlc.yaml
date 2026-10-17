@@ -31,3 +31,11 @@ sql:
         <<: *go
         package: weather
         out: modules/weather
+  - <<: *owner
+    schema: modules/eveonline/status/sql/migrations
+    queries: modules/eveonline/status/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: status
+        out: modules/eveonline/status
