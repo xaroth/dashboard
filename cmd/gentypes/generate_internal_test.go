@@ -28,6 +28,7 @@ func (*mod) Update(context.Context) error           { return nil }
 type Item struct {
 	ID       string          `json:"id"`
 	At       time.Time       `json:"at"`
+	Until    *time.Time      `json:"until"`
 	Note     *string         `json:"note"`
 	Tags     []string        `json:"tags,omitempty"`
 	Optional []*float64      `json:"optional"`

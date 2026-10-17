@@ -88,14 +88,15 @@ func (g *generator) typeOf(t reflect.Type, hint string) (string, error) {
 	switch {
 	case t == timeType:
 		return "string", nil
+	case t.Kind() == reflect.Pointer:
+		// Checked before the marshalers: *T has the methods of T.
+		inner, err := g.typeOf(t.Elem(), hint)
+		return inner + " | null", err
 	case implements(t, jsonMarshaler) || implements(t, textMarshaler):
 		// Its JSON is whatever the method writes; the kind says nothing.
 		return "", fmt.Errorf("%s has its own JSON encoding; add it to gentypes", t)
 	}
 	switch t.Kind() {
-	case reflect.Pointer:
-		inner, err := g.typeOf(t.Elem(), hint)
-		return inner + " | null", err
 	case reflect.Bool:
 		return "boolean", nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,

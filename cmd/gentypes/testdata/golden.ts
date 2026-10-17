@@ -14,6 +14,7 @@ export interface DemoModExtra {
 export interface DemoModItem {
   id: string;
   at: string;
+  until: string | null;
   note: string | null;
   tags?: string[];
   optional: (number | null)[];

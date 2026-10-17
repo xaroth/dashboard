@@ -42,6 +42,7 @@ type Registration struct {
 	staleAfter time.Duration
 	migrations fs.FS
 	queries    map[string]query
+	shared     []sharedDef
 	moduleType reflect.Type
 	initialize func(ctx context.Context, m any, cfg any) error
 	enabled    func(ctx context.Context, m any) (bool, error)

@@ -33,6 +33,9 @@ render/                    page pipeline, renderer process, gray reduction, PNG
 modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
 modules/<name>/sql/        the module's migrations and queries
+modules/<group>/           shared values for a group of modules (eveonline: the ESI
+                           client); the group's modules are its subpackages, named
+                           <group>_<package> (modules/eveonline/status: eveonline_status)
 renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
 pages/components/, lib/    shared by all layouts
@@ -47,6 +50,7 @@ cmd/dashboard  -> storage, module, modules, device, render
 cmd/gentypes   -> module, modules
 modules        -> module, modules/<name>
 modules/<name> -> module
+modules/<group>/<name> -> module, modules/<group>
 device         -> render
 ```
 
@@ -150,7 +154,7 @@ Deliberately small; capabilities are added when a module needs them.
 | `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
-Options: `WithUpdateInterval` (default 15 minutes), `WithStaleAfter` (default 1 hour), `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)).
+Options: `WithUpdateInterval` (default 15 minutes), `WithStaleAfter` (default 1 hour), `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)), `WithShared` (see [Shared values](#shared-values)).
 
 Update and queries are split so a slow or failing source never blocks a screen: pages render from the last stored data.
 
@@ -175,6 +179,45 @@ modules:
 ### Dependencies
 
 Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)).
+
+### Shared values
+
+A value several modules use, such as an API client, is defined once with `module.DefineShared` and configured once, under `modules.<name>` like a module. Modules that use it declare it with `module.WithShared` and read it from their context with `Get`:
+
+```go
+package eveonline
+
+var ESI = module.DefineShared("eveonline", defaultConfig,
+	func(ctx context.Context, cfg *config) (*http.Client, error) { ... })
+```
+
+```go
+package status
+
+var Module = module.Define[status, config]("eveonline_status", defaultConfig,
+	module.WithShared(eveonline.ESI))
+
+func (*status) Update(ctx context.Context) error {
+	resp, err := getstatus.Request(ctx, eveonline.ESI.Get(ctx))
+	...
+}
+```
+
+- `Load` builds each shared value once, after migrations and before any `Initialize`, and only if a registered module declares it. The build function gets the decoded config and a context with `Logger`, `HTTPClient` and `Clock`; like `Initialize`, it does no network I/O.
+- The config section follows the module rules (defaults, unknown keys stop startup) but has no `schedule` key. A section for a shared value no module declares is an unknown module.
+- A build error turns off every module that declares the value, as an `Initialize` error does; the error is prefixed with the shared value's name.
+- `Get` in a module that did not declare the value panics, which surfaces as an error from that call. A shared value's name may not be a module's name.
+- Shared values have no schedule, tables or state, and do not show in the admin UI.
+
+### EVE Online
+
+`modules/eveonline` holds the shared ESI client `eveonline.ESI` (`*http.Client`, built with `lib-esi-go`). It sends through the service's HTTP client transport, so ESI calls are traced like other calls, and sets the User-Agent, compatibility date, language and tenant headers. Config keys under `modules.eveonline`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `contact` | none | Contact values in the User-Agent, e.g. `mailto:you@example.com`. Required: without it the client is not built and the EVE modules are off. |
+
+`eveonline.NewFakeClient(handler)` is a service HTTP client that serves every request in-process, for tests of EVE modules; it works inside a synctest bubble.
 
 ## Storage
 
