@@ -60,6 +60,7 @@ device         -> render
 
 | Module | Source | Data |
 | --- | --- | --- |
+| `eve_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
 Planned modules are listed in [plan.md](plan.md#modules).
@@ -218,6 +219,10 @@ func (*status) Update(ctx context.Context) error {
 | `contact` | none | Contact values in the User-Agent, e.g. `mailto:you@example.com`. Required: without it the client is not built and the EVE modules are off. |
 
 `eveonline.NewFakeClient(handler)` is a service HTTP client that serves every request in-process, for tests of EVE modules; it works inside a synctest bubble.
+
+#### Server status
+
+`eve_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that times out after 15 s, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Query `eve_status.server` takes no params and returns the stored status.
 
 ## Storage
 
