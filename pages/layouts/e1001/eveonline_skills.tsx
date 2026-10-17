@@ -25,13 +25,17 @@ export default function EveOnlineSkills({ data, viewport, now, timezone }: PageP
           {stale ? "Verouderd, " : ""}bijgewerkt {fetchedAt ? formatTime(fetchedAt, timezone) : "-"}
         </span>
       </div>
-      <SkillQueues
-        characters={queues ?? []}
-        now={now}
-        timezone={timezone}
-        width={viewport.width - 2 * PAD_X}
-        height={viewport.height - 2 * PAD_Y - HEADER}
-      />
+      {!queues && error ? (
+        <div className={styles.missing}>Geen skillqueues</div>
+      ) : (
+        <SkillQueues
+          characters={queues ?? []}
+          now={now}
+          timezone={timezone}
+          width={viewport.width - 2 * PAD_X}
+          height={viewport.height - 2 * PAD_Y - HEADER}
+        />
+      )}
     </div>
   );
 }

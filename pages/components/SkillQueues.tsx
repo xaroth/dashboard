@@ -53,7 +53,7 @@ export function SkillQueues({ characters, now, timezone, width, height }: SkillQ
           {c.skills.slice(0, skills).map((s, i) => (
             <div key={i} className={styles.skill}>
               <span className={styles.skillName}>
-                {s.name} {skillLevel(s.level)}
+                {s.name || `Skill ${s.id}`} {skillLevel(s.level)}
               </span>
               <span>{s.finish ? formatDayTime(s.finish, timezone) : ""}</span>
             </div>
@@ -67,6 +67,7 @@ export function SkillQueues({ characters, now, timezone, width, height }: SkillQ
 const DAY = 24 * 60 * 60 * 1000;
 
 function Ends({ c, now, timezone, short }: { c: EveonlineSkillsCharacter; now: string; timezone: string; short: boolean }) {
+  if (c.error && !c.fetchedAt) return <span className={styles.ends}>fout</span>;
   const failed = c.error ? <span className={styles.error}>fout </span> : null;
   if (c.paused) return <span className={styles.ends}>{failed}gepauzeerd</span>;
   if (!c.ends) return <span className={`${styles.ends} ${styles.alert}`}>{failed}leeg</span>;

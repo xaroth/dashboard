@@ -128,10 +128,17 @@ func (*skills) Update(ctx context.Context) error {
 		out.Characters = append(out.Characters, s)
 	}
 	if len(chars) > 0 && len(errs) == len(chars) {
-		return errors.Join(errs...)
+		err := errors.Join(errs...)
+		// ErrAuth pauses the module until a manual update; only pause when
+		// every character needs to log in again.
+		if !slices.ContainsFunc(errs, func(e error) bool { return !errors.Is(e, module.ErrAuth) }) {
+			return err
+		}
+		return errors.New(err.Error())
 	}
+	// Names are cosmetic: a failed lookup is retried on the next update.
 	if err := name(ctx, c, out.Characters); err != nil {
-		return err
+		module.Logger(ctx).Warn("naming skills", "err", err)
 	}
 	return module.SaveSnapshot(ctx, out)
 }
@@ -193,7 +200,8 @@ func check[T any](resp *request.Response[T]) error {
 	return errors.New(msg)
 }
 
-// name fills in skill names, looking up the ones not stored yet.
+// name fills in skill names, looking up the ones not stored yet. On error
+// the names it could not find stay empty.
 func name(ctx context.Context, c *eveonline.Client, chars []stored) error {
 	q := New(module.Database(ctx))
 	rows, err := q.ListNames(ctx)
@@ -212,26 +220,29 @@ func name(ctx context.Context, c *eveonline.Client, chars []stored) error {
 			}
 		}
 	}
-	if len(unknown) > 0 {
-		// At most 50 skills per queue, so well under ESI's 1000 IDs per request.
-		resp, err := postuniversenames.Request(ctx, c, &postuniversenames.Input{Body: unknown})
-		if err == nil {
-			err = check(resp)
-		}
-		if err != nil {
-			return fmt.Errorf("requesting skill names: %w", err)
-		}
-		for _, n := range resp.Data {
-			if err := q.SaveName(ctx, SaveNameParams{SkillID: n.Id, Name: n.Name}); err != nil {
-				return fmt.Errorf("saving skill name: %w", err)
+	defer func() {
+		for _, ch := range chars {
+			for i := range ch.Data.Queue {
+				ch.Data.Queue[i].Name = names[ch.Data.Queue[i].ID]
 			}
-			names[n.Id] = n.Name
 		}
+	}()
+	if len(unknown) == 0 {
+		return nil
 	}
-	for _, ch := range chars {
-		for i := range ch.Data.Queue {
-			ch.Data.Queue[i].Name = names[ch.Data.Queue[i].ID]
+	// At most 50 skills per queue, so well under ESI's 1000 IDs per request.
+	resp, err := postuniversenames.Request(ctx, c, &postuniversenames.Input{Body: unknown})
+	if err == nil {
+		err = check(resp)
+	}
+	if err != nil {
+		return fmt.Errorf("requesting skill names: %w", err)
+	}
+	for _, n := range resp.Data {
+		if err := q.SaveName(ctx, SaveNameParams{SkillID: n.Id, Name: n.Name}); err != nil {
+			return fmt.Errorf("saving skill name: %w", err)
 		}
+		names[n.Id] = n.Name
 	}
 	return nil
 }

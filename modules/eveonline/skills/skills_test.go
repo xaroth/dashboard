@@ -3,6 +3,7 @@ package skills_test
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,9 +30,12 @@ var scopes = []string{"esi-skills.read_skillqueue.v1", "esi-skills.read_skills.v
 // fakeEVE is EVE SSO and ESI. Login code "<id>:<name>" logs in that
 // character; its refresh token is "refresh-<id>". queues are the
 // skillqueue bodies by character ID; a missing one is a 500. skills are the
-// skills bodies; a missing one is no skills.
+// skills bodies; a missing one is no skills. revoked characters' refreshes
+// are rejected, and namesDown fails name lookups.
 type fakeEVE struct {
 	mu          sync.Mutex
+	revoked     map[string]bool
+	namesDown   bool
 	queues      map[string]string
 	skills      map[string]string
 	nameLookups [][]int64
@@ -47,6 +51,11 @@ func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id, name, _ := strings.Cut(r.PostForm.Get("code"), ":")
 		if rt := r.PostForm.Get("refresh_token"); rt != "" {
 			id, name = strings.TrimPrefix(rt, "refresh-"), "Refreshed"
+			if f.revoked[id] {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, `{"error":"invalid_grant","error_description":"Invalid refresh token."}`)
+				return
+			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  jwt(map[string]any{"sub": "CHARACTER:EVE:" + id, "name": name, "scp": scopes}),
@@ -55,6 +64,10 @@ func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"refresh_token": "refresh-" + id,
 		})
 	case path == "esi.evetech.net/universe/names":
+		if f.namesDown {
+			http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
+			return
+		}
 		var ids []int64
 		b, _ := io.ReadAll(r.Body)
 		json.Unmarshal(b, &ids)
@@ -95,6 +108,12 @@ func (f *fakeEVE) setQueue(id, body string) {
 		return
 	}
 	f.queues[id] = body
+}
+
+func (f *fakeEVE) set(fn func(f *fakeEVE)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
 }
 
 func (f *fakeEVE) lookups() [][]int64 {
@@ -272,6 +291,52 @@ func TestQueueErrors(t *testing.T) {
 		err := set.Update(t.Context(), "eveonline_skills")
 		if err == nil || !strings.Contains(err.Error(), "Alice: requesting skill queue") || !strings.Contains(err.Error(), "Bob: requesting skill queue") {
 			t.Errorf("got Update error %v, want both characters' errors", err)
+		}
+	})
+}
+
+func TestQueueNamesDown(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		now := time.Now()
+		fake := &fakeEVE{namesDown: true, queues: map[string]string{"1": "[" + entry(0, 100, 5, at(now, 0), at(now, time.Hour)) + "]"}}
+		set := load(t, fake)
+		login(t, set, "1:Alice")
+		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
+			t.Fatalf("Update with names down: %v", err)
+		}
+		if got := queue(t, set, nil)[0].Skills; len(got) != 1 || got[0].Name != "" {
+			t.Errorf("got %+v, want the skill without a name", got)
+		}
+		fake.set(func(f *fakeEVE) { f.namesDown = false })
+		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got := queue(t, set, nil)[0].Skills; len(got) != 1 || got[0].Name != "Skill 100" {
+			t.Errorf("got %+v, want the skill named", got)
+		}
+	})
+}
+
+func TestQueueAuth(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEVE{revoked: map[string]bool{"1": true}, queues: map[string]string{}}
+		set := load(t, fake)
+		login(t, set, "1:Alice")
+		login(t, set, "2:Bob")
+		// Past expiry, so Alice's token is refreshed and rejected.
+		time.Sleep(30 * time.Minute)
+
+		// Bob failing otherwise must not pause the module.
+		err := set.Update(t.Context(), "eveonline_skills")
+		if err == nil || errors.Is(err, module.ErrAuth) {
+			t.Errorf("got Update error %v, want one that is not ErrAuth", err)
+		}
+		fake.set(func(f *fakeEVE) { f.revoked["2"] = true })
+		time.Sleep(30 * time.Minute)
+		if err := set.Update(t.Context(), "eveonline_skills"); !errors.Is(err, module.ErrAuth) {
+			t.Errorf("got Update error %v, want ErrAuth: every character must log in again", err)
 		}
 	})
 }
