@@ -32,9 +32,9 @@ type config struct{}
 
 type status struct{}
 
-// Module is the eve_status registration.
+// Module is the eveonline_status registration.
 var Module = module.Define[status, config](
-	"eve_status",
+	"eveonline_status",
 	func() *config { return &config{} },
 	// ESI caches /status for 30 s; screens refresh far less often.
 	module.WithUpdateInterval(5*time.Minute),

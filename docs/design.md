@@ -60,7 +60,7 @@ device         -> render
 
 | Module | Source | Data |
 | --- | --- | --- |
-| `eve_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state |
+| `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
 Planned modules are listed in [plan.md](plan.md#modules).
@@ -222,7 +222,7 @@ func (*status) Update(ctx context.Context) error {
 
 #### Server status
 
-`eve_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that times out after 15 s, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Query `eve_status.server` takes no params and returns the stored status.
+`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that times out after 15 s, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Query `eveonline_status.server` takes no params and returns the stored status.
 
 ## Storage
 

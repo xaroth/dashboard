@@ -25,7 +25,7 @@ func load(tb testing.TB, handler http.Handler) *module.Set {
 	}
 	tb.Cleanup(func() { db.Close() })
 	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte("eve: {contact: [mailto:me@example.com]}"), &configs); err != nil {
+	if err := yaml.Unmarshal([]byte("eveonline: {contact: [mailto:me@example.com]}"), &configs); err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
@@ -88,7 +88,7 @@ func TestServer(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
 				set := load(t, testCase.handler)
-				err := set.Update(t.Context(), "eve_status")
+				err := set.Update(t.Context(), "eveonline_status")
 				if testCase.wantErr != "" {
 					if err == nil || err.Error() != testCase.wantErr {
 						t.Errorf("got Update error %v, want %q", err, testCase.wantErr)
@@ -98,7 +98,7 @@ func TestServer(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Update: %v", err)
 				}
-				res := set.Resolve(t.Context(), "eve_status", "server", nil)
+				res := set.Resolve(t.Context(), "eveonline_status", "server", nil)
 				if res.Error != "" || res.Stale {
 					t.Errorf("got error %q, stale %v, want fresh data", res.Error, res.Stale)
 				}
@@ -113,7 +113,7 @@ func TestServer(t *testing.T) {
 func TestServerBeforeFirstUpdate(t *testing.T) {
 	t.Parallel()
 	set := load(t, http.NotFoundHandler())
-	res := set.Resolve(t.Context(), "eve_status", "server", nil)
+	res := set.Resolve(t.Context(), "eveonline_status", "server", nil)
 	if res.Value.(*status.Status) != nil || !res.Stale {
 		t.Errorf("got %v, stale %v, want no status, stale", res.Value, res.Stale)
 	}
