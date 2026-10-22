@@ -83,7 +83,7 @@ Rendering: TSX pages rendered by Takumi (Rust, no browser) through `takumi-js` i
 | Weather | Open-Meteo or KNMI API | Free, no key (Open-Meteo) |
 | Calendar | Google Workspace shared calendar | See below |
 | Power usage | Smartstuff P1 dongle, DSMR-API firmware, local HTTP | No adapter needed, see below |
-| Solar production | Hoymiles DTU, Modbus TCP (local) or S-Miles cloud | 16 panels, micro inverters; see below |
+| Solar production | Hoymiles DTU, Modbus TCP (local) or S-Miles cloud | 17 panels, micro inverters; see below |
 | Car status | Hyundai Bluelink EU cloud API | Kona 2024; needs adapter, see below |
 
 Weather and calendar fit LaraPaper polling plugins directly. Car and power may need a small adapter on the server that exposes clean JSON.
@@ -126,7 +126,7 @@ Give the dongle a fixed IP or DHCP reservation.
 
 ## Solar: Hoymiles micro inverters
 
-16 panels on 3x HMT-2250-6T (6 inputs each), DTU-Pro-S firmware V00.02.22, uploads to S-Miles Cloud. This matches the evcc-supported combination (HMT/HMS + DTU-Pro-S over Modbus TCP), so option 1 applies. The P1 dongle cannot read Hoymiles (its solar link supports SolarEdge, Enphase, SMA only), so the P1 only sees net import/export. Production must come from the DTU.
+17 panels on 3x HMT-2250-6T (6 inputs each, inputs paired per MPPT), DTU-Pro-S firmware V00.07.04, uploads to S-Miles Cloud. This matches the evcc-supported combination (HMT/HMS + DTU-Pro-S over Modbus TCP), so option 1 applies. The P1 dongle cannot read Hoymiles (its solar link supports SolarEdge, Enphase, SMA only), so the P1 only sees net import/export. Production must come from the DTU.
 
 Options, in order of preference:
 
@@ -143,15 +143,17 @@ DTU at `192.168.5.233`, wired Ethernet. Read-only test script: `tools/dtu_read.p
 
 Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per inverter port: 20 holding regs at `0x1000 + i*40`; serial (6 B), port, PV V/A, grid V/Hz, PV W, today Wh, total Wh, temp, status, alarm, link. Plant totals are sums over linked ports. Some DTUs send a wrong byte-count in responses; `hoymiles-modbus` patches it.
 
-### Modbus status (2026-10-15)
+### Modbus status (2026-10-22)
 
-TCP 502 accepts connections, but FC03 reads get no response on any unit ID tried. Same client works against the P1 dongle's Modbus server, so the client and network path are fine; the DTU's Modbus service is not answering. TCP 80 and 10081 closed.
+Modbus TCP answers on firmware V00.07.04: FC03 reads on unit ID 1 return the DTU serial and all inverter ports. On V00.02.22 every read timed out.
 
-Likely causes, most likely first:
+Inverters and inputs in use (17 of 18):
 
-1. **Firmware V00.02.22**: Photovoltaikforum (Feb 2024) reports exactly this on DTU-Pro-S V00.02.22: every Modbus TCP query times out. V00.02.23 reported the same (ioBroker, 2024). Hoymiles support reflashed affected units to V00.02.19, which restored Modbus. DTU-Pro firmware has since moved to V00.07.x (V00.07.04 is the minimum for `ha-hoymiles-dtupro`); whether a V00.07 build exists for the DTU-Pro-S is unconfirmed. Updates are offered through S-Miles; rollback only via Hoymiles support.
-2. **RS-485 port config**: in the S-Miles Installer app, Toolkit > DTU Information > RS-485 Port Config. "Export control" blocks Modbus TCP; "Remote control" enables it. Note the Modbus address shown there.
-3. **Address mismatch**: ruled out; a sweep of unit IDs 0-255 got no response on any.
+| Inverter | Inputs in use |
+| --- | --- |
+| `138292184456` | p1-p6 |
+| `138292184687` | p2-p6 (p1 unused; reports the shared MPPT voltage at 0 A) |
+| `138292184815` | p1-p6 |
 
 ### DTU firmware history
 
@@ -167,18 +169,13 @@ Hoymiles publishes no changelog. Installers update remotely: S-Miles Cloud web p
 | V00.07.02 | Jan 2026 | No visible change; DTU crashes 2-4x/day under frequent Modbus polling (support: poll less often). |
 | V00.07.04 | 2026 | Minimum for `ha-hoymiles-dtupro`. |
 
-Our DTU runs V00.02.22, from January 2024. Polling no more than every 60 s is advisable on any version.
+Our DTU runs V00.07.04. Polling no more than every 60 s is advisable on any version.
 
-No installer access (plant registered by the installer). Workarounds:
-
-1. **S-Miles Cloud with the owner account** (preferred). Reverse-engineered API (`/iam/pub/3/auth/login`, v3 login); reference implementation: `homeassistant-hoymiles-cloud` (Python). Gives PV power, today/total energy, per-channel PV. Cloud lags the DTU upload interval, which is fine for screens refreshing every 15-30 min. Risk: unofficial, may break.
-2. **Installer** changes RS-485 port config to Remote control and updates firmware, or transfers installer rights.
-3. **Hoymiles support** as owner: report Modbus TCP timeouts on DTU-Pro-S V00.02.22, ask for a working firmware (they have reflashed units remotely before).
-4. **DIY account** in the S-Miles Installer app. Hoymiles FAQ: DIY homeowners may register in the Installer app (beta; NL supported). A DIY account only manages plants it owns; the DTU is bound to the installer's plant. Plant transfers between accounts go through Hoymiles technical support. Route: register DIY account, try Toolkit local connection at the DTU; if refused, ask support to transfer the plant to the DIY account. Gives control over RS-485 config and firmware updates; the installer loses access, which may matter for warranty service.
+No installer access (plant registered by the installer); firmware updates go through the installer or Hoymiles support.
 
 OpenDTU is a weak fallback: drops S-Miles, reported gaps for HMT 3-phase data, and Hoymiles' Aug 2026 inverter security firmware blocks OpenDTU/AhoyDTU on updated inverters.
 
-Plan: build against S-Miles Cloud behind the same adapter interface as Modbus; switch to Modbus when it answers.
+Plan: build against Modbus. S-Miles Cloud (owner account, reverse-engineered API, reference `homeassistant-hoymiles-cloud`) is the fallback behind the same adapter interface.
 
 ## Car: Hyundai Kona Electric 2024 (Bluelink EU)
 
