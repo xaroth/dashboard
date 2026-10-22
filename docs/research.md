@@ -141,7 +141,7 @@ Consumption = P1 import - P1 export + solar production; needed for a self-consum
 
 DTU at `192.168.5.233`, wired Ethernet. Read-only test script: `tools/dtu_read.py <host>`.
 
-Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per inverter port: 20 holding regs at `0x1000 + i*40`; serial (6 B), port, PV V/A, grid V/Hz, PV W, today Wh, total Wh, temp, status, alarm, link. Plant totals are sums over linked ports. Some DTUs send a wrong byte-count in responses; `hoymiles-modbus` patches it.
+Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per inverter port: 20 holding regs at `0x1000 + i*40`; serial (6 B), port, PV V/A, grid V/Hz, PV W, today Wh, total Wh, temp, status, alarm, link. Plant totals are sums over all ports: `link` drops to 0 intermittently (seen at dusk) while the port's counters keep updating. Some DTUs send a wrong byte-count in responses; `hoymiles-modbus` patches it.
 
 ### Modbus status (2026-10-22)
 
