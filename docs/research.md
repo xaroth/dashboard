@@ -145,7 +145,7 @@ Register map (from `hoymiles-modbus`): DTU serial at 0x2000 (3 regs). Per invert
 
 ### Modbus status (2026-10-22)
 
-Modbus TCP answers on firmware V00.07.04: FC03 reads on unit ID 1 return the DTU serial and all inverter ports. On V00.02.22 every read timed out.
+Modbus TCP answers on firmware V00.07.04: FC03 reads on unit ID 1 return the DTU serial and all inverter ports.
 
 Inverters and inputs in use (17 of 18):
 
@@ -220,7 +220,7 @@ Risks: EU auth breaks periodically (Oct 2026 `kia_uvo` issue reports fresh Hyund
 
 ## Open questions
 
-1. DTU Modbus: via installer or Hoymiles support (see Solar workarounds).
+1. Which inverter serves which roof section (north-west roof, south-east roof, extension, dakkapels)? A full-day per-port power curve separates them.
 2. iCal address of the shared calendar (likely available).
 3. Does the Pleos API return data for the Kona Electric 2024?
 4. Content, layout and placement per screen.
