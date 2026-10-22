@@ -7,7 +7,7 @@ Specification of the parts of the service that are designed but not built. The b
 | Module | Source | Data |
 | --- | --- | --- |
 | `p1` | Smartstuff P1 dongle, local HTTP | state + series (import/export power, energy, gas) |
-| `solar` | Hoymiles: S-Miles Cloud, or DTU Modbus once the DTU answers | state + series (production per inverter, alarms) |
+| `solar` | Hoymiles: DTU Modbus TCP, S-Miles Cloud as fallback | state + series (production per inverter, alarms) |
 | `calendar` | Google Calendar secret iCal URL | snapshot (upcoming events) |
 
 Further candidates: Plex recently added, waste collection, public transport.

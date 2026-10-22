@@ -34,6 +34,6 @@ for i in range(24):
     temp, status, alarm, alarm_cnt = struct.unpack('>hHHH', d[24:32])
     link = d[32]
     print(f'{serial} p{port} {pv_v/10:6.1f}V {pv_i/100:5.2f}A {pv_p/10:6.1f}W today={today}Wh total={total/1000:.1f}kWh grid={g_v/10}V {g_f/100}Hz temp={temp/10}C status={status} alarm={alarm} link={link}')
-    if link:
-        tot_p += pv_p / 10; tot_today += today
+    # link drops intermittently while counters keep updating
+    tot_p += pv_p / 10; tot_today += today
 print(f'plant: {tot_p:.1f} W, today {tot_today} Wh')
