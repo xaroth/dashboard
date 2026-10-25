@@ -1,4 +1,5 @@
 import { LineChart } from "../../components/LineChart";
+import { Missing, PAD_X, PageFrame, Updated } from "../../components/PageFrame";
 import { formatDayShort, formatMillimeters, formatTemperature, formatTime } from "../../lib/format";
 import { query, type PageProps } from "../../lib/page";
 import { weatherLabel, windDirection } from "../../lib/weather";
@@ -11,28 +12,22 @@ export const data = {
 type Data = typeof data;
 
 export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
-  const { value: f, fetchedAt, stale, error } = data.weather;
+  const { value: f, error } = data.weather;
   if (!f) {
     return (
-      <div className={styles.screen}>
-        <div className={styles.missing}>Geen weerbericht{error ? `: ${error}` : ""}</div>
-      </div>
+      <PageFrame>
+        <Missing what="weerbericht" error={error} />
+      </PageFrame>
     );
   }
-  const chartWidth = viewport.width - 64;
+  const chartWidth = viewport.width - 2 * PAD_X;
   // Everything but the chart takes about 390 px; the chart fills the rest.
   const chartHeight = Math.max(80, viewport.height - 390);
   // Daily dates are midnights where the forecast is, not where the screen is.
   const placeZone = f.location.timezone;
   const hourLabels = f.hourly.filter((_, i) => i % 6 === 0);
   return (
-    <div className={styles.screen}>
-      <div className={styles.header}>
-        <span>{f.location.name}</span>
-        <span className={stale ? styles.stale : undefined}>
-          {stale ? "Verouderd, " : ""}bijgewerkt {fetchedAt ? formatTime(fetchedAt, timezone) : "-"}
-        </span>
-      </div>
+    <PageFrame title={f.location.name} status={<Updated result={data.weather} timezone={timezone} />} gap={12}>
       <div className={styles.now}>
         <div className={styles.temperature}>{formatTemperature(f.current.temperature)}</div>
         <div className={styles.details}>
@@ -73,6 +68,6 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
           </div>
         ))}
       </div>
-    </div>
+    </PageFrame>
   );
 }

@@ -1,27 +1,26 @@
-import { runs, type SeriesPoint } from "../lib/energy";
+import type { SeriesPoint } from "../generated/queries";
+import { linear, runs, svgPoints, yScale } from "../lib/chart";
+import type { ChartDomain } from "../lib/energy";
 
 export type EnergyChartProps = {
   /** Solar power in W, drawn as a gray area. */
   solar: SeriesPoint[];
   /** Net flow in kW, + taken, - returned, drawn as a line. */
   flow: SeriesPoint[];
-  /** Time range the x axis spans and the bucket size, in ms; values sit at bucket centers. */
-  start: number;
-  end: number;
-  step: number;
-  /** Value range in W. */
-  min: number;
-  max: number;
+  /** Time range in ms with the bucket size, values sit at bucket centers; value range in W. */
+  domain: ChartDomain;
   width: number;
   height: number;
 };
 
 /** Solar production and net flow over time, as inline SVG with a zero line. */
-export function EnergyChart({ solar, flow, start, end, step, min, max, width, height }: EnergyChartProps) {
+export function EnergyChart({ solar, flow, domain, width, height }: EnergyChartProps) {
+  const { start, end, step, min, max } = domain;
   const stroke = 3;
-  const x = (t: number) => ((t + step / 2 - start) / (end - start)) * width;
-  const y = (w: number) => stroke / 2 + (1 - (w - min) / (max - min)) * (height - stroke);
-  const xy = (t: number, w: number) => `${x(t).toFixed(1)},${y(w).toFixed(1)}`;
+  const toX = linear(start, end, 0, width);
+  const x = (t: number) => toX(t + step / 2);
+  const y = yScale(min, max, height, stroke);
+  const xy = (t: number, w: number): [number, number] => [x(t), y(w)];
   const zero = y(0);
   const flowW = flow.map((p) => ({ t: p.t, v: p.v == null ? null : p.v * 1000 }));
   return (
@@ -33,7 +32,7 @@ export function EnergyChart({ solar, flow, start, end, step, min, max, width, he
           <polygon
             key={`s${i}`}
             // Edges half a step out, so a single bucket still has width.
-            points={[xy(first.t - step / 2, 0), xy(first.t - step / 2, first.v), ...r.map((p) => xy(p.t, p.v)), xy(last.t + step / 2, last.v), xy(last.t + step / 2, 0)].join(" ")}
+            points={svgPoints([xy(first.t - step / 2, 0), xy(first.t - step / 2, first.v), ...r.map((p) => xy(p.t, p.v)), xy(last.t + step / 2, last.v), xy(last.t + step / 2, 0)])}
             fill="#aaa"
           />
         );
@@ -45,7 +44,7 @@ export function EnergyChart({ solar, flow, start, end, step, min, max, width, he
         ) : (
           <polyline
             key={`f${i}`}
-            points={r.map((p) => xy(p.t, p.v)).join(" ")}
+            points={svgPoints(r.map((p) => xy(p.t, p.v)))}
             fill="none"
             stroke="#000"
             strokeWidth={stroke}

@@ -1,42 +1,60 @@
-export function formatDateTime(iso: string, timezone: string): string {
-  return new Intl.DateTimeFormat("nl-NL", {
-    timeZone: timezone,
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(iso));
+const numbers = [0, 1, 2].map(
+  (digits) => new Intl.NumberFormat("nl-NL", { minimumFractionDigits: digits, maximumFractionDigits: digits }),
+);
+
+/** n rounded to digits; -0.004 to 2 digits is 0, not -0. */
+export function round(n: number, digits: number): number {
+  return Number(n.toFixed(digits)) || 0;
 }
 
-const number1 = new Intl.NumberFormat("nl-NL", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-const number0 = new Intl.NumberFormat("nl-NL", { maximumFractionDigits: 0 });
+/** 1.234,5 with digits decimals, rounded first so it never shows -0. */
+export function formatNumber(n: number, digits: 0 | 1 | 2): string {
+  return numbers[digits]!.format(round(n, digits));
+}
+
+// Intl.DateTimeFormat is slow to construct, so each format is built once per timezone.
+function zoned(options: Intl.DateTimeFormatOptions): (timezone: string) => Intl.DateTimeFormat {
+  const byZone = new Map<string, Intl.DateTimeFormat>();
+  return (timeZone) => {
+    let f = byZone.get(timeZone);
+    if (!f) byZone.set(timeZone, (f = new Intl.DateTimeFormat("nl-NL", { ...options, timeZone })));
+    return f;
+  };
+}
+
+const dateTime = zoned({ weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+const time = zoned({ hour: "2-digit", minute: "2-digit" });
+const dayShort = zoned({ weekday: "short", day: "numeric" });
+const clock = zoned({ hour: "numeric", minute: "numeric", hourCycle: "h23" });
+
+/** vrijdag 16 oktober om 07:30 */
+export function formatDateTime(iso: string, timezone: string): string {
+  return dateTime(timezone).format(new Date(iso));
+}
 
 /** 16,6° */
 export function formatTemperature(celsius: number, digits: 0 | 1 = 1): string {
-  // Round first, so -0.04 is "0,0°" rather than "-0,0°".
-  const rounded = Number(celsius.toFixed(digits)) || 0;
-  return `${(digits === 1 ? number1 : number0).format(rounded)}°`;
+  return `${formatNumber(celsius, digits)}°`;
 }
 
 /** 07:30 */
 export function formatTime(iso: string, timezone: string): string {
-  return new Intl.DateTimeFormat("nl-NL", { timeZone: timezone, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+  return time(timezone).format(new Date(iso));
 }
 
 /** vr 16 */
 export function formatDayShort(iso: string, timezone: string): string {
-  return new Intl.DateTimeFormat("nl-NL", { timeZone: timezone, weekday: "short", day: "numeric" }).format(new Date(iso));
+  return dayShort(timezone).format(new Date(iso));
 }
 
 /** 2,4 mm */
 export function formatMillimeters(mm: number): string {
-  return `${number1.format(mm)} mm`;
+  return `${formatNumber(mm, 1)} mm`;
 }
 
 /** 26.017 */
 export function formatCount(n: number): string {
-  return number0.format(n);
+  return formatNumber(n, 0);
 }
 
 /** 2 d 3 u, 5 u 12 m, 12 m; rounded down to the minute. */
@@ -53,4 +71,15 @@ export function formatDuration(ms: number): string {
 /** vr 16 07:30 */
 export function formatDayTime(iso: string, timezone: string): string {
   return `${formatDayShort(iso, timezone)} ${formatTime(iso, timezone)}`;
+}
+
+/** Local wall-clock hour and minute of t, in ms since the epoch. */
+export function localClock(t: number, timezone: string): { hour: number; minute: number } {
+  let hour = 0;
+  let minute = 0;
+  for (const p of clock(timezone).formatToParts(t)) {
+    if (p.type === "hour") hour = Number(p.value);
+    else if (p.type === "minute") minute = Number(p.value);
+  }
+  return { hour, minute };
 }
