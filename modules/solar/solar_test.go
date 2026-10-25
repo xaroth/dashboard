@@ -168,6 +168,7 @@ func TestConfigErrors(t *testing.T) {
 		{`, unused: ["138292184687"]`, `unused: want serial:port, got "138292184687"`},
 		{`, port: 0`, "port must be 1 to 65535, got 0"},
 		{`, night_interval: 10s`, "night_interval must be at least 1m, got 10s"},
+		{`, night_interval: 30m`, "night_interval must be under 30m0s, got 30m0s"},
 	} {
 		set := load(t, solar.NewFakeDTU(t), testCase.extra)
 		err := set.Update(t.Context(), "solar")

@@ -28,6 +28,7 @@ const (
 	dtuSerial = 0x2000
 	// Bounds the whole read: the DTU hangs at times.
 	readTimeout = 30 * time.Second
+	staleAfter  = 30 * time.Minute
 )
 
 type config struct {
@@ -60,7 +61,7 @@ var Module = module.Define[solar, config](
 	defaultConfig,
 	// Frequent polling is reported to crash DTUs; once a minute is the limit.
 	module.WithUpdateInterval(time.Minute),
-	module.WithStaleAfter(30*time.Minute),
+	module.WithStaleAfter(staleAfter),
 	module.WithQuery("production", (*solar).production),
 )
 
@@ -70,6 +71,9 @@ func (m *solar) Initialize(_ context.Context, cfg *config) error {
 	}
 	if cfg.NightInterval < time.Minute {
 		return fmt.Errorf("night_interval must be at least 1m, got %s", cfg.NightInterval)
+	}
+	if cfg.NightInterval >= staleAfter {
+		return fmt.Errorf("night_interval must be under %s, got %s", staleAfter, cfg.NightInterval)
 	}
 	m.unused = make(map[input]bool, len(cfg.Unused))
 	for _, u := range cfg.Unused {

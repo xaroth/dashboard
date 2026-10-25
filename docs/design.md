@@ -114,7 +114,7 @@ Reads Hoymiles micro inverters through the DTU's Modbus TCP interface (DTU-Pro, 
 | `host` | empty | The DTU's address. Empty disables the module. |
 | `port` | `502` | Modbus TCP port |
 | `unused` | empty | Inputs without a panel, as `serial:port`, e.g. `138292184687:1`. Left out of the snapshot and totals. |
-| `night_interval` | `10m` | Update interval while no input produces; at least 1 minute |
+| `night_interval` | `10m` | Update interval while no input produces; at least 1 minute, under 30 minutes |
 
 `Update` runs every minute (more frequent polling is reported to crash DTUs) and every `night_interval` while every input reads 0 W; data is stale after 30 minutes. Each update opens one connection, reads the DTU serial (FC03 at `0x2000`) and then each input's 20 registers at `0x1000 + i*40` (unit ID 1) until an input with an all-zero serial, at most 99, and closes it. The whole read has a 30 s timeout: the DTU stops answering at times. An update reading no inputs fails.
 
