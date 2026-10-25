@@ -25,14 +25,17 @@ const ssoConfig = `eveonline_esi: {contact: [x], client_id: app, client_secret: 
 // fakeEVE is EVE SSO and ESI. Code "skills" logs in Alice with the skills
 // scope, "all" with both scopes. Each token request issues access-<n> and
 // refresh-<n>; a refresh must present the latest refresh token.
+// duringRefresh runs once, after a refresh is issued and before it is
+// answered.
 type fakeEVE struct {
-	mu       sync.Mutex
-	issued   int
-	refresh  string
-	revoked  bool
-	forms    []url.Values
-	bearers  []string
-	badBasic bool
+	mu            sync.Mutex
+	issued        int
+	refresh       string
+	revoked       bool
+	forms         []url.Values
+	bearers       []string
+	badBasic      bool
+	duringRefresh func()
 }
 
 func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,12 +63,19 @@ func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.issued++
 		f.refresh = fmt.Sprintf("refresh-%d", f.issued)
-		json.NewEncoder(w).Encode(map[string]any{
+		body := map[string]any{
 			"access_token":  jwt(map[string]any{"sub": "CHARACTER:EVE:90000001", "name": "Alice", "scp": scopes}, f.issued),
 			"expires_in":    1199,
 			"token_type":    "Bearer",
 			"refresh_token": f.refresh,
-		})
+		}
+		if hook := f.duringRefresh; hook != nil && r.PostForm.Get("grant_type") == "refresh_token" {
+			f.duringRefresh = nil
+			f.mu.Unlock()
+			hook()
+			f.mu.Lock()
+		}
+		json.NewEncoder(w).Encode(body)
 	case "esi.evetech.net/status":
 		f.bearers = append(f.bearers, r.Header.Get("Authorization"))
 		fmt.Fprint(w, `{}`)
@@ -223,6 +233,36 @@ func TestRefreshRejected(t *testing.T) {
 		}
 		if err := set.Update(t.Context(), "probe"); err != nil {
 			t.Errorf("Update after logging in again: %v", err)
+		}
+	})
+}
+
+func TestLoginDuringRefresh(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEVE{}
+		set := load(t, ssoConfig, fake, probeRegistration("probe", skillsScope))
+		login(t, set, "skills")
+		time.Sleep(20 * time.Minute)
+		fake.mu.Lock()
+		fake.duringRefresh = func() { login(t, set, "all") }
+		fake.mu.Unlock()
+
+		// The refresh gets access-2 from refresh-1; the login saved access-3
+		// meanwhile, which must win.
+		if err := set.Update(t.Context(), "probe"); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		time.Sleep(20 * time.Minute)
+		if err := set.Update(t.Context(), "probe"); err != nil {
+			t.Fatalf("Update after the login's token expired: %v", err)
+		}
+		if diff := cmp.Diff([]string{"sig-3", "sig-4"}, fake.accessTokens()); diff != "" {
+			t.Errorf("access tokens sent to ESI (-want +got):\n%s", diff)
+		}
+		forms := fake.tokenForms()
+		if got := forms[len(forms)-1].Get("refresh_token"); got != "refresh-3" {
+			t.Errorf("got last refresh with %q, want the login's refresh-3", got)
 		}
 	})
 }

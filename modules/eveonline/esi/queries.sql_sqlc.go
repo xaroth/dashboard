@@ -111,25 +111,31 @@ func (q *Queries) SaveLogin(ctx context.Context, arg SaveLoginParams) error {
 	return err
 }
 
-const saveRefresh = `-- name: SaveRefresh :exec
+const saveRefresh = `-- name: SaveRefresh :execrows
 UPDATE eveonline_esi_characters
-SET refresh_token = ?, access_token = ?, expires_at = ?, auth_error = NULL
-WHERE character_id = ?
+SET refresh_token = ?1, access_token = ?2,
+    expires_at = ?3, auth_error = NULL
+WHERE character_id = ?4 AND refresh_token = ?5
 `
 
 type SaveRefreshParams struct {
-	RefreshToken string    `json:"refreshToken"`
-	AccessToken  string    `json:"accessToken"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	CharacterID  int64     `json:"characterId"`
+	RefreshToken    string    `json:"refreshToken"`
+	AccessToken     string    `json:"accessToken"`
+	ExpiresAt       time.Time `json:"expiresAt"`
+	CharacterID     int64     `json:"characterId"`
+	OldRefreshToken string    `json:"oldRefreshToken"`
 }
 
-func (q *Queries) SaveRefresh(ctx context.Context, arg SaveRefreshParams) error {
-	_, err := q.db.ExecContext(ctx, saveRefresh,
+func (q *Queries) SaveRefresh(ctx context.Context, arg SaveRefreshParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, saveRefresh,
 		arg.RefreshToken,
 		arg.AccessToken,
 		arg.ExpiresAt,
 		arg.CharacterID,
+		arg.OldRefreshToken,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

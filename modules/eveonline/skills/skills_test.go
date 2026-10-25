@@ -31,11 +31,12 @@ var scopes = []string{"esi-skills.read_skillqueue.v1", "esi-skills.read_skills.v
 // character; its refresh token is "refresh-<id>". queues are the
 // skillqueue bodies by character ID; a missing one is a 500. skills are the
 // skills bodies; a missing one is no skills. revoked characters' refreshes
-// are rejected.
+// are rejected. denied characters' skillqueue requests get that status.
 type fakeEVE struct {
 	mu      sync.Mutex
 	sde     *sde.Fake
 	revoked map[string]bool
+	denied  map[string]int
 	queues  map[string]string
 	skills  map[string]string
 }
@@ -70,6 +71,10 @@ func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := strings.Split(r.URL.Path, "/")[2]
 		if r.Header.Get("Authorization") == "" {
 			http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
+			return
+		}
+		if code := f.denied[id]; code != 0 {
+			http.Error(w, `{"error":"token is not valid"}`, code)
 			return
 		}
 		body, ok := f.queues[id]
@@ -332,6 +337,30 @@ func TestQueueAuth(t *testing.T) {
 			t.Errorf("got Update error %v, want ErrAuth: every character must log in again", err)
 		}
 	})
+}
+
+func TestQueueDenied(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+		code int
+	}{
+		{"revoked", http.StatusUnauthorized},
+		{"scope removed", http.StatusForbidden},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				fake := &fakeEVE{denied: map[string]int{"1": testCase.code}, queues: map[string]string{}}
+				set := load(t, fake)
+				login(t, set, "1:Alice")
+				if err := set.Update(t.Context(), "eveonline_skills"); !errors.Is(err, module.ErrAuth) {
+					t.Errorf("got Update error %v, want ErrAuth", err)
+				}
+			})
+		})
+	}
 }
 
 func TestQueueParams(t *testing.T) {
