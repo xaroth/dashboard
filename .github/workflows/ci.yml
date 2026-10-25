@@ -15,6 +15,8 @@ jobs:
           go-version-file: go.mod
       # For the renderer integration test in render/.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: go vet ./...
       - name: generated page types up to date
@@ -26,6 +28,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bunx tsc --noEmit
@@ -43,4 +47,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: image Bun matches .bun-version
+        run: grep -qx "ARG BUN_VERSION=$(cat .bun-version)" Dockerfile
       - run: docker build -t dashboard:ci .
