@@ -2,7 +2,6 @@ package esi_test
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,80 +19,31 @@ import (
 	"github.com/xaroth/dashboard/modules/eveonline/esi"
 )
 
-const ssoConfig = `eveonline_esi: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline_esi/callback"}`
-
-// fakeEVE is EVE SSO and ESI. Code "skills" logs in Alice with the skills
-// scope, "all" with both scopes. Each token request issues access-<n> and
-// refresh-<n>; a refresh must present the latest refresh token.
-// duringRefresh runs once, after a refresh is issued and before it is
-// answered.
+// fakeEVE is EVE SSO and ESI's /status. Code "skills" logs in Alice with
+// the skills scope, "all" with both scopes.
 type fakeEVE struct {
-	mu            sync.Mutex
-	issued        int
-	refresh       string
-	revoked       bool
-	forms         []url.Values
-	bearers       []string
-	badBasic      bool
-	duringRefresh func()
+	*esi.FakeSSO
+	mu      sync.Mutex
+	bearers []string
+}
+
+func newFake(tb testing.TB) *fakeEVE {
+	tb.Helper()
+	alice := esi.Character{ID: 90000001, Name: "Alice"}
+	return &fakeEVE{FakeSSO: esi.NewFake(tb,
+		esi.ExpectCharacter("skills", alice, skillsScope),
+		esi.ExpectCharacter("all", alice, skillsScope, walletScope))}
 }
 
 func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	switch r.URL.Host + r.URL.Path {
-	case "login.eveonline.com/v2/oauth/token":
-		if id, secret, ok := r.BasicAuth(); !ok || id != "app" || secret != "shh" {
-			f.badBasic = true
-		}
-		r.ParseForm()
-		f.forms = append(f.forms, r.PostForm)
-		var scopes []string
-		switch {
-		case r.PostForm.Get("code") == "skills":
-			scopes = []string{skillsScope}
-		case r.PostForm.Get("code") == "all":
-			scopes = []string{skillsScope, walletScope}
-		case r.PostForm.Get("grant_type") == "refresh_token" && !f.revoked && r.PostForm.Get("refresh_token") == f.refresh:
-			scopes = []string{skillsScope}
-		default:
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `{"error":"invalid_grant","error_description":"Invalid refresh token."}`)
-			return
-		}
-		f.issued++
-		f.refresh = fmt.Sprintf("refresh-%d", f.issued)
-		body := map[string]any{
-			"access_token":  jwt(map[string]any{"sub": "CHARACTER:EVE:90000001", "name": "Alice", "scp": scopes}, f.issued),
-			"expires_in":    1199,
-			"token_type":    "Bearer",
-			"refresh_token": f.refresh,
-		}
-		if hook := f.duringRefresh; hook != nil && r.PostForm.Get("grant_type") == "refresh_token" {
-			f.duringRefresh = nil
-			f.mu.Unlock()
-			hook()
-			f.mu.Lock()
-		}
-		json.NewEncoder(w).Encode(body)
-	case "esi.evetech.net/status":
-		f.bearers = append(f.bearers, r.Header.Get("Authorization"))
-		fmt.Fprint(w, `{}`)
-	default:
-		http.NotFound(w, r)
+	if r.URL.Host+r.URL.Path != "esi.evetech.net/status" {
+		f.FakeSSO.ServeHTTP(w, r)
+		return
 	}
-}
-
-func jwt(claims map[string]any, n int) string {
-	b, _ := json.Marshal(claims)
-	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc(b) + "." + enc(fmt.Appendf(nil, "sig-%d", n))
-}
-
-func (f *fakeEVE) tokenForms() []url.Values {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.forms
+	f.bearers = append(f.bearers, r.Header.Get("Authorization"))
+	fmt.Fprint(w, `{}`)
 }
 
 // accessTokens returns the tokens ESI requests carried.
@@ -139,7 +89,7 @@ func login(tb testing.TB, set *module.Set, code string) *http.ServeMux {
 
 func TestLoginRedirect(t *testing.T) {
 	t.Parallel()
-	set := load(t, ssoConfig, &fakeEVE{}, probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope, skillsScope))
+	set := load(t, esi.FakeSSOConfig, newFake(t), probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope, skillsScope))
 	mux := http.NewServeMux()
 	set.RegisterAdmin(mux)
 	rec := get(t, mux, "/eveonline_esi/login")
@@ -169,8 +119,8 @@ func TestLoginRedirect(t *testing.T) {
 func TestLoginAndRefresh(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEVE{}
-		set := load(t, ssoConfig, fake, probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope))
+		fake := newFake(t)
+		set := load(t, esi.FakeSSOConfig, fake, probeRegistration("probe", skillsScope), probeRegistration("wallet", walletScope))
 		mux := login(t, set, "skills")
 
 		if res := set.Resolve(t.Context(), "probe", "characters", nil); !cmp.Equal(res.Value, []esi.Character{{ID: 90000001, Name: "Alice"}}) {
@@ -199,11 +149,8 @@ func TestLoginAndRefresh(t *testing.T) {
 			{"grant_type": {"refresh_token"}, "refresh_token": {"refresh-1"}},
 			{"grant_type": {"refresh_token"}, "refresh_token": {"refresh-2"}},
 		}
-		if diff := cmp.Diff(wantForms, fake.tokenForms()); diff != "" {
+		if diff := cmp.Diff(wantForms, fake.Forms()); diff != "" {
 			t.Errorf("token requests (-want +got):\n%s", diff)
-		}
-		if fake.badBasic {
-			t.Errorf("a token request lacked the client credentials")
 		}
 	})
 }
@@ -211,12 +158,10 @@ func TestLoginAndRefresh(t *testing.T) {
 func TestRefreshRejected(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEVE{}
-		set := load(t, ssoConfig, fake, probeRegistration("probe", skillsScope))
+		fake := newFake(t)
+		set := load(t, esi.FakeSSOConfig, fake, probeRegistration("probe", skillsScope))
 		mux := login(t, set, "skills")
-		fake.mu.Lock()
-		fake.revoked = true
-		fake.mu.Unlock()
+		fake.Set(t, esi.ExpectToken_Revoked(90000001))
 		time.Sleep(20 * time.Minute)
 
 		err := set.Update(t.Context(), "probe")
@@ -240,13 +185,11 @@ func TestRefreshRejected(t *testing.T) {
 func TestLoginDuringRefresh(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEVE{}
-		set := load(t, ssoConfig, fake, probeRegistration("probe", skillsScope))
+		fake := newFake(t)
+		set := load(t, esi.FakeSSOConfig, fake, probeRegistration("probe", skillsScope))
 		login(t, set, "skills")
 		time.Sleep(20 * time.Minute)
-		fake.mu.Lock()
-		fake.duringRefresh = func() { login(t, set, "all") }
-		fake.mu.Unlock()
+		fake.Set(t, esi.ExpectRefresh_Interleaved(func() { login(t, set, "all") }))
 
 		// The refresh gets access-2 from refresh-1; the login saved access-3
 		// meanwhile, which must win.
@@ -260,7 +203,7 @@ func TestLoginDuringRefresh(t *testing.T) {
 		if diff := cmp.Diff([]string{"sig-3", "sig-4"}, fake.accessTokens()); diff != "" {
 			t.Errorf("access tokens sent to ESI (-want +got):\n%s", diff)
 		}
-		forms := fake.tokenForms()
+		forms := fake.Forms()
 		if got := forms[len(forms)-1].Get("refresh_token"); got != "refresh-3" {
 			t.Errorf("got last refresh with %q, want the login's refresh-3", got)
 		}
@@ -286,7 +229,7 @@ func TestCallbackErrors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
-				set := load(t, ssoConfig, &fakeEVE{})
+				set := load(t, esi.FakeSSOConfig, newFake(t))
 				mux := http.NewServeMux()
 				set.RegisterAdmin(mux)
 				loc, _ := url.Parse(get(t, mux, "/eveonline_esi/login").Header().Get("Location"))
@@ -302,7 +245,7 @@ func TestCallbackErrors(t *testing.T) {
 
 func TestLoginWithoutSSO(t *testing.T) {
 	t.Parallel()
-	set := load(t, "eveonline_esi: {contact: [x]}", &fakeEVE{})
+	set := load(t, "eveonline_esi: {contact: [x]}", newFake(t))
 	mux := http.NewServeMux()
 	set.RegisterAdmin(mux)
 	if rec := get(t, mux, "/eveonline_esi/login"); rec.Code != http.StatusNotFound {

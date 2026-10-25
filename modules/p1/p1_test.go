@@ -1,14 +1,11 @@
 package p1_test
 
 import (
-	"encoding/json"
 	"errors"
-	"log/slog"
 	"math"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +13,6 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
-	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/p1"
 	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
@@ -32,29 +28,12 @@ func load(tb testing.TB, handler http.Handler, now func() time.Time) *module.Set
 // open is load that also returns the database.
 func open(tb testing.TB, handler http.Handler, now func() time.Time) (*module.Set, *storage.DB) {
 	tb.Helper()
-	db, err := storage.Open(tb.Context(), tb.TempDir())
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	configs, err := yamlconfig.Parse([]byte("p1: {url: http://p1.example/}"))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(tb.Context(), module.Options{
+	db := moduletest.DB(tb, tb.TempDir())
+	return moduletest.Load(tb, db, "p1: {url: http://p1.example/}", module.Options{
 		Registrations: []module.Registration{p1.Module},
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    moduletest.HTTPClient(handler),
 		Now:           now,
-	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
-	return set, db
+	}), db
 }
 
 func actual(tb testing.TB, set *module.Set) *p1.Actual {
@@ -101,74 +80,13 @@ func TestActualFixture(t *testing.T) {
 	}
 }
 
-// fakeDongle answers /api/v2/sm/actual with the telegram set last.
-type fakeDongle struct {
-	mu   sync.Mutex
-	body map[string]any
-	at   time.Time
-}
-
-// now is the clock of a module reading fakeDongle: the telegram's time.
-func (f *fakeDongle) now() time.Time {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.at
-}
-
-// meterTime parses a DSMR timestamp as a Dutch meter means it.
-func meterTime(ts string) time.Time {
-	offset := 3600
-	if ts[12] == 'S' {
-		offset = 7200
-	}
-	t, _ := time.ParseInLocation("060102150405", ts[:12], time.FixedZone("", offset))
-	return t
-}
-
-// set replaces the telegram: timestamp, delivered and returned per tariff
-// (kWh), power delivered and returned (kW), and gas (m³; negative leaves it
-// out).
-func (f *fakeDongle) set(ts string, d1, d2, r1, r2, pd, pr, gas float64) {
-	v := func(x any) map[string]any { return map[string]any{"value": x} }
-	body := map[string]any{
-		"timestamp":                v(ts),
-		"energy_delivered_tariff1": v(d1),
-		"energy_delivered_tariff2": v(d2),
-		"energy_returned_tariff1":  v(r1),
-		"energy_returned_tariff2":  v(r2),
-		"power_delivered":          v(pd),
-		"power_returned":           v(pr),
-		"voltage_l1":               v(230.0),
-	}
-	if gas >= 0 {
-		body["gas_delivered"] = v(gas)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.body = body
-	f.at = meterTime(ts)
-}
-
-// setGasAt adds the gas meter's timestamp to the telegram set last.
-func (f *fakeDongle) setGasAt(ts string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.body["gas_delivered_timestamp"] = map[string]any{"value": ts}
-}
-
-func (f *fakeDongle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	json.NewEncoder(w).Encode(f.body)
-}
-
 func TestDays(t *testing.T) {
 	t.Parallel()
-	fake := &fakeDongle{}
-	set := load(t, fake, fake.now)
+	fake := p1.NewFake(t)
+	set := load(t, fake, fake.Now)
 	update := func(ts string, d1, d2, r1, r2, pd, pr, gas float64) {
 		t.Helper()
-		fake.set(ts, d1, d2, r1, r2, pd, pr, gas)
+		fake.Set(t, p1.ExpectTelegram(ts, d1, d2, r1, r2, pd, pr, gas))
 		if err := set.Update(t.Context(), "p1"); err != nil {
 			t.Fatalf("Update %s: %v", ts, err)
 		}
@@ -200,11 +118,11 @@ func TestDays(t *testing.T) {
 
 func TestNoYesterday(t *testing.T) {
 	t.Parallel()
-	fake := &fakeDongle{}
-	set := load(t, fake, fake.now)
+	fake := p1.NewFake(t)
+	set := load(t, fake, fake.Now)
 	// A day without readings in between: the 23rd is not yesterday.
 	for _, ts := range []string{"261023120000W", "261025120000W"} {
-		fake.set(ts, 1, 2, 3, 4, 0, 0, -1)
+		fake.Set(t, p1.ExpectTelegram(ts, 1, 2, 3, 4, 0, 0, -1))
 		if err := set.Update(t.Context(), "p1"); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -234,10 +152,10 @@ func TestMeterReplaced(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			fake := &fakeDongle{}
-			set := load(t, fake, fake.now)
+			fake := p1.NewFake(t)
+			set := load(t, fake, fake.Now)
 			for _, r := range [][2]float64{{1000, 20}, {testCase.d1, testCase.gas}} {
-				fake.set("261025120000W", r[0], 0, 0, 0, 0, 0, r[1])
+				fake.Set(t, p1.ExpectTelegram("261025120000W", r[0], 0, 0, 0, 0, 0, r[1]))
 				if err := set.Update(t.Context(), "p1"); err != nil {
 					t.Fatalf("Update: %v", err)
 				}
@@ -257,13 +175,13 @@ func TestMeterReplaced(t *testing.T) {
 // a reading.
 func TestGasLate(t *testing.T) {
 	t.Parallel()
-	fake := &fakeDongle{}
-	set := load(t, fake, fake.now)
+	fake := p1.NewFake(t)
+	set := load(t, fake, fake.Now)
 	for _, r := range []struct {
 		ts      string
 		d1, gas float64
 	}{{"261025000100W", 100, -1}, {"261025000600W", 101, 50}, {"261025120000W", 102, 52}} {
-		fake.set(r.ts, r.d1, 0, 0, 0, 0, 0, r.gas)
+		fake.Set(t, p1.ExpectTelegram(r.ts, r.d1, 0, 0, 0, 0, 0, r.gas))
 		if err := set.Update(t.Context(), "p1"); err != nil {
 			t.Fatalf("Update %s: %v", r.ts, err)
 		}
@@ -280,8 +198,8 @@ func TestGasLate(t *testing.T) {
 // time, and a repeated gas reading is not stored again.
 func TestGasTimestamp(t *testing.T) {
 	t.Parallel()
-	fake := &fakeDongle{}
-	set, db := open(t, fake, fake.now)
+	fake := p1.NewFake(t)
+	set, db := open(t, fake, fake.Now)
 	for _, r := range []struct {
 		ts, gasAt string
 		gas       float64
@@ -291,8 +209,8 @@ func TestGasTimestamp(t *testing.T) {
 		{"261025125900W", "261025110000W", 50},
 		{"261025130000W", "261025120000W", 51},
 	} {
-		fake.set(r.ts, 1, 2, 3, 4, 0, 0, r.gas)
-		fake.setGasAt(r.gasAt)
+		fake.Set(t, p1.ExpectTelegram(r.ts, 1, 2, 3, 4, 0, 0, r.gas))
+		fake.Set(t, p1.ExpectGasTimestamp(r.gasAt))
 		if err := set.Update(t.Context(), "p1"); err != nil {
 			t.Fatalf("Update %s: %v", r.ts, err)
 		}
@@ -320,35 +238,31 @@ func TestGasTimestamp(t *testing.T) {
 
 func TestUpdateErrors(t *testing.T) {
 	t.Parallel()
-	telegram := func(ts string, d1 float64) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			f := &fakeDongle{}
-			f.set(ts, d1, 0, 0, 0, 0, 0, -1)
-			f.ServeHTTP(w, r)
-		}
+	telegram := func(ts string, d1 float64) http.Handler {
+		return p1.NewFake(t, p1.ExpectTelegram(ts, d1, 0, 0, 0, 0, 0, -1))
 	}
 	testCases := []struct {
 		name     string
-		handler  http.HandlerFunc
+		handler  http.Handler
 		now      time.Time
 		wantErr  string
 		wantAuth bool
 	}{
 		{
 			name:    "server error",
-			handler: func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) },
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", http.StatusInternalServerError) }),
 			wantErr: "requesting actual: 500 Internal Server Error: boom",
 		},
 		{
 			name:     "basic auth",
-			handler:  func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) },
+			handler:  http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }),
 			wantErr:  "requesting actual: 401 Unauthorized: authentication rejected",
 			wantAuth: true,
 		},
 		{
 			// The dongle answers before it has read a telegram.
 			name:    "no telegram",
-			handler: func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) },
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }),
 			wantErr: "actual has no energy_delivered_tariff1",
 		},
 		{
@@ -367,13 +281,8 @@ func TestUpdateErrors(t *testing.T) {
 			wantErr: `timestamp "261332120000W": parsing time`,
 		},
 		{
-			name: "bad gas timestamp",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				f := &fakeDongle{}
-				f.set("261025120000W", 1, 0, 0, 0, 0, 0, 5)
-				f.setGasAt("261025110000X")
-				f.ServeHTTP(w, r)
-			},
+			name:    "bad gas timestamp",
+			handler: p1.NewFake(t, p1.ExpectTelegram("261025120000W", 1, 0, 0, 0, 0, 0, 5), p1.ExpectGasTimestamp("261025110000X")),
 			wantErr: `gas timestamp "261025110000X": want W or S at the end`,
 		},
 		{
@@ -410,14 +319,14 @@ func TestActualBeforeFirstUpdate(t *testing.T) {
 
 func TestFlow(t *testing.T) {
 	t.Parallel()
-	fake := &fakeDongle{}
-	set := load(t, fake, fake.now)
+	fake := p1.NewFake(t)
+	set := load(t, fake, fake.Now)
 	// Taking 1.5 kW, then returning 2 kW a minute later.
-	fake.set("261025120000W", 1, 2, 3, 4, 1.5, 0, 5)
+	fake.Set(t, p1.ExpectTelegram("261025120000W", 1, 2, 3, 4, 1.5, 0, 5))
 	if err := set.Update(t.Context(), "p1"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	fake.set("261025120100W", 1, 2, 3, 4, 0, 2, 5)
+	fake.Set(t, p1.ExpectTelegram("261025120100W", 1, 2, 3, 4, 0, 2, 5))
 	if err := set.Update(t.Context(), "p1"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}

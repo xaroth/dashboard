@@ -32,19 +32,19 @@ func NewFake(tb testing.TB, opts ...FakeOption) *Fake {
 	return f
 }
 
-// WithBuild serves build number n.
-func WithBuild(n int64) FakeOption {
+// ExpectBuild serves build number n.
+func ExpectBuild(n int64) FakeOption {
 	return func(_ testing.TB, f *Fake) { f.build = n }
 }
 
-// WithFile adds a JSON Lines file to the archive, e.g. "types.jsonl".
+// ExpectFile adds a JSON Lines file to the archive, e.g. "types.jsonl".
 // _sde.jsonl is generated from the build unless set.
-func WithFile(name, jsonl string) FakeOption {
+func ExpectFile(name, jsonl string) FakeOption {
 	return func(_ testing.TB, f *Fake) { f.files[name] = jsonl }
 }
 
-// WithoutFile leaves a file out of the archive.
-func WithoutFile(name string) FakeOption {
+// ExpectFile_Missing leaves a file out of the archive.
+func ExpectFile_Missing(name string) FakeOption {
 	return func(_ testing.TB, f *Fake) { delete(f.files, name) }
 }
 
