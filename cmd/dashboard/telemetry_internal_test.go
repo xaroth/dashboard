@@ -27,9 +27,9 @@ func TestMain(m *testing.M) {
 }
 
 // requestCount is how many requests the duration metric holds for the labels.
-func requestCount(listener, route, code string) uint64 {
+func requestCount(s *Service, listener, route, code string) uint64 {
 	var m dto.Metric
-	requestDuration.WithLabelValues(listener, route, code).(prometheus.Histogram).Write(&m)
+	s.requestDuration.WithLabelValues(listener, route, code).(prometheus.Histogram).Write(&m)
 	return m.GetHistogram().GetSampleCount()
 }
 
@@ -46,14 +46,14 @@ func serve(h http.Handler, method, url string, headers map[string]string) *httpt
 func TestInstrumentMetrics(t *testing.T) {
 	t.Parallel()
 	s, _ := newService(t, testConfig(t, "", ""))
-	h := instrument("metrics_test", s.device)
+	h := s.instrument("metrics_test", s.device)
 	serve(h, http.MethodGet, "/api/setup", map[string]string{"ID": "AA:BB:CC:DD:EE:FF"})
 	serve(h, http.MethodGet, "/nope", nil)
 
-	if got := requestCount("metrics_test", "GET /api/setup", "200"); got != 1 {
+	if got := requestCount(s, "metrics_test", "GET /api/setup", "200"); got != 1 {
 		t.Errorf("got %d setup requests, want 1", got)
 	}
-	if got := requestCount("metrics_test", "unmatched", "404"); got != 1 {
+	if got := requestCount(s, "metrics_test", "unmatched", "404"); got != 1 {
 		t.Errorf("got %d unmatched requests, want 1", got)
 	}
 	body := get(t, s.Admin(), "/metrics").Body.String()
@@ -65,8 +65,8 @@ func TestInstrumentMetrics(t *testing.T) {
 func TestInstrumentTraces(t *testing.T) {
 	t.Parallel()
 	s, _ := newService(t, testConfig(t, "", ""))
-	device := instrument("device", s.device)
-	admin := instrument("admin", s.Admin())
+	device := s.instrument("device", s.device)
+	admin := s.instrument("admin", s.Admin())
 
 	setup := serve(device, http.MethodGet, "/api/setup", map[string]string{"ID": "AA:BB:CC:DD:EE:FF"})
 	var registered struct {

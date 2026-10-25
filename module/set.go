@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/xaroth/dashboard/series"
 )
 
@@ -65,6 +68,10 @@ type Options struct {
 	Now        func() time.Time // nil is time.Now
 	// Location aligns series buckets of an hour or longer; nil is UTC.
 	Location *time.Location
+	// Metrics registers the update metrics; nil records them nowhere.
+	Metrics prometheus.Registerer
+	// Tracing starts the update and query spans; nil is a no-op.
+	Tracing trace.TracerProvider
 }
 
 // Set is the loaded modules.
@@ -75,6 +82,8 @@ type Set struct {
 	httpClient *http.Client
 	dialer     ContextDialer
 	now        func() time.Time
+	metrics    *metrics
+	tracer     trace.Tracer
 	instances  []*instance
 	series     *series.Store
 	shared     map[sharedDef]built
@@ -160,7 +169,11 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		}
 	}
 
-	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, dialer: o.Dialer, now: o.Now, shared: map[sharedDef]built{}, sharedOrder: shared}
+	m, err := newMetrics(o.Metrics)
+	if err != nil {
+		return nil, fmt.Errorf("module metrics: %w", err)
+	}
+	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, dialer: o.Dialer, now: o.Now, metrics: m, tracer: newTracer(o.Tracing), shared: map[sharedDef]built{}, sharedOrder: shared}
 	// Three passes, so a config error stops startup before any migration, and
 	// every module's tables exist before any Initialize.
 	sharedConfigs := make([]any, len(shared))

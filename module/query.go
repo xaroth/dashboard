@@ -106,7 +106,7 @@ func (s *Set) Check(module, name string, params map[string]any) error {
 // Resolve runs module.query on the read-only connection. Failures are in
 // the result, not returned: one failing query must not fail a page.
 func (s *Set) Resolve(ctx context.Context, module, name string, params map[string]any) Result {
-	ctx, span := tracer.Start(ctx, module+"."+name, trace.WithAttributes(attribute.String("module", module), attribute.String("query", name)))
+	ctx, span := s.tracer.Start(ctx, module+"."+name, trace.WithAttributes(attribute.String("module", module), attribute.String("query", name)))
 	defer span.End()
 	inst, q, err := s.lookup(module, name)
 	if err != nil {

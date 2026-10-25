@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -62,7 +64,7 @@ func run(configPath string, log *slog.Logger) error {
 		}
 	}()
 
-	svc, err := New(ctx, cfg, log)
+	svc, err := New(ctx, cfg, log, WithMetrics(prometheus.DefaultRegisterer, prometheus.DefaultGatherer))
 	if err != nil {
 		return fmt.Errorf("starting service: %w", err)
 	}

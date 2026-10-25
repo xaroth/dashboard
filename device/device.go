@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/xaroth/dashboard/screen"
 )
 
@@ -80,7 +82,7 @@ type Devices struct {
 	schedule  Schedule
 	log       *slog.Logger
 	now       func() time.Time
-	simulated bool
+	metrics   *metrics
 
 	mu      sync.Mutex
 	byMAC   map[string]*state
@@ -116,8 +118,8 @@ type Options struct {
 	Schedule  Schedule
 	Log       *slog.Logger
 	Now       func() time.Time
-	// Simulated keeps wakes out of the device metrics, for the simulator.
-	Simulated bool
+	// Metrics registers the wake metrics; nil records them nowhere.
+	Metrics prometheus.Registerer
 }
 
 // Load validates the options, runs the device migrations and returns the
@@ -125,6 +127,10 @@ type Options struct {
 func Load(ctx context.Context, o Options) (*Devices, error) {
 	if err := validate(o); err != nil {
 		return nil, err
+	}
+	m, err := newMetrics(o.Metrics)
+	if err != nil {
+		return nil, fmt.Errorf("device metrics: %w", err)
 	}
 	if err := o.Migrator.Migrate(ctx, "device", migrations, "sql/migrations"); err != nil {
 		return nil, fmt.Errorf("device migrations: %w", err)
@@ -137,7 +143,7 @@ func Load(ctx context.Context, o Options) (*Devices, error) {
 		schedule:  o.Schedule,
 		log:       o.Log,
 		now:       o.Now,
-		simulated: o.Simulated,
+		metrics:   m,
 		byMAC:     map[string]*state{},
 		byName:    map[string]*state{},
 		pending:   map[string]time.Time{},
