@@ -9,7 +9,8 @@ data_dir: ./data   # holds dashboard.sqlite: module state, caches, device API ke
 # schedule:
 #   first_wake: "07:00"
 #   last_wake: "00:00"
-#   interval: 1h
+#   interval_battery: 1h
+#   interval_usb: 5m
 #   detail_timeout: 5m   # how long a page shown after a button press stays up
 
 devices:
@@ -18,6 +19,7 @@ devices:
     rotation: 0   # 0, 90, 180 or 270
     layout: e1001   # pages/layouts/e1001/
     pages: [weather, energy, energy_day, eveonline, eveonline_skills, hello]   # the first is the main page; a button press shows the next
+    # power: usb   # auto (default) follows USB-Connected, which the reTerminals do not send, and assumes battery
 
 renderer:
   watch: true   # rebuild pages on change; reload the browser to see them

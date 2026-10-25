@@ -110,7 +110,7 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 		DB:        db.Writer,
 		Migrator:  db,
 		PublicURL: "http://dash",
-		Schedule:  device.Schedule{First: 7 * time.Hour, Interval: time.Hour, Detail: 5 * time.Minute, Location: time.UTC},
+		Schedule:  device.Schedule{First: 7 * time.Hour, Battery: time.Hour, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: time.UTC},
 		Log:       slog.New(slog.DiscardHandler),
 		Now:       now,
 	}

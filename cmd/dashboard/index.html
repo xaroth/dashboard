@@ -56,7 +56,7 @@
 <h2>Devices</h2>
 {{range .Devices}}{{$d := .}}
 <h3>{{.Name}} <small>{{.MAC}} · {{.Model}} · rotation {{.Rotation}} · <a href="/simulate/{{.Name}}">simulate</a></small></h3>
-<p>{{with .Wake}}Last wake {{.At.Format "2006-01-02 15:04:05"}} ({{.Source}}), showing {{$d.Page}}{{else}}Not seen since start.{{end}}</p>
+<p>{{with .Wake}}Last wake {{.At.Format "2006-01-02 15:04:05"}} ({{.Source}}) on {{if .USB}}USB{{else}}battery{{end}} ({{.PowerSource}}), showing {{$d.Page}}{{else}}Not seen since start.{{end}}</p>
 <div class="row">
   {{range .Pages}}
   <figure>

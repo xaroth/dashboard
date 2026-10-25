@@ -460,6 +460,7 @@ devices:
     rotation: 0          # 0, 90, 180, 270
     layout: e1001        # folder under pages/layouts/
     pages: [weather, hello]
+    power: auto                # auto (USB-Connected, else battery), usb or battery
     params:              # optional query param overrides, <page>.<data key>
       weather.weather: {days: 5}
 ```
@@ -472,13 +473,14 @@ The model comes from the device's `Model` header (`reterminal_e1001`, `retermina
 
 ### Screen schedule
 
-Global, under `schedule`: a wake every `interval` from `first_wake` up to and including `last_wake`, in local time; the last wake sleeps until the first. The default is hourly from 07:00 to 00:00: 18 timer wakes a day plus button presses. A `last_wake` at or before `first_wake` is on the next day.
+Global, under `schedule`: a wake every `interval_battery` or `interval_usb`, by the device's power, from `first_wake` up to and including `last_wake`, in local time; the last wake sleeps until the first. The default on battery is hourly from 07:00 to 00:00: 18 timer wakes a day plus button presses. A `last_wake` at or before `first_wake` is on the next day. Both intervals count from `first_wake`, so a device that changes power wakes on the other grid from its next wake.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `first_wake` | `"07:00"` | First timer wake, `HH:MM` |
 | `last_wake` | `"00:00"` | Last timer wake, `HH:MM` |
-| `interval` | `1h` | Whole minutes, from 1m to 24h |
+| `interval_battery` | `1h` | Interval on battery; whole minutes, from 1m to 24h |
+| `interval_usb` | `5m` | Interval on USB power; whole minutes, from 1m to 24h |
 | `detail_timeout` | `5m` | How long a page shown after a button press stays up |
 
 `refresh_rate` is computed from the server clock on every request:
@@ -529,7 +531,9 @@ TRMNL BYOS, on the device listener. Devices are identified by the `ID` header (t
 
 ### Wake data
 
-Each `/api/display` records, in memory, the wake source (`Update-Source`), battery voltage (`Battery-Voltage`), RSSI (`RSSI`), firmware version (`FW-Version`) and the time. Pages get it as `device.wake`; the admin UI shows the last wake per device. It is lost on restart.
+Each `/api/display` records, in memory, the wake source (`Update-Source`), battery voltage (`Battery-Voltage`), RSSI (`RSSI`), firmware version (`FW-Version`), power and the time. Pages get it as `device.wake`; the admin UI shows the last wake per device. It is lost on restart.
+
+Power (`usb`, with `powerSource`) comes from the device's `power` setting: `usb` or `battery` (`config`), or `auto`, the default, which follows `USB-Connected` (`header`) and assumes battery without it (`default`). The TRMNL firmware only sends `USB-Connected` on boards with a readable charger (TRMNL X and Gen2); the reTerminal E1001 and E1003 send only `Battery-Voltage`, so on `auto` they count as on battery.
 
 ## Rendering
 
@@ -720,7 +724,8 @@ data_dir: /data                # default
 schedule:                      # defaults shown
   first_wake: "07:00"
   last_wake: "00:00"
-  interval: 1h
+  interval_battery: 1h
+  interval_usb: 5m
   detail_timeout: 5m
 
 renderer:                      # defaults shown
@@ -739,6 +744,7 @@ devices:
     rotation: 0
     layout: e1001
     pages: [weather, hello]
+    power: auto                # auto (USB-Connected, else battery), usb or battery
     params:
       weather.weather: {days: 5}
 ```

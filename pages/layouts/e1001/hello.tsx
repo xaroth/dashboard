@@ -11,6 +11,7 @@ export default function Hello({ device, viewport, now, timezone }: PageProps<typ
     ["Viewport", `${viewport.width}x${viewport.height}, rotation ${device.rotation}`],
     ["Wake", device.wake?.source ?? "-"],
     ["Battery", device.wake?.battery != null ? `${device.wake.battery.toFixed(2)} V` : "-"],
+    ["Power", device.wake?.powerSource ? `${device.wake.usb ? "USB" : "battery"} (${device.wake.powerSource})` : "-"],
     ["RSSI", device.wake?.rssi != null ? `${device.wake.rssi} dBm` : "-"],
     ["Firmware", device.wake?.firmware ?? "-"],
   ];

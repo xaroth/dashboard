@@ -37,6 +37,11 @@ type Wake struct {
 	RSSI     *int      `json:"rssi,omitempty"`
 	Firmware string    `json:"firmware,omitempty"`
 	At       time.Time `json:"at"`
+	// USB is whether the device counts as on USB power, by PowerSource:
+	// "header" (USB-Connected), "config" (the device's power setting) or
+	// "default" (no header: battery).
+	USB         bool   `json:"usb"`
+	PowerSource string `json:"powerSource"`
 }
 
 // Props are what a page component receives; the shape of PageProps in pages/lib/page.ts.
