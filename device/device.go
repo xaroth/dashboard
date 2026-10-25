@@ -34,9 +34,20 @@ type Config struct {
 	MAC      string // normalized: upper case with colons
 	Rotation int
 	Pages    []string
+	Power    Power
 	// Params overrides query params by "page.key".
 	Params map[string]map[string]any
 }
+
+// Power is how a device's power source is decided.
+type Power string
+
+const (
+	// PowerAuto follows the USB-Connected header and assumes battery without it.
+	PowerAuto    Power = "auto"
+	PowerUSB     Power = "usb"
+	PowerBattery Power = "battery"
+)
 
 // Pipeline renders pages; *render.Pipeline in production.
 type Pipeline interface {

@@ -74,7 +74,8 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	if model := r.Header.Get("Model"); render.Panels[model] != (render.Panel{}) {
 		s.model = model
 	}
-	s.wake = wakeFrom(r, d.now())
+	s.wake = wakeFrom(r, d.now(), s.cfg.Power)
+	usb := s.wake.USB
 	if button {
 		s.page = (s.page + 1) % len(s.cfg.Pages)
 	} else {
@@ -86,7 +87,7 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	d.mu.Unlock()
 	d.observe(target.Name, target.Wake)
 
-	refresh := d.schedule.refresh(d.now(), button)
+	refresh := d.schedule.refresh(d.now(), button, usb)
 	img, err := d.pipeline.Render(r.Context(), target, page)
 	if err != nil {
 		d.log.Error("rendering for device", "device", target.Name, "page", page, "err", err)
@@ -198,7 +199,7 @@ func (d *Devices) authenticate(w http.ResponseWriter, r *http.Request) (*state, 
 	return s, true
 }
 
-func wakeFrom(r *http.Request, now time.Time) *render.Wake {
+func wakeFrom(r *http.Request, now time.Time, power Power) *render.Wake {
 	wake := &render.Wake{
 		Source:   r.Header.Get("Update-Source"),
 		Firmware: r.Header.Get("FW-Version"),
@@ -209,6 +210,17 @@ func wakeFrom(r *http.Request, now time.Time) *render.Wake {
 	}
 	if v, err := strconv.Atoi(r.Header.Get("RSSI")); err == nil {
 		wake.RSSI = &v
+	}
+	switch power {
+	case PowerUSB, PowerBattery:
+		wake.USB, wake.PowerSource = power == PowerUSB, "config"
+	default:
+		// Only boards with a readable charger send the header; the reTerminals do not.
+		if v, err := strconv.ParseBool(r.Header.Get("USB-Connected")); err == nil {
+			wake.USB, wake.PowerSource = v, "header"
+		} else {
+			wake.PowerSource = "default"
+		}
 	}
 	return wake
 }

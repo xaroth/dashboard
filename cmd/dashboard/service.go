@@ -120,7 +120,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	var configs []device.Config
 	for name, d := range cfg.Devices {
 		mac, _ := device.NormalizeMAC(d.MAC) // validated with the config
-		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.pages(), Params: d.params()})
+		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.pages(), Power: device.Power(d.Power), Params: d.params()})
 	}
 	deviceOpts := device.Options{
 		Devices:   configs,
