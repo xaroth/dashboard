@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	defaults "github.com/eve-online-tools/lib-esi-go"
 	"github.com/eve-online-tools/lib-esi-go/esi/getstatus"
@@ -18,6 +17,7 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/eveonline/esi"
 	"github.com/xaroth/dashboard/storage"
 )
@@ -87,8 +87,8 @@ func load(tb testing.TB, src string, handler http.Handler, regs ...module.Regist
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte(src), &configs); err != nil {
+	configs, err := yamlconfig.Parse([]byte(src))
+	if err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
