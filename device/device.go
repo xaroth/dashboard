@@ -69,8 +69,8 @@ type Pending struct {
 }
 
 // Devices holds the configured devices. API keys are stored in the
-// database; current page, last wake and last image are in memory and lost
-// on restart.
+// database and cached here; current page, last wake and last image are in
+// memory and lost on restart.
 type Devices struct {
 	pipeline  Pipeline
 	store     *Store
@@ -93,6 +93,7 @@ type state struct {
 	wake     *render.Wake
 	page     int
 	filename string
+	key      string // API key, cached: keys never change once created
 }
 
 // maxPending caps the unknown MACs remembered, so setup calls cannot grow it without bound.
@@ -118,9 +119,12 @@ type Options struct {
 	Simulated bool
 }
 
-// Load runs the device migrations and returns the devices. A failing
-// migration is an error.
+// Load validates the options, runs the device migrations and returns the
+// devices. Invalid options or a failing migration are an error.
 func Load(ctx context.Context, o Options) (*Devices, error) {
+	if err := validate(o); err != nil {
+		return nil, err
+	}
 	if err := o.Migrator.Migrate(ctx, "device", migrations, "sql/migrations"); err != nil {
 		return nil, fmt.Errorf("device migrations: %w", err)
 	}
@@ -143,6 +147,31 @@ func Load(ctx context.Context, o Options) (*Devices, error) {
 		d.byName[c.Name] = s
 	}
 	return d, nil
+}
+
+// validate rejects options the protocol cannot serve: a zero interval loops
+// forever in Schedule.next, a device without pages divides by zero.
+func validate(o Options) error {
+	intervals := []struct {
+		name string
+		d    time.Duration
+	}{{"battery", o.Schedule.Battery}, {"usb", o.Schedule.USB}, {"detail", o.Schedule.Detail}}
+	for _, i := range intervals {
+		if i.d <= 0 {
+			return fmt.Errorf("schedule: %s interval must be positive", i.name)
+		}
+	}
+	for _, c := range o.Devices {
+		if len(c.Pages) == 0 {
+			return fmt.Errorf("device %s: pages is empty", c.Name)
+		}
+		switch c.Power {
+		case "", PowerAuto, PowerUSB, PowerBattery:
+		default:
+			return fmt.Errorf("device %s: unknown power %q", c.Name, c.Power)
+		}
+	}
+	return nil
 }
 
 // Target is how the named device is rendered: its reported model and wake.

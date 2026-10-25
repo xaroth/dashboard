@@ -46,7 +46,7 @@ func (d *Devices) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.mu.Unlock()
-	key, err := d.apiKey(r.Context(), mac)
+	key, err := d.apiKey(r.Context(), s)
 	if err != nil {
 		d.log.Error("reading api key", "device", s.cfg.Name, "err", err)
 		// A plain HTTP error: the firmware retries setup later.
@@ -87,8 +87,9 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	d.mu.Unlock()
 	d.observe(target.Name, target.Wake)
 
-	refresh := d.schedule.refresh(d.now(), button, usb)
 	img, err := d.pipeline.Render(r.Context(), target, page)
+	// After rendering: the firmware starts its sleep once it has drawn.
+	refresh := d.schedule.refresh(d.now(), button, usb)
 	if err != nil {
 		d.log.Error("rendering for device", "device", target.Name, "page", page, "err", err)
 		if prev == "" {
@@ -159,17 +160,36 @@ func (d *Devices) image(w http.ResponseWriter, r *http.Request) {
 	w.Write(png)
 }
 
-// apiKey returns mac's stored key, creating one on its first setup.
-func (d *Devices) apiKey(ctx context.Context, mac string) (string, error) {
-	key, err := d.queries.GetAPIKey(ctx, mac)
+// apiKey returns the device's stored key, creating one on its first setup.
+func (d *Devices) apiKey(ctx context.Context, s *state) (string, error) {
+	key, err := d.storedKey(ctx, s)
 	if !errors.Is(err, sql.ErrNoRows) {
 		return key, err
 	}
-	if err := d.queries.CreateAPIKey(ctx, CreateAPIKeyParams{Mac: mac, ApiKey: newAPIKey()}); err != nil {
+	if err := d.queries.CreateAPIKey(ctx, CreateAPIKeyParams{Mac: s.cfg.MAC, ApiKey: newAPIKey()}); err != nil {
 		return "", err
 	}
 	// Read back: a concurrent setup may have stored its key first.
-	return d.queries.GetAPIKey(ctx, mac)
+	return d.storedKey(ctx, s)
+}
+
+// storedKey returns the device's key, reading the database only on a cache
+// miss so wakes do not queue on the writer connection.
+func (d *Devices) storedKey(ctx context.Context, s *state) (string, error) {
+	d.mu.Lock()
+	key := s.key
+	d.mu.Unlock()
+	if key != "" {
+		return key, nil
+	}
+	key, err := d.queries.GetAPIKey(ctx, s.cfg.MAC)
+	if err != nil {
+		return "", err
+	}
+	d.mu.Lock()
+	s.key = key
+	d.mu.Unlock()
+	return key, nil
 }
 
 // authenticate finds the device by its ID header and checks Access-Token
@@ -185,7 +205,7 @@ func (d *Devices) authenticate(w http.ResponseWriter, r *http.Request) (*state, 
 		writeJSON(w, http.StatusNotFound, map[string]any{"status": 404, "message": "device not registered"})
 		return nil, false
 	}
-	key, err := d.queries.GetAPIKey(r.Context(), mac)
+	key, err := d.storedKey(r.Context(), s)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		d.log.Error("reading api key", "device", s.cfg.Name, "err", err)
 		// Never JSON status 500, which resets the firmware.
