@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -24,6 +26,15 @@ var testPages = []render.PageInfo{
 
 var testFetched = "2026-10-16T07:15:00+02:00"
 
+func mustPipeline(tb testing.TB, o render.PipelineOptions) *render.Pipeline {
+	tb.Helper()
+	p, err := render.NewPipeline(o)
+	if err != nil {
+		tb.Fatalf("NewPipeline: %v", err)
+	}
+	return p
+}
+
 func newPipeline(tb testing.TB) (*render.Pipeline, *render.FakeRenderer) {
 	p, fake, _ := newPipelineWithResolver(tb)
 	return p, fake
@@ -40,7 +51,7 @@ func newPipelineWithResolver(tb testing.TB) (*render.Pipeline, *render.FakeRende
 	if err != nil {
 		tb.Fatalf("loading location: %v", err)
 	}
-	return render.NewPipeline(fake, res, loc, func() time.Time { return testNow }), fake, res
+	return mustPipeline(tb, render.PipelineOptions{Renderer: fake, Resolver: res, Location: loc, Now: func() time.Time { return testNow }}), fake, res
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -72,7 +83,7 @@ func TestPipelinePropsStaleError(t *testing.T) {
 	t.Parallel()
 	loc := time.FixedZone("test", 0)
 	res := render.NewFakeResolver(t, render.ExpectStaleError(errors.New("reading module states")))
-	p := render.NewPipeline(render.NewFakeRenderer(t, render.ExpectPages(testPages...)), res, loc, func() time.Time { return testNow })
+	p := mustPipeline(t, render.PipelineOptions{Renderer: render.NewFakeRenderer(t, render.ExpectPages(testPages...)), Resolver: res, Location: loc, Now: func() time.Time { return testNow }})
 	spans := tracetest.NewSpanRecorder()
 	ctx, span := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)).Tracer("test").Start(t.Context(), "test")
 	got, err := p.Props(ctx, screen.Target{Name: "hallway", Model: "reterminal_e1001"}, "hello")
@@ -142,12 +153,43 @@ func TestPipelineRenderError(t *testing.T) {
 	}
 }
 
-func TestPipelineRenderMetrics(t *testing.T) {
+// renderCounts is the number of renders in reg, by page and result.
+func renderCounts(tb testing.TB, reg prometheus.Gatherer) map[[2]string]uint64 {
+	tb.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		tb.Fatalf("Gather: %v", err)
+	}
+	counts := map[[2]string]uint64{}
+	for _, f := range families {
+		if f.GetName() != "dashboard_render_duration_seconds" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			counts[[2]string{labels["page"], labels["result"]}] = m.GetHistogram().GetSampleCount()
+		}
+	}
+	return counts
+}
+
+func TestPipelineRenderTelemetry(t *testing.T) {
 	t.Parallel()
-	p, fake := newPipeline(t)
-	fake.SetPages(render.PageInfo{Name: "metrics"})
+	reg := prometheus.NewRegistry()
+	spans := tracetest.NewSpanRecorder()
+	fake := render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "metrics"}))
+	p := mustPipeline(t, render.PipelineOptions{
+		Renderer: fake,
+		Resolver: render.NewFakeResolver(t),
+		Location: time.UTC,
+		Now:      func() time.Time { return testNow },
+		Metrics:  reg,
+		Tracing:  sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)),
+	})
 	target := screen.Target{Model: "reterminal_e1001"}
-	unknown := render.RenderCount("unknown", "failure")
 
 	if _, err := p.Render(t.Context(), target, "metrics"); err != nil {
 		t.Fatalf("Render: %v", err)
@@ -156,18 +198,33 @@ func TestPipelineRenderMetrics(t *testing.T) {
 	p.Render(t.Context(), target, "metrics")
 	p.Render(t.Context(), target, "no-such-page")
 
-	if got := render.RenderCount("metrics", "success"); got != 1 {
-		t.Errorf("got %d successful renders, want 1", got)
+	// The requested page stays out of the label values.
+	want := map[[2]string]uint64{{"metrics", "success"}: 1, {"metrics", "failure"}: 1, {"unknown", "failure"}: 1}
+	if diff := cmp.Diff(want, renderCounts(t, reg)); diff != "" {
+		t.Errorf("render counts (-want +got):\n%s", diff)
 	}
-	if got := render.RenderCount("metrics", "failure"); got != 1 {
-		t.Errorf("got %d failed renders, want 1", got)
+	type span struct {
+		Name   string
+		Status codes.Code
 	}
-	// Other tests may also render unknown pages; at least this one counted.
-	if got := render.RenderCount("unknown", "failure"); got <= unknown {
-		t.Errorf("got %d unknown-page renders, want more than %d", got, unknown)
+	var got []span
+	for _, s := range spans.Ended() {
+		got = append(got, span{s.Name(), s.Status().Code})
 	}
-	if got := render.RenderCount("no-such-page", "failure"); got != 0 {
-		t.Errorf("got %d renders labelled with the requested page, want 0", got)
+	wantSpans := []span{{"render metrics", codes.Unset}, {"render metrics", codes.Error}, {"render no-such-page", codes.Error}}
+	if diff := cmp.Diff(wantSpans, got); diff != "" {
+		t.Errorf("spans (-want +got):\n%s", diff)
+	}
+}
+
+func TestNewPipelineMetricsRegistered(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	if _, err := render.NewPipeline(render.PipelineOptions{Metrics: reg}); err != nil {
+		t.Fatalf("first NewPipeline: %v", err)
+	}
+	if _, err := render.NewPipeline(render.PipelineOptions{Metrics: reg}); err == nil {
+		t.Error("got no error registering the render metrics twice, want one")
 	}
 }
 

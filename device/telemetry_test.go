@@ -2,7 +2,11 @@ package device_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/xaroth/dashboard/device"
 )
@@ -10,37 +14,37 @@ import (
 func TestDisplayMetrics(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
-		name      string
-		device    string
-		source    string
-		simulated bool
-		label     string
-		wakes     float64
-		battery   float64
-		rssi      float64
+		name   string
+		source string
+		label  string
 	}{
-		{"device", "metrics_device", "timer", false, "timer", 1, 4.05, -61},
-		{"unknown source", "metrics_unknown", "made-up", false, "other", 1, 4.05, -61},
-		{"simulated", "metrics_simulated", "timer", true, "timer", 0, 0, 0},
+		{"known source", "timer", "timer"},
+		{"unknown source", "made-up", "other"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			e := newEnv(t, func(o *device.Options) {
-				o.Devices[0].Name = testCase.device
-				o.Simulated = testCase.simulated
-			})
+			reg := prometheus.NewRegistry()
+			e := newEnv(t, func(o *device.Options) { o.Metrics = reg })
 			if code, body := e.display(t, e.setup(t), testCase.source); code != http.StatusOK {
 				t.Fatalf("display: got %d %v", code, body)
 			}
-			if got := device.Wakes(testCase.device, testCase.label); got != testCase.wakes {
-				t.Errorf("got %v wakes, want %v", got, testCase.wakes)
-			}
-			if got := device.Battery(testCase.device); got != testCase.battery {
-				t.Errorf("got battery %v, want %v", got, testCase.battery)
-			}
-			if got := device.RSSI(testCase.device); got != testCase.rssi {
-				t.Errorf("got RSSI %v, want %v", got, testCase.rssi)
+			want := `
+# HELP dashboard_device_battery_volts Battery-Voltage reported on the device's latest wake.
+# TYPE dashboard_device_battery_volts gauge
+dashboard_device_battery_volts{device="hallway"} 4.05
+# HELP dashboard_device_last_wake_timestamp_seconds Unix time of the device's latest wake.
+# TYPE dashboard_device_last_wake_timestamp_seconds gauge
+dashboard_device_last_wake_timestamp_seconds{device="hallway"} 1.7920872e+09
+# HELP dashboard_device_rssi_dbm Wi-Fi RSSI reported on the device's latest wake.
+# TYPE dashboard_device_rssi_dbm gauge
+dashboard_device_rssi_dbm{device="hallway"} -61
+# HELP dashboard_device_wakes_total Display requests by device and Update-Source.
+# TYPE dashboard_device_wakes_total counter
+dashboard_device_wakes_total{device="hallway",source="` + testCase.label + `"} 1
+`
+			if err := testutil.GatherAndCompare(reg, strings.NewReader(want)); err != nil {
+				t.Error(err)
 			}
 		})
 	}

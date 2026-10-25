@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -68,14 +69,33 @@ const resolveTimeout = 10 * time.Second
 
 // Pipeline turns a page and a target into a device-ready image.
 type Pipeline struct {
-	renderer Renderer
-	resolver Resolver
-	location *time.Location
-	now      func() time.Time
+	renderer       Renderer
+	resolver       Resolver
+	location       *time.Location
+	now            func() time.Time
+	renderDuration *prometheus.HistogramVec
+	tracer         trace.Tracer
 }
 
-func NewPipeline(r Renderer, res Resolver, loc *time.Location, now func() time.Time) *Pipeline {
-	return &Pipeline{renderer: r, resolver: res, location: loc, now: now}
+// PipelineOptions are what NewPipeline needs.
+type PipelineOptions struct {
+	Renderer Renderer
+	Resolver Resolver
+	Location *time.Location
+	Now      func() time.Time
+	// Metrics registers the render metrics; nil records them nowhere.
+	Metrics prometheus.Registerer
+	// Tracing starts the render spans; nil is a no-op.
+	Tracing trace.TracerProvider
+}
+
+// NewPipeline returns a pipeline, or an error if its metrics cannot be registered.
+func NewPipeline(o PipelineOptions) (*Pipeline, error) {
+	h, err := newRenderDuration(o.Metrics)
+	if err != nil {
+		return nil, fmt.Errorf("render metrics: %w", err)
+	}
+	return &Pipeline{renderer: o.Renderer, resolver: o.Resolver, location: o.Location, now: o.Now, renderDuration: h, tracer: newTracer(o.Tracing)}, nil
 }
 
 // KnownModel reports whether pages can be rendered for model.
@@ -157,7 +177,7 @@ func MergeParams(base, override map[string]any) map[string]any {
 
 // Render resolves props, renders and finishes the image for t.
 func (p *Pipeline) Render(ctx context.Context, t screen.Target, page string) (img screen.Image, err error) {
-	ctx, span := tracer.Start(ctx, "render "+page, trace.WithAttributes(
+	ctx, span := p.tracer.Start(ctx, "render "+page, trace.WithAttributes(
 		attribute.String("page", page), attribute.String("target", t.Name), attribute.String("model", t.Model)))
 	start := time.Now()
 	defer func() {
@@ -171,7 +191,7 @@ func (p *Pipeline) Render(ctx context.Context, t screen.Target, page string) (im
 		if errors.Is(err, ErrUnknownPage) {
 			label = "unknown" // keep request input out of the label values
 		}
-		renderDuration.WithLabelValues(label, result).Observe(time.Since(start).Seconds())
+		p.renderDuration.WithLabelValues(label, result).Observe(time.Since(start).Seconds())
 		span.End()
 	}()
 	props, err := p.Props(ctx, t, page)

@@ -9,7 +9,6 @@ import (
 
 	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -19,18 +18,20 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-var requestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-	Name:    "dashboard_http_request_duration_seconds",
-	Help:    "Duration of HTTP requests by listener, route pattern and status code.",
-	Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
-}, []string{"listener", "route", "code"})
+func newRequestDuration() *prometheus.HistogramVec {
+	return prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "dashboard_http_request_duration_seconds",
+		Help:    "Duration of HTTP requests by listener, route pattern and status code.",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
+	}, []string{"listener", "route", "code"})
+}
 
 // untraced are probe and scrape paths, polled often enough to bury the traces worth reading.
 var untraced = map[string]bool{"/healthz": true, "/metrics": true}
 
 // instrument traces each request and records its duration under the
 // listener's name and the route pattern it matched.
-func instrument(listener string, h http.Handler) http.Handler {
+func (s *Service) instrument(listener string, h http.Handler) http.Handler {
 	measured := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		m := httpsnoop.CaptureMetrics(h, w, r)
 		// ServeMux sets the pattern on the request it was given.
@@ -38,7 +39,7 @@ func instrument(listener string, h http.Handler) http.Handler {
 		if route == "" {
 			route = "unmatched"
 		}
-		requestDuration.WithLabelValues(listener, route, strconv.Itoa(m.Code)).Observe(m.Duration.Seconds())
+		s.requestDuration.WithLabelValues(listener, route, strconv.Itoa(m.Code)).Observe(m.Duration.Seconds())
 	})
 	return otelhttp.NewHandler(measured, listener,
 		otelhttp.WithFilter(func(r *http.Request) bool { return !untraced[r.URL.Path] }))
