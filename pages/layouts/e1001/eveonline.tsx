@@ -1,3 +1,4 @@
+import { Missing, PageFrame, Updated } from "../../components/PageFrame";
 import { formatCount, formatDuration, formatTime } from "../../lib/format";
 import { query, type PageProps } from "../../lib/page";
 import styles from "./eveonline.module.css";
@@ -9,12 +10,12 @@ export const data = {
 type Data = typeof data;
 
 export default function EveOnline({ data, now, timezone }: PageProps<Data>) {
-  const { value: s, fetchedAt, stale, error } = data.status;
+  const { value: s, error } = data.status;
   if (!s) {
     return (
-      <div className={styles.screen}>
-        <div className={styles.missing}>Geen serverstatus{error ? `: ${error}` : ""}</div>
-      </div>
+      <PageFrame>
+        <Missing what="serverstatus" error={error} />
+      </PageFrame>
     );
   }
   const facts: [string, string][] = s.startTime
@@ -25,13 +26,7 @@ export default function EveOnline({ data, now, timezone }: PageProps<Data>) {
       ]
     : [];
   return (
-    <div className={styles.screen}>
-      <div className={styles.header}>
-        <span>EVE Online · Tranquility</span>
-        <span className={stale ? styles.stale : undefined}>
-          {stale ? "Verouderd, " : ""}bijgewerkt {fetchedAt ? formatTime(fetchedAt, timezone) : "-"}
-        </span>
-      </div>
+    <PageFrame title="EVE Online · Tranquility" status={<Updated result={data.status} timezone={timezone} />} gap={24}>
       <div className={styles.state}>
         {s.online ? "Online" : "Offline"}
         {s.vip ? <span className={styles.vip}>VIP</span> : null}
@@ -42,6 +37,6 @@ export default function EveOnline({ data, now, timezone }: PageProps<Data>) {
           <div key={`${k}-v`}>{v}</div>,
         ])}
       </div>
-    </div>
+    </PageFrame>
   );
 }

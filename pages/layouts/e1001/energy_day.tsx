@@ -1,5 +1,7 @@
 import { EnergyChart } from "../../components/EnergyChart";
-import { formatKwAxis } from "../../lib/energy";
+import { Missing, PAD_X, PageFrame, Updated } from "../../components/PageFrame";
+import { linear } from "../../lib/chart";
+import { chartDomain, formatKwAxis, hourTicks } from "../../lib/energy";
 import { formatTime } from "../../lib/format";
 import { query, type PageProps } from "../../lib/page";
 import styles from "./energy_day.module.css";
@@ -11,48 +13,28 @@ export const data = {
 
 type Data = typeof data;
 
-const hour = 3_600_000;
+// Axis width in px; it matches energy_day.module.css.
+const AXIS = 70;
 
 export default function EnergyDay({ data, viewport, timezone }: PageProps<Data>) {
   const flow = data.flow.value ?? [];
   const solar = data.solar.value ?? [];
-  const first = (flow.length >= solar.length ? flow : solar)[0];
-  if (!first) {
-    const error = data.flow.error ?? data.solar.error;
+  const domain = chartDomain(flow, solar);
+  if (!domain) {
     return (
-      <div className={styles.screen}>
-        <div className={styles.missing}>Geen energiegegevens{error ? `: ${error}` : ""}</div>
-      </div>
+      <PageFrame>
+        <Missing what="energiegegevens" error={data.flow.error ?? data.solar.error} />
+      </PageFrame>
     );
   }
-  const points = flow.length >= solar.length ? flow : solar;
-  const start = Date.parse(first.t);
-  const step = points[1] ? Date.parse(points[1].t) - start : 15 * 60_000;
-  const end = Date.parse(points[points.length - 1]!.t) + step;
-  const watts = [
-    ...solar.flatMap((p) => (p.v == null ? [] : [p.v])),
-    ...flow.flatMap((p) => (p.v == null ? [] : [p.v * 1000])),
-  ];
-  // At least 1 kW up and the zero line in view.
-  const max = Math.max(1000, ...watts) * 1.05;
-  const min = Math.min(0, ...watts) * 1.05;
-  const width = viewport.width - 64 - 70;
+  const { start, end, min, max } = domain;
+  const width = viewport.width - 2 * PAD_X - AXIS;
   const height = Math.max(120, viewport.height - 160);
-  // Labels on the local hours divisible by 6.
-  const labels: number[] = [];
-  for (let t = Math.ceil(start / hour) * hour; t < end; t += hour) {
-    if (Number(formatTime(new Date(t).toISOString(), timezone).slice(0, 2)) % 6 === 0) labels.push(t);
-  }
-  const stale = data.flow.stale || data.solar.stale;
-  const fetchedAt = data.flow.fetchedAt ?? data.solar.fetchedAt;
+  const x = linear(start, end, 0, width);
+  // One status for both: the flow's, unless only solar was fetched.
+  const updated = { ...data.flow, stale: data.flow.stale || data.solar.stale, fetchedAt: data.flow.fetchedAt ?? data.solar.fetchedAt };
   return (
-    <div className={styles.screen}>
-      <div className={styles.header}>
-        <span>Energie, laatste 24 uur</span>
-        <span className={stale ? styles.stale : undefined}>
-          {stale ? "Verouderd, " : ""}bijgewerkt {fetchedAt ? formatTime(fetchedAt, timezone) : "-"}
-        </span>
-      </div>
+    <PageFrame title="Energie, laatste 24 uur" status={<Updated result={updated} timezone={timezone} />} gap={12}>
       <div className={styles.chartRow}>
         <div className={styles.axis} style={{ height }}>
           <span className={styles.axisLabel} style={{ top: 0 }}>
@@ -68,11 +50,11 @@ export default function EnergyDay({ data, viewport, timezone }: PageProps<Data>)
             {min < 0 ? formatKwAxis(min) : "0"}
           </span>
         </div>
-        <EnergyChart solar={solar} flow={flow} start={start} end={end} step={step} min={min} max={max} width={width} height={height} />
+        <EnergyChart solar={solar} flow={flow} domain={domain} width={width} height={height} />
       </div>
-      <div className={styles.hours} style={{ width, marginLeft: 70 }}>
-        {labels.map((t) => (
-          <span key={t} className={styles.hourLabel} style={{ left: ((t - start) / (end - start)) * width - 25 }}>
+      <div className={styles.hours} style={{ width, marginLeft: AXIS }}>
+        {hourTicks(start, end, timezone).map((t) => (
+          <span key={t} className={styles.hourLabel} style={{ left: x(t) - 25 }}>
             {formatTime(new Date(t).toISOString(), timezone)}
           </span>
         ))}
@@ -85,6 +67,6 @@ export default function EnergyDay({ data, viewport, timezone }: PageProps<Data>)
           <span className={styles.swatchFlow} /> Net: + afname, - teruglevering
         </span>
       </div>
-    </div>
+    </PageFrame>
   );
 }

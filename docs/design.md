@@ -544,8 +544,8 @@ Pages are React components in TSX, styled with CSS modules, rendered by Takumi t
 ```tsx
 // pages/layouts/e1001/weather.tsx (abridged)
 import { LineChart } from "../../components/LineChart";
+import { Missing, PageFrame, Updated } from "../../components/PageFrame";
 import { query, type PageProps } from "../../lib/page";
-import styles from "./weather.module.css";
 
 export const data = {
   weather: query("weather.forecast", { hours: 24, days: 3 }),
@@ -554,12 +554,12 @@ export const data = {
 type Data = typeof data;
 
 export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
-  const { value: f, fetchedAt, stale, error } = data.weather;
-  if (!f) return <div className={styles.screen}>Geen weerbericht{error ? `: ${error}` : ""}</div>;
+  const { value: f, error } = data.weather;
+  if (!f) return <PageFrame><Missing what="weerbericht" error={error} /></PageFrame>;
   return (
-    <div className={styles.screen}>
+    <PageFrame title={f.location.name} status={<Updated result={data.weather} timezone={timezone} />} gap={12}>
       <LineChart values={f.hourly.map((h) => h.temperature)} width={viewport.width - 64} height={120} />
-    </div>
+    </PageFrame>
   );
 }
 ```
@@ -633,8 +633,8 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 
 ### Shared code
 
-- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, temperatures and millimeters with a decimal comma), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency). Pure functions.
-- `pages/components/`: `LineChart` (a line over optional bars, as inline SVG), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time).
+- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency). Pure functions; layouts keep derivation here so it is tested.
+- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time).
 
 Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
 
