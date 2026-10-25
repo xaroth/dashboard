@@ -89,10 +89,10 @@ type Skill struct {
 	Finish *time.Time `json:"finish"`
 }
 
-func (*skills) Initialize(context.Context, *config) error { return nil }
+func (*skills) Initialize(context.Context, *config, module.Env) error { return nil }
 
-func (*skills) Enabled(ctx context.Context) (bool, error) {
-	chars, err := esi.Shared.Get(ctx).Characters(ctx, scopes)
+func (*skills) Enabled(ctx context.Context, q module.Query) (bool, error) {
+	chars, err := esi.Shared.Get(q).Characters(ctx, q, scopes)
 	if err != nil {
 		return false, err
 	}
@@ -101,22 +101,22 @@ func (*skills) Enabled(ctx context.Context) (bool, error) {
 
 // Update fetches every character's queue and skills. A character that fails
 // keeps its previous data with the error; the update fails only when all do.
-func (*skills) Update(ctx context.Context) error {
-	c := esi.Shared.Get(ctx)
-	chars, err := c.Characters(ctx, scopes)
+func (*skills) Update(ctx context.Context, u *module.Update) error {
+	c := esi.Shared.Get(u.Query)
+	chars, err := c.Characters(ctx, u.Query, scopes)
 	if err != nil {
 		return err
 	}
 	var prev snapshot
-	if _, err := module.LoadSnapshot(ctx, &prev); err != nil {
+	if _, err := u.LoadSnapshot(ctx, &prev); err != nil {
 		return err
 	}
-	now := module.Clock(ctx)()
+	now := u.Now()
 	out := snapshot{Characters: make([]stored, 0, len(chars))}
 	var errs []error
 	for _, ch := range chars {
 		s := stored{ID: ch.ID, Name: ch.Name}
-		d, err := fetch(ctx, c, ch.ID)
+		d, err := fetch(ctx, u, c, ch.ID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ch.Name, err))
 			s.Error = err.Error()
@@ -136,9 +136,9 @@ func (*skills) Update(ctx context.Context) error {
 	}
 	// Logged only here: the scheduler logs a failed update's error.
 	for _, err := range errs {
-		module.Logger(ctx).Warn("fetching skills", "err", err)
+		u.Log.Warn("fetching skills", "err", err)
 	}
-	return module.SaveSnapshot(ctx, out)
+	return u.SaveSnapshot(out)
 }
 
 // withoutAuth joins errs with module.ErrAuth hidden: ErrAuth pauses the
@@ -155,8 +155,8 @@ func withoutAuth(errs []error) error {
 	return errors.Join(out...)
 }
 
-func fetch(ctx context.Context, c *esi.Client, id int64) (fetched, error) {
-	tok, err := c.Token(ctx, id)
+func fetch(ctx context.Context, u *module.Update, c *esi.Client, id int64) (fetched, error) {
+	tok, err := c.Token(ctx, u, id)
 	if err != nil {
 		return fetched{}, err
 	}
@@ -250,16 +250,16 @@ type Character struct {
 // stored queue ages between updates: skills that finished by now are left
 // out of the queue here and added to the skill points. Skill names come from
 // the SDE.
-func (*skills) queue(ctx context.Context, p queueParams) ([]Character, error) {
+func (*skills) queue(ctx context.Context, q module.Query, p queueParams) ([]Character, error) {
 	if p.Skills < 0 || p.Skills > maxSkills {
 		return nil, fmt.Errorf("skills must be 0 to %d, got %d", maxSkills, p.Skills)
 	}
 	n := cmp.Or(p.Skills, 5)
 	var snap snapshot
-	if _, err := module.LoadSnapshot(ctx, &snap); err != nil {
+	if _, err := q.LoadSnapshot(ctx, &snap); err != nil {
 		return nil, err
 	}
-	now := module.Clock(ctx)()
+	now := q.Now()
 	out := make([]Character, 0, len(snap.Characters))
 	for _, s := range snap.Characters {
 		sp := make(map[int64]int64, len(s.Data.Skills))
@@ -290,11 +290,11 @@ func (*skills) queue(ctx context.Context, p queueParams) ([]Character, error) {
 		}
 		out = append(out, ch)
 	}
-	return out, name(ctx, out)
+	return out, name(ctx, q, out)
 }
 
 // name fills in the skill names from the SDE.
-func name(ctx context.Context, chars []Character) error {
+func name(ctx context.Context, q module.Query, chars []Character) error {
 	var ids []int64
 	for _, ch := range chars {
 		for _, k := range ch.Skills {
@@ -304,7 +304,7 @@ func name(ctx context.Context, chars []Character) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	types, err := sde.Shared.Get(ctx).Types(ctx, slices.Compact(slices.Sorted(slices.Values(ids))))
+	types, err := sde.Shared.Get(q).Types(ctx, q, slices.Compact(slices.Sorted(slices.Values(ids))))
 	if err != nil {
 		return err
 	}

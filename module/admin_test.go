@@ -22,28 +22,26 @@ type pagerConfig struct {
 	Fail bool `yaml:"fail"`
 }
 
-func (p *pager) Initialize(_ context.Context, cfg *pagerConfig) error {
+func (p *pager) Initialize(_ context.Context, cfg *pagerConfig, _ module.Env) error {
 	if cfg.Fail {
 		return errBadInit
 	}
 	return nil
 }
-func (*pager) Enabled(context.Context) (bool, error) { return false, nil }
-func (*pager) Update(ctx context.Context) error {
-	return module.SaveSnapshot(ctx, "saved by update")
+func (*pager) Enabled(context.Context, module.Query) (bool, error) { return false, nil }
+func (*pager) Update(_ context.Context, u *module.Update) error {
+	return u.SaveSnapshot("saved by update")
 }
 
-// ServeHTTP shows the page has the module's own context: the writer, its
-// shared values, a logger, its snapshot to read, but no snapshot to save
-// or next update to set, which belong to Update.
-func (*pager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeAdmin shows the page has the module's own Query: the writer, its
+// shared values, a logger and its snapshot.
+func (*pager) ServeAdmin(w http.ResponseWriter, r *http.Request, q module.Query) {
 	ctx := r.Context()
-	module.Logger(ctx).Info("page")
-	_, err := module.Database(ctx).ExecContext(ctx, "INSERT INTO test_items DEFAULT VALUES")
+	q.Log.Info("page")
+	_, err := q.DB.ExecContext(ctx, "INSERT INTO test_items DEFAULT VALUES")
 	var snap string
-	_, lerr := module.LoadSnapshot(ctx, &snap)
-	fmt.Fprintf(w, "%s %s %v %q %v | %v | %v", r.URL.Path, greetingShared.Get(ctx).Text, err, snap, lerr,
-		module.SaveSnapshot(ctx, "x"), module.NextUpdate(ctx, time.Minute))
+	_, lerr := q.LoadSnapshot(ctx, &snap)
+	fmt.Fprintf(w, "%s %s %v %q %v", r.URL.Path, greetingShared.Get(q).Text, err, snap, lerr)
 }
 
 func pagerRegistration(name string, opts ...module.Option) module.Registration {
@@ -55,12 +53,14 @@ func pagerRegistration(name string, opts ...module.Option) module.Registration {
 // module, served once, as a shared value.
 type ticker struct{}
 
-func (ticker) Update(context.Context) error { return nil }
+func (ticker) Update(context.Context, *module.Update) error { return nil }
 
-func (ticker) ServeHTTP(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ticker ", r.URL.Path) }
+func (ticker) ServeAdmin(w http.ResponseWriter, r *http.Request, _ module.Query) {
+	fmt.Fprint(w, "ticker ", r.URL.Path)
+}
 
 var tickerShared = module.DefineShared("ticker", func() *struct{} { return &struct{}{} },
-	func(context.Context, *struct{}, []struct{}) (ticker, error) { return ticker{}, nil },
+	func(context.Context, *struct{}, []struct{}, module.Env) (ticker, error) { return ticker{}, nil },
 	module.SharedSchedule(time.Hour, 2*time.Hour))
 
 func TestAdminPages(t *testing.T) {
@@ -99,7 +99,7 @@ func TestAdminPages(t *testing.T) {
 		code int
 		body string
 	}{
-		{"module", "/pages/x", http.StatusOK, `/x hello <nil> "saved by update" <nil> | snapshots are saved from Update | the next update is set from Update`},
+		{"module", "/pages/x", http.StatusOK, `/x hello <nil> "saved by update" <nil>`},
 		{"shared value", "/greeting/x", http.StatusOK, "/x hello 0 <nil>"},
 		{"scheduled shared value", "/ticker/x", http.StatusOK, "ticker /x"},
 		{"failed module", "/broken/x", http.StatusNotFound, "404 page not found\n"},

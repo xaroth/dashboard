@@ -99,7 +99,7 @@ func TestNewErrors(t *testing.T) {
 func TestNewRejectsReservedAdminPage(t *testing.T) {
 	t.Parallel()
 	images := module.DefineShared("images", func() *struct{} { return &struct{}{} },
-		func(context.Context, *struct{}, []struct{}) (loginsPage, error) { return loginsPage{}, nil })
+		func(context.Context, *struct{}, []struct{}, module.Env) (loginsPage, error) { return loginsPage{}, nil })
 	stub := render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "e1001/hello"}))
 	_, err := New(t.Context(), testConfig(t, "", ""), slog.New(slog.DiscardHandler),
 		WithRenderer(stub), WithRegistrations(adminRegistration("sun", module.WithShared(images))))

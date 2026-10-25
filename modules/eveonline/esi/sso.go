@@ -32,16 +32,16 @@ var pageHTML string
 
 var pageTmpl = template.Must(template.New("page").Parse(pageHTML))
 
-// ServeHTTP serves the characters page, the SSO login and its callback,
+// ServeAdmin serves the characters page, the SSO login and its callback,
 // under /eveonline_esi/ on the admin listener.
-func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (c *Client) ServeAdmin(w http.ResponseWriter, r *http.Request, q module.Query) {
 	switch r.URL.Path {
 	case "/":
-		c.page(w, r)
+		c.page(w, r, q)
 	case "/login":
-		c.login(w, r)
+		c.login(w, r, q)
 	case "/callback":
-		c.callback(w, r)
+		c.callback(w, r, q)
 	default:
 		http.NotFound(w, r)
 	}
@@ -56,11 +56,11 @@ type characterView struct {
 	AuthError string
 }
 
-func (c *Client) page(w http.ResponseWriter, r *http.Request) {
+func (c *Client) page(w http.ResponseWriter, r *http.Request, q module.Query) {
 	ctx := r.Context()
-	rows, err := New(module.Database(ctx)).ListCharacters(ctx)
+	rows, err := New(q.DB).ListCharacters(ctx)
 	if err != nil {
-		c.fail(w, r, http.StatusInternalServerError, fmt.Errorf("listing characters: %w", err))
+		c.fail(w, r, q, http.StatusInternalServerError, fmt.Errorf("listing characters: %w", err))
 		return
 	}
 	views := make([]characterView, 0, len(rows))
@@ -80,17 +80,17 @@ func (c *Client) page(w http.ResponseWriter, r *http.Request) {
 		"Characters": views,
 	})
 	if err != nil {
-		module.Logger(ctx).Error("rendering characters page", "err", err)
+		q.Log.Error("rendering characters page", "err", err)
 	}
 }
 
-func (c *Client) login(w http.ResponseWriter, r *http.Request) {
+func (c *Client) login(w http.ResponseWriter, r *http.Request, q module.Query) {
 	if c.cfg.ClientID == "" {
-		c.fail(w, r, http.StatusNotFound, errors.New("SSO is not configured: set client_id, client_secret and callback_url"))
+		c.fail(w, r, q, http.StatusNotFound, errors.New("SSO is not configured: set client_id, client_secret and callback_url"))
 		return
 	}
 	state := rand.Text()
-	now := module.Clock(r.Context())()
+	now := q.Now()
 	c.mu.Lock()
 	for s, exp := range c.states {
 		if now.After(exp) {
@@ -109,46 +109,46 @@ func (c *Client) login(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, ssoURL+"/v2/oauth/authorize?"+v.Encode(), http.StatusFound)
 }
 
-func (c *Client) callback(w http.ResponseWriter, r *http.Request) {
+func (c *Client) callback(w http.ResponseWriter, r *http.Request, q module.Query) {
 	ctx := r.Context()
-	q := r.URL.Query()
-	if e := q.Get("error"); e != "" {
-		c.fail(w, r, http.StatusBadRequest, fmt.Errorf("SSO login failed: %s", cmp.Or(q.Get("error_description"), e)))
+	params := r.URL.Query()
+	if e := params.Get("error"); e != "" {
+		c.fail(w, r, q, http.StatusBadRequest, fmt.Errorf("SSO login failed: %s", cmp.Or(params.Get("error_description"), e)))
 		return
 	}
-	now := module.Clock(ctx)()
+	now := q.Now()
 	c.mu.Lock()
-	exp, ok := c.states[q.Get("state")]
-	delete(c.states, q.Get("state"))
+	exp, ok := c.states[params.Get("state")]
+	delete(c.states, params.Get("state"))
 	c.mu.Unlock()
 	if !ok || now.After(exp) {
-		c.fail(w, r, http.StatusBadRequest, errors.New("unknown or expired login; start again"))
+		c.fail(w, r, q, http.StatusBadRequest, errors.New("unknown or expired login; start again"))
 		return
 	}
-	tok, err := c.requestToken(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {q.Get("code")}})
+	tok, err := c.requestToken(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {params.Get("code")}})
 	if err != nil {
-		c.fail(w, r, http.StatusBadGateway, err)
+		c.fail(w, r, q, http.StatusBadGateway, err)
 		return
 	}
 	ch, err := parseAccessToken(tok.AccessToken)
 	if err != nil {
-		c.fail(w, r, http.StatusBadGateway, err)
+		c.fail(w, r, q, http.StatusBadGateway, err)
 		return
 	}
-	err = New(module.Database(ctx)).SaveLogin(ctx, SaveLoginParams{
+	err = New(q.DB).SaveLogin(ctx, SaveLoginParams{
 		CharacterID: ch.id, Name: ch.name, Scopes: strings.Join(ch.scopes, " "),
 		RefreshToken: tok.RefreshToken, AccessToken: tok.AccessToken, ExpiresAt: tok.expiresAt(now),
 	})
 	if err != nil {
-		c.fail(w, r, http.StatusInternalServerError, fmt.Errorf("saving character: %w", err))
+		c.fail(w, r, q, http.StatusInternalServerError, fmt.Errorf("saving character: %w", err))
 		return
 	}
-	module.Logger(ctx).Info("character logged in", "character", ch.name, "id", ch.id, "scopes", len(ch.scopes))
+	q.Log.Info("character logged in", "character", ch.name, "id", ch.id, "scopes", len(ch.scopes))
 	http.Redirect(w, r, "/eveonline_esi/", http.StatusSeeOther)
 }
 
-func (c *Client) fail(w http.ResponseWriter, r *http.Request, code int, err error) {
-	module.Logger(r.Context()).Warn("eveonline page", "path", r.URL.Path, "err", err)
+func (c *Client) fail(w http.ResponseWriter, r *http.Request, q module.Query, code int, err error) {
+	q.Log.Warn("eveonline page", "path", r.URL.Path, "err", err)
 	http.Error(w, err.Error(), code)
 }
 

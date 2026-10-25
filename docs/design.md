@@ -140,7 +140,7 @@ Each update also writes [series](#time-series) at the service's clock (the DTU r
 
 Query `solar.power` takes [history params](#time-series) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
 
-The DTU is dialed through `module.Dialer(ctx)`. `solar.NewFake(tb, opts...)` (in `dtu_fake.go`) is a dialer for `module.Options` that serves FC03 at `solar.FakeHost` in-process over `net.Pipe`, so tests run inside a synctest bubble; `ExpectWrongByteCount`, `ExpectException` and `ExpectHang` make it send wrong byte counts, an exception, or hang.
+The DTU is dialed through `Update`'s `u.Dialer`. `solar.NewFake(tb, opts...)` (in `dtu_fake.go`) is a dialer for `module.Options` that serves FC03 at `solar.FakeHost` in-process over `net.Pipe`, so tests run inside a synctest bubble; `ExpectWrongByteCount`, `ExpectException` and `ExpectHang` make it send wrong byte counts, an exception, or hang.
 
 ### Car
 
@@ -211,19 +211,19 @@ var Module = module.Define[weather, config](
 	module.WithQuery("forecast", (*weather).forecast),
 )
 
-func (m *weather) Initialize(ctx context.Context, cfg *config) error {
+func (m *weather) Initialize(ctx context.Context, cfg *config, env module.Env) error {
 	m.cfg = cfg
 	return nil
 }
 
-func (m *weather) Enabled(ctx context.Context) (bool, error) {
+func (m *weather) Enabled(ctx context.Context, q module.Query) (bool, error) {
 	return m.cfg.Location != "", nil
 }
 
-func (m *weather) Update(ctx context.Context) error {
-	// geocode Location (cached in weather_locations), fetch the forecast,
-	// then store it as the module's snapshot.
-	return module.SaveSnapshot(ctx, forecast)
+func (m *weather) Update(ctx context.Context, u *module.Update) error {
+	// geocode Location (cached in weather_locations through u.DB), fetch
+	// the forecast with u.HTTP, then store it as the module's snapshot.
+	return u.SaveSnapshot(forecast)
 }
 ```
 
@@ -252,11 +252,11 @@ Deliberately small; capabilities are added when a module needs them.
 
 | Method | Purpose |
 | --- | --- |
-| `Initialize(ctx, *C) error` | Receive config, set up clients. The module's migrations have run by then. No network I/O: it runs for every registered module, configured or not. |
-| `Enabled(ctx) (bool, error)` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). An error, e.g. from reading its tables, marks the module failed and is retried with backoff, as from `Update`. |
-| `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
+| `Initialize(ctx, *C, module.Env) error` | Receive config, set up clients. The module's migrations have run by then. No network I/O: it runs for every registered module, configured or not. |
+| `Enabled(ctx, module.Query) (bool, error)` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). An error, e.g. from reading its tables, marks the module failed and is retried with backoff, as from `Update`. |
+| `Update(ctx, *module.Update) error` | Called by the scheduler: fetch from the source, write to storage. |
 
-A module whose type also implements `http.Handler` gets an admin page: it is served on the admin listener under `/<name>/` (the prefix stripped), with the module's context on the request (as in `Update`: the writer, its shared values), and linked from its name in the admin index's module table. Requests run concurrently with updates, so state they share goes through the database or is synchronized. A module whose `Initialize` failed is not served. A module or shared value page named after one of the admin UI's own path prefixes (`modules`, `simulate`, `images`, `preview`) stops startup. This is how settings like an API key are entered.
+A module whose type also implements `module.AdminHandler` (`ServeAdmin(w, r, q module.Query)`) gets an admin page: it is served on the admin listener under `/<name>/` (the prefix stripped), with the module's `Query` on the writer, its shared values included, and linked from its name in the admin index's module table. Requests run concurrently with updates, so state they share goes through the database or is synchronized. A module whose `Initialize` failed is not served. A module or shared value page named after one of the admin UI's own path prefixes (`modules`, `simulate`, `images`, `preview`) stops startup. This is how settings like an API key are entered.
 
 Options: `WithUpdateInterval` (default 15 minutes), `WithStaleAfter` (default 1 hour), `WithQuery` (see [Queries](#queries)), `WithMigrations` (see [SQL files](#sql-files)), `WithShared` (see [Shared values](#shared-values)).
 
@@ -282,11 +282,19 @@ modules:
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Dialer(ctx)` (for sources that are not HTTP), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `module.NextUpdate(ctx, d)` (from `Update`) runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual (the most recent success decides), the last call wins, and it has no effect on the backoff after a failure. A delay longer than `stale_after` shows the data as stale while the module waits.
+Dependencies are typed arguments, one type per access level, so a call can only do what its path allows and a missing dependency is a compile error. `ctx` carries only cancellation and the trace.
+
+- `module.Env` (`Initialize`, shared value builds): `Log`, `HTTP` (30 s timeout; calls are traced as children of the update or query), `Dialer` (for sources that are not HTTP), `Now`.
+- `module.Query` (queries, `Enabled`, admin pages, `Versioned.Version`): `Env` plus `DB`, `LoadSnapshot(ctx, &v)`, `QuerySeries` and the module's shared values. `DB` is the read-only pool, except on admin pages, which get the writer to store settings.
+- `*module.Update` (`Update`): `Query` on the writer plus the writes, `SaveSnapshot(v)`, `NextUpdate(d)` and `AddSample`. Helpers that only read take `u.Query`.
+
+Query paths have no write methods: snapshots, the next update and series samples are written only through `*module.Update`. Module helpers take what they use (`*http.Client`, `module.ContextDialer`, `*sql.DB`) rather than a whole handle, so they are tested without a `Set`.
+
+`u.SaveSnapshot(v)` and `q.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `u.NextUpdate(d)` runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual (the most recent success decides), the last call wins, and it has no effect on the backoff after a failure. A delay longer than `stale_after` shows the data as stale while the module waits.
 
 ### Shared values
 
-A value several modules use, such as an API client, is defined once with `module.DefineShared` and configured once, under `modules.<name>` like a module. Modules that use it declare it with `module.WithShared`, optionally with declarations of type `D` (e.g. the API scopes they need), and read it from their context with `Get`:
+A value several modules use, such as an API client, is defined once with `module.DefineShared` and configured once, under `modules.<name>` like a module. Modules that use it declare it with `module.WithShared`, optionally with declarations of type `D` (e.g. the API scopes they need), and read it with `Get(q)`, passing their `Query` (`u.Query` from `Update`):
 
 ```go
 package esi
@@ -294,7 +302,7 @@ package esi
 type Scopes []string
 
 var Shared = module.DefineShared("eveonline_esi", defaultConfig,
-	func(ctx context.Context, cfg *config, decls []Scopes) (*Client, error) { ... },
+	func(ctx context.Context, cfg *config, decls []Scopes, env module.Env) (*Client, error) { ... },
 	module.SharedMigrations(migrations))
 ```
 
@@ -304,22 +312,22 @@ package skills
 var Module = module.Define[skills, config]("eveonline_skills", defaultConfig,
 	module.WithShared(esi.Shared, esi.Scopes{"esi-skills.read_skills.v1"}))
 
-func (*skills) Update(ctx context.Context) error {
-	resp, err := getskills.Request(ctx, esi.Shared.Get(ctx), ...)
+func (*skills) Update(ctx context.Context, u *module.Update) error {
+	resp, err := getskills.Request(ctx, esi.Shared.Get(u.Query), ...)
 	...
 }
 ```
 
-- `Load` builds each shared value once, after migrations and before any `Initialize`, and only if a registered module declares it. The build function gets the decoded config, every declaring module's declarations in module name order, and a context with `Logger`, `HTTPClient` and `Clock`; like `Initialize`, it does no network I/O.
-- `SharedMigrations` gives a shared value tables, migrated like a module's with the shared value's name as owner. It reaches them through `module.Database(ctx)` of the context it is called with: the writer in a module's or its own `Update`, the read-only pool in queries and `Version`.
-- A shared value that is an `http.Handler` is served on the admin listener under `/<name>/` (the prefix stripped), with `Database` (the writer), `Logger`, `HTTPClient` and `Clock` on the request context, and linked from the admin index under Shared. This is how logins work.
+- `Load` builds each shared value once, after migrations and before any `Initialize`, and only if a registered module declares it. The build function gets the decoded config, every declaring module's declarations in module name order, and an `Env`; like `Initialize`, it does no network I/O.
+- `SharedMigrations` gives a shared value tables, migrated like a module's with the shared value's name as owner. Its methods reach them through the `DB` of the `Query` or `*Update` they are passed: the writer in a module's or its own `Update`, the read-only pool in queries and `Version`. A method that writes takes `*module.Update`, as `esi.Client.Token` does.
+- A shared value that is a `module.AdminHandler` is served on the admin listener under `/<name>/` (the prefix stripped), with a `Query` on the writer, without shared values, and linked from the admin index under Shared. This is how logins work.
 - The config section follows the module rules (defaults, unknown keys stop startup); it has a `schedule` key only when the value has a schedule (below). A section for a shared value no module declares is an unknown module.
 - A build error turns off every module that declares the value, as an `Initialize` error does; the error is prefixed with the shared value's name.
 - `Get` in a module that did not declare the value panics, which surfaces as an error from that call. A shared value's name may not be a module's name.
-- A shared value that implements `module.Versioned` reports the version of the source it serves (`Version(ctx)`, with the read-only pool as `Database`); the admin UI lists every shared value with its version and build error under Shared.
+- A shared value that implements `module.Versioned` reports the version of the source it serves (`Version(ctx, q)`, `q` on the read-only pool); the admin UI lists every shared value with its version and build error under Shared.
 - Shared values have no snapshot or queries.
 
-`module.SharedSchedule(interval, staleAfter)` gives a shared value a schedule; it must implement `module.Updater` (`Update(ctx) error`), checked when it is defined. It runs like a module under the shared value's name: same status in the admin UI, backoff, `ErrAuth`, Update now, `module_state` row, metrics, 2-minute update timeout and `schedule` config key. `module.SharedUpdateTimeout(d)` raises the timeout. It is always enabled. A build error lists it as failed to initialize. The SDE uses this to check for new builds.
+`module.SharedSchedule(interval, staleAfter)` gives a shared value a schedule; it must implement `module.Updater` (`Update(ctx, *module.Update) error`), checked when it is defined. It runs like a module under the shared value's name: same status in the admin UI, backoff, `ErrAuth`, Update now, `module_state` row, metrics, 2-minute update timeout and `schedule` config key. `module.SharedUpdateTimeout(d)` raises the timeout. It is always enabled. A build error lists it as failed to initialize. The SDE uses this to check for new builds.
 
 ### EVE Online
 
@@ -342,13 +350,13 @@ Characters:
 
 - Modules declare the scopes they need: `module.WithShared(esi.Shared, esi.Scopes{...})`. A login asks for every declared scope.
 - `/eveonline_esi/` on the admin listener lists the characters with the declared scopes they have not granted, their token expiry and a rejected refresh. "Log in a character" goes to EVE SSO; the callback stores the character, its granted scopes and tokens in `eveonline_esi_characters`. Logging in a character again replaces its tokens and scopes and clears its error. Pending logins live in memory for 10 minutes.
-- `Client.Characters(ctx, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it is used from `Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token. A refresh saves only if the stored refresh token is still the one it used; otherwise a login replaced it meanwhile, and the token reloads the login's.
+- `Client.Characters(ctx, q, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, u, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it takes `*module.Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token. A refresh saves only if the stored refresh token is still the one it used; otherwise a login replaced it meanwhile, and the token reloads the login's.
 - A rejected refresh (`invalid_grant`, `invalid_client`) is recorded on the character and fails the update with `module.ErrAuth`. After logging in again, Update now on each affected module resumes it.
 - The access token's claims (character ID, name, scopes) are read without checking the signature: the token comes straight from the token endpoint over TLS, authenticated with the client secret.
 
 #### Static data
 
-`sde.Shared` (`*sde.Store`, package `modules/eveonline/sde`, no config keys) imports the datasets modules declare from the Static Data Export into typed tables, checking for a new build every hour, and answers lookups such as `Types(ctx, ids)`. Its version in the admin UI is the imported build. Datasets, tables, update rules and the test fake: [sde.md](sde.md).
+`sde.Shared` (`*sde.Store`, package `modules/eveonline/sde`, no config keys) imports the datasets modules declare from the Static Data Export into typed tables, checking for a new build every hour, and answers lookups such as `Types(ctx, q, ids)`. Its version in the admin UI is the imported build. Datasets, tables, update rules and the test fake: [sde.md](sde.md).
 
 #### Server status
 
@@ -397,7 +405,7 @@ sqlc.yaml                       one entry per owner
 
 - **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then `series.Open` the series migrations (owner `series`), then each shared value's, then each module's, before any `Initialize`. `device.Load` validates its options (positive intervals, pages per device, a known power) and runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
-- **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `module.SaveSnapshot` and `module.LoadSnapshot`.
+- **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `Update.SaveSnapshot` and `Query.LoadSnapshot`.
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
 - **Times** are `TIMESTAMP` columns in UTC, stored as SQLite date text (driver option `_time_format=sqlite`), so SQLite's date functions work on them.
 
@@ -415,8 +423,8 @@ var Module = module.Define[weather, config]("weather", defaultConfig,
 ### Connections
 
 - **Page size**: on a new file, a bootstrap connection runs `page_size=16384` and then `journal_mode=WAL`; the WAL switch writes the header with that page size, and after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
-- **Writer**: one connection (`MaxOpenConns(1)`), used by `Initialize`, `Update`, module state, device API keys (read once per device, then cached in memory: keys never change) and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
-- **Reader**: a pool of 4 opened with `query_only(1)`, used by query functions and status reads. `module.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
+- **Writer**: one connection (`MaxOpenConns(1)`), used by `Update`, admin pages, module state, device API keys (read once per device, then cached in memory: keys never change) and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
+- **Reader**: a pool of 4 opened with `query_only(1)`, used by query functions, `Enabled`, `Version` and status reads. `Query.DB` is the reader in queries and the writer in `Update`, so a query cannot write.
 - DSN pragmas apply to every new pooled connection: `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared); the writer also sets `journal_mode=WAL` and `synchronous=NORMAL`. Driver options on both: `_time_format=sqlite` and `_timezone=UTC`, so every time is converted to UTC before it is written.
 
 ### Write load
@@ -435,7 +443,7 @@ Modules that need more (caches, tokens, history) define their own tables in thei
 
 ### Time series
 
-Samples taken every minute or so (power, meter readings) go to the service-owned series tables rather than module tables. A module declares each series with `module.WithSeries(name, kind)`, stored as `<module>.<name>`, writes with `module.Series(ctx).Add(name, t, v)` from `Update` and reads with `module.Series(ctx).Query(ctx, name, from, to, step)` in its queries. A module may not be named `series` or `storage`: those own the service's migrations.
+Samples taken every minute or so (power, meter readings) go to the service-owned series tables rather than module tables. A module declares each series with `module.WithSeries(name, kind)`, stored as `<module>.<name>`, writes with `u.AddSample(name, t, v)` from `Update` and reads with `q.QuerySeries(ctx, name, from, to, step)` in its queries. A module may not be named `series` or `storage`: those own the service's migrations.
 
 | Table | Rows |
 | --- | --- |
@@ -592,9 +600,9 @@ var Module = module.Define[weather, config](
 	module.WithQuery("forecast", (*weather).forecast),
 )
 
-func (m *weather) forecast(ctx context.Context, p forecastParams) (*Forecast, error) {
+func (m *weather) forecast(ctx context.Context, q module.Query, p forecastParams) (*Forecast, error) {
 	var f Forecast
-	ok, err := module.LoadSnapshot(ctx, &f)
+	ok, err := q.LoadSnapshot(ctx, &f)
 	// trim to p.Hours and p.Days from now
 }
 ```
@@ -677,7 +685,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `GET /simulate/{device}` | Simulator page for a device |
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |
-| `/{name}/...` | Pages of modules and shared values that are `http.Handler`s, e.g. `/eveonline_esi/` (characters, SSO login and callback); linked from `/` in the module and Shared tables |
+| `/{name}/...` | Pages of modules and shared values that are `module.AdminHandler`s, e.g. `/eveonline_esi/` (characters, SSO login and callback); linked from `/` in the module and Shared tables |
 | `GET /healthz` | Liveness, `ok`; `dashboard healthz [addr]` (default `127.0.0.1:8081`) checks it for the image's `HEALTHCHECK` |
 | `GET /metrics` | Prometheus metrics, see [Observability](#observability) |
 

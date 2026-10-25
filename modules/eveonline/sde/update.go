@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,16 +21,16 @@ const baseURL = "https://developers.eveonline.com/static-data/tranquility"
 
 // Update imports the latest build when it is not the imported one, or when
 // the imported build lacks a declared dataset.
-func (s *Store) Update(ctx context.Context) error {
+func (s *Store) Update(ctx context.Context, u *module.Update) error {
 	latest, err := s.latest(ctx)
 	if err != nil {
 		return err
 	}
-	cur, ok, err := s.imported(ctx)
+	cur, ok, err := s.imported(ctx, u.DB)
 	if err != nil {
 		return err
 	}
-	have, err := New(module.Database(ctx)).ListDatasets(ctx)
+	have, err := New(u.DB).ListDatasets(ctx)
 	if err != nil {
 		return fmt.Errorf("reading SDE datasets: %w", err)
 	}
@@ -37,10 +38,10 @@ func (s *Store) Update(ctx context.Context) error {
 		return nil
 	}
 	start := time.Now()
-	if err := s.importBuild(ctx, latest.BuildNumber); err != nil {
+	if err := s.importBuild(ctx, u.DB, latest.BuildNumber); err != nil {
 		return fmt.Errorf("importing build %d: %w", latest.BuildNumber, err)
 	}
-	module.Logger(ctx).Info("imported SDE", "build", latest.BuildNumber, "previous", cur.BuildNumber, "datasets", s.datasets, "took", time.Since(start))
+	u.Log.Info("imported SDE", "build", latest.BuildNumber, "previous", cur.BuildNumber, "datasets", s.datasets, "took", time.Since(start))
 	return nil
 }
 
@@ -102,7 +103,7 @@ func findBuild(r io.Reader) (buildRecord, error) {
 
 // importBuild downloads the build's archive to a temporary file, since zip
 // needs random access, and replaces the tables with it.
-func (s *Store) importBuild(ctx context.Context, build int64) error {
+func (s *Store) importBuild(ctx context.Context, db *sql.DB, build int64) error {
 	f, err := os.CreateTemp("", "eveonline-sde-*.zip")
 	if err != nil {
 		return fmt.Errorf("creating archive file: %w", err)
@@ -122,13 +123,13 @@ func (s *Store) importBuild(ctx context.Context, build int64) error {
 	if err != nil {
 		return fmt.Errorf("reading archive: %w", err)
 	}
-	return s.replace(ctx, zr, build)
+	return s.replace(ctx, db, zr, build)
 }
 
 // replace replaces the tables with the archive's build of the declared
 // datasets in one transaction, so readers see either the previous build or
 // this one. Tables of other datasets are emptied.
-func (s *Store) replace(ctx context.Context, zr *zip.Reader, want int64) error {
+func (s *Store) replace(ctx context.Context, db *sql.DB, zr *zip.Reader, want int64) error {
 	f, err := zr.Open("_sde.jsonl")
 	if err != nil {
 		return err
@@ -142,7 +143,7 @@ func (s *Store) replace(ctx context.Context, zr *zip.Reader, want int64) error {
 		return fmt.Errorf("archive has build %d", build.BuildNumber)
 	}
 
-	tx, err := module.Database(ctx).BeginTx(ctx, nil)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

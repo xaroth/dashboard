@@ -51,7 +51,7 @@ var Module = module.Define[p1, config](
 	module.WithSeries("gas", series.Counter),
 )
 
-func (m *p1) Initialize(_ context.Context, cfg *config) error {
+func (m *p1) Initialize(_ context.Context, cfg *config, _ module.Env) error {
 	if cfg.URL != "" {
 		u, err := url.Parse(cfg.URL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -62,18 +62,18 @@ func (m *p1) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *p1) Enabled(context.Context) (bool, error) { return m.url != "", nil }
+func (m *p1) Enabled(context.Context, module.Query) (bool, error) { return m.url != "", nil }
 
-func (m *p1) Update(ctx context.Context) error {
-	r, err := fetch(ctx, m.url)
+func (m *p1) Update(ctx context.Context, u *module.Update) error {
+	r, err := fetch(ctx, u.HTTP, m.url)
 	if err != nil {
 		return err
 	}
-	now := module.Clock(ctx)()
+	now := u.Now()
 	if off := r.MeasuredAt.Sub(now).Abs(); off > maxClockOffset {
 		return fmt.Errorf("meter time %s is %s off the clock", r.MeasuredAt.Format(time.RFC3339), off.Round(time.Second))
 	}
-	err = New(module.Database(ctx)).StartDay(ctx, StartDayParams{
+	err = New(u.DB).StartDay(ctx, StartDayParams{
 		Date: r.Date, ReadAt: r.MeasuredAt,
 		DeliveredT1: r.DeliveredTariff1, DeliveredT2: r.DeliveredTariff2,
 		ReturnedT1: r.ReturnedTariff1, ReturnedT2: r.ReturnedTariff2,
@@ -88,44 +88,44 @@ func (m *p1) Update(ctx context.Context) error {
 		"returned": r.ReturnedTariff1 + r.ReturnedTariff2,
 	}
 	for name, v := range samples {
-		if err := module.Series(ctx).Add(name, r.MeasuredAt, v); err != nil {
+		if err := u.AddSample(name, r.MeasuredAt, v); err != nil {
 			return err
 		}
 	}
-	if err := addGas(ctx, r); err != nil {
+	if err := addGas(ctx, u, r); err != nil {
 		return err
 	}
-	return module.SaveSnapshot(ctx, r)
+	return u.SaveSnapshot(r)
 }
 
 // addGas adds the gas sample at the gas meter's time. A reading the dongle
 // repeats is skipped: it would stretch the last value over the hour, or past
 // a gas meter that stopped reporting.
-func addGas(ctx context.Context, r Reading) error {
+func addGas(ctx context.Context, u *module.Update, r Reading) error {
 	if r.Gas == nil {
 		return nil
 	}
 	if r.GasAt == nil {
-		return module.Series(ctx).Add("gas", r.MeasuredAt, *r.Gas)
+		return u.AddSample("gas", r.MeasuredAt, *r.Gas)
 	}
 	var prev Reading
-	if _, err := module.LoadSnapshot(ctx, &prev); err != nil {
+	if _, err := u.LoadSnapshot(ctx, &prev); err != nil {
 		return err
 	}
 	if prev.GasAt != nil && !r.GasAt.After(*prev.GasAt) {
 		return nil
 	}
-	return module.Series(ctx).Add("gas", *r.GasAt, *r.Gas)
+	return u.AddSample("gas", *r.GasAt, *r.Gas)
 }
 
 // flow returns the average flow in kW per step over the last hours,
 // positive when taking from the net.
-func (*p1) flow(ctx context.Context, p series.HistoryParams) ([]series.Point, error) {
-	from, to, step, err := p.Range(module.Clock(ctx)())
+func (*p1) flow(ctx context.Context, q module.Query, p series.HistoryParams) ([]series.Point, error) {
+	from, to, step, err := p.Range(q.Now())
 	if err != nil {
 		return nil, err
 	}
-	return module.Series(ctx).Query(ctx, "flow", from, to, step)
+	return q.QuerySeries(ctx, "flow", from, to, step)
 }
 
 // Actual is the latest reading with usage today and yesterday.
@@ -153,9 +153,9 @@ type actualParams struct{}
 // actual returns the latest reading. Today runs from the first reading of
 // the meter's current day to the latest; yesterday from the first reading of
 // the day before to the first of today. A day without a reading is null.
-func (*p1) actual(ctx context.Context, _ actualParams) (*Actual, error) {
+func (*p1) actual(ctx context.Context, q module.Query, _ actualParams) (*Actual, error) {
 	var r Reading
-	ok, err := module.LoadSnapshot(ctx, &r)
+	ok, err := q.LoadSnapshot(ctx, &r)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func (*p1) actual(ctx context.Context, _ actualParams) (*Actual, error) {
 		return nil, fmt.Errorf("reading date: %w", err)
 	}
 	yesterday := today.AddDate(0, 0, -1).Format(time.DateOnly)
-	rows, err := New(module.Database(ctx)).ListDays(ctx, yesterday)
+	rows, err := New(q.DB).ListDays(ctx, yesterday)
 	if err != nil {
 		return nil, fmt.Errorf("reading days: %w", err)
 	}

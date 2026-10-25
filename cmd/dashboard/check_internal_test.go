@@ -15,15 +15,15 @@ type clockConfig struct{}
 
 type clockModule struct{}
 
-func (*clockModule) Initialize(context.Context, *clockConfig) error { return nil }
-func (*clockModule) Enabled(context.Context) (bool, error)          { return false, nil }
-func (*clockModule) Update(context.Context) error                   { return nil }
+func (*clockModule) Initialize(context.Context, *clockConfig, module.Env) error { return nil }
+func (*clockModule) Enabled(context.Context, module.Query) (bool, error)        { return false, nil }
+func (*clockModule) Update(context.Context, *module.Update) error               { return nil }
 
 type ticksParams struct {
 	Limit int `json:"limit"`
 }
 
-func (*clockModule) ticks(_ context.Context, p ticksParams) ([]int, error) {
+func (*clockModule) ticks(_ context.Context, _ module.Query, p ticksParams) ([]int, error) {
 	return make([]int, p.Limit), nil
 }
 
