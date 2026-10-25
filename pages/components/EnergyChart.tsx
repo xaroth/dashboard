@@ -32,7 +32,8 @@ export function EnergyChart({ solar, flow, start, end, step, min, max, width, he
         return (
           <polygon
             key={`s${i}`}
-            points={[xy(first.t, 0), ...r.map((p) => xy(p.t, p.v)), xy(last.t, 0)].join(" ")}
+            // Edges half a step out, so a single bucket still has width.
+            points={[xy(first.t - step / 2, 0), xy(first.t - step / 2, first.v), ...r.map((p) => xy(p.t, p.v)), xy(last.t + step / 2, last.v), xy(last.t + step / 2, 0)].join(" ")}
             fill="#aaa"
           />
         );

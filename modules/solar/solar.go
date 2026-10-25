@@ -252,6 +252,9 @@ func (*solar) power(ctx context.Context, p powerParams) ([]series.Point, error) 
 	if hours < 1 || hours > 168 {
 		return nil, fmt.Errorf("hours must be 1 to 168, got %d", hours)
 	}
+	if step < 1 || step > 1440 {
+		return nil, fmt.Errorf("stepMinutes must be 1 to 1440, got %d", step)
+	}
 	now := module.Clock(ctx)()
 	// Up to a second past now: the bucket holding now has the latest sample.
 	return module.Series(ctx).Query(ctx, "power", now.Add(-time.Duration(hours)*time.Hour), now.Add(time.Second), time.Duration(step)*time.Minute)

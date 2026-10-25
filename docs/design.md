@@ -110,7 +110,7 @@ Query `p1.actual` takes no params and returns:
 
 Each update also writes [series](#time-series) at the meter's time: `p1.flow` (kW, rate, as `flowKw`), and the counters `p1.taken` and `p1.returned` (kWh, both tariffs) and `p1.gas` (m³, when reported).
 
-Query `p1.flow` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15) and returns the average flow in kW per step up to now, as series points.
+Query `p1.flow` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15, at most 1440) and returns the average flow in kW per step up to now, as series points.
 
 ### Solar
 
@@ -133,7 +133,7 @@ Query `solar.production` takes no params and returns `powerW` (the sum over all 
 
 Each update also writes [series](#time-series) at the service's clock (the DTU reports no measurement time): `solar.power` (W, rate, the sum over all inputs) and `solar.total` (Wh, counter, the inputs' lifetime totals summed).
 
-Query `solar.power` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
+Query `solar.power` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15, at most 1440) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
 
 `solar.NewFakeDTU(tb)` (test only, in `fake_test.go`) serves FC03 in-process over `net.Pipe`, so tests run inside a synctest bubble; it can send wrong byte counts, an exception, or hang.
 
