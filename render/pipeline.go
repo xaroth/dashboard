@@ -111,6 +111,7 @@ func (p *Pipeline) Props(ctx context.Context, t screen.Target, page string) (Pro
 	// Like a failing query, unreadable module states must not fail the page.
 	stale, err := p.resolver.StaleModules(ctx)
 	if err != nil {
+		trace.SpanFromContext(ctx).RecordError(err)
 		stale = []string{}
 	}
 	return Props{

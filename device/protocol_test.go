@@ -180,8 +180,8 @@ func TestSetup(t *testing.T) {
 			if code != http.StatusOK {
 				t.Errorf("got HTTP %d, want 200", code)
 			}
-			if key, ok := body["api_key"].(string); testCase.want["status"] == float64(200) && len(key) != 32 {
-				t.Errorf("got api_key %q (%v), want 32 hex", key, ok)
+			if key, ok := body["api_key"].(string); testCase.want["status"] == float64(200) && len(key) != 26 {
+				t.Errorf("got api_key %q (%v), want 26 chars", key, ok)
 			}
 			if diff := cmp.Diff(testCase.want, body, cmpopts.IgnoreMapEntries(func(k string, _ any) bool { return k == "api_key" })); diff != "" {
 				t.Errorf("body (-want +got):\n%s", diff)

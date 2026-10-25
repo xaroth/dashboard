@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/xaroth/dashboard/render"
 	"github.com/xaroth/dashboard/screen"
@@ -63,6 +65,26 @@ func TestPipelineProps(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("props (-want +got):\n%s", diff)
+	}
+}
+
+func TestPipelinePropsStaleError(t *testing.T) {
+	t.Parallel()
+	loc := time.FixedZone("test", 0)
+	res := render.NewFakeResolver(t, render.ExpectStaleError(errors.New("reading module states")))
+	p := render.NewPipeline(render.NewFakeRenderer(t, render.ExpectPages(testPages...)), res, loc, func() time.Time { return testNow })
+	spans := tracetest.NewSpanRecorder()
+	ctx, span := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans)).Tracer("test").Start(t.Context(), "test")
+	got, err := p.Props(ctx, screen.Target{Name: "hallway", Model: "reterminal_e1001"}, "hello")
+	span.End()
+	if err != nil {
+		t.Fatalf("Props: %v", err)
+	}
+	if got.System.StaleModules == nil || len(got.System.StaleModules) != 0 {
+		t.Errorf("got stale modules %#v, want empty", got.System.StaleModules)
+	}
+	if ev := spans.Ended()[0].Events(); len(ev) != 1 || ev[0].Name != "exception" {
+		t.Errorf("got span events %+v, want the error recorded", ev)
 	}
 }
 

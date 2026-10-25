@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"embed"
-	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -220,8 +219,4 @@ func (s *state) target() screen.Target {
 	return screen.Target{Name: s.cfg.Name, Model: cmp.Or(s.model, DefaultModel), Rotation: s.cfg.Rotation, Wake: s.wake, Params: s.cfg.Params}
 }
 
-func newAPIKey() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
+func newAPIKey() string { return rand.Text() }

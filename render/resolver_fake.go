@@ -11,10 +11,11 @@ import (
 // FakeResolver answers queries from results keyed "module.query" and records
 // the params it was asked with. Unknown queries resolve to an error result.
 type FakeResolver struct {
-	mu      sync.Mutex
-	results map[string]Result
-	stale   []string
-	asked   map[string]map[string]any
+	mu       sync.Mutex
+	results  map[string]Result
+	stale    []string
+	staleErr error
+	asked    map[string]map[string]any
 }
 
 // FakeResolverOption sets up a FakeResolver.
@@ -52,7 +53,15 @@ func (f *FakeResolver) Resolve(_ context.Context, q QueryDescriptor) Result {
 	return Result{Stale: true, Error: &msg}
 }
 
+// ExpectStaleError makes StaleModules fail with err.
+func ExpectStaleError(err error) FakeResolverOption {
+	return func(_ testing.TB, f *FakeResolver) { f.staleErr = err }
+}
+
 func (f *FakeResolver) StaleModules(context.Context) ([]string, error) {
+	if f.staleErr != nil {
+		return nil, f.staleErr
+	}
 	return slices.Clone(f.stale), nil
 }
 

@@ -119,7 +119,6 @@ func (*skills) Update(ctx context.Context) error {
 		d, err := fetch(ctx, c, ch.ID)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ch.Name, err))
-			module.Logger(ctx).Warn("fetching skills", "character", ch.Name, "err", err)
 			s.Error = err.Error()
 			if i := slices.IndexFunc(prev.Characters, func(p stored) bool { return p.ID == ch.ID }); i >= 0 {
 				s.FetchedAt, s.Data = prev.Characters[i].FetchedAt, prev.Characters[i].Data
@@ -130,15 +129,30 @@ func (*skills) Update(ctx context.Context) error {
 		out.Characters = append(out.Characters, s)
 	}
 	if len(chars) > 0 && len(errs) == len(chars) {
-		err := errors.Join(errs...)
-		// ErrAuth pauses the module until a manual update; only pause when
-		// every character needs to log in again.
 		if !slices.ContainsFunc(errs, func(e error) bool { return !errors.Is(e, module.ErrAuth) }) {
-			return err
+			return errors.Join(errs...)
 		}
-		return errors.New(err.Error())
+		return withoutAuth(errs)
+	}
+	// Logged only here: the scheduler logs a failed update's error.
+	for _, err := range errs {
+		module.Logger(ctx).Warn("fetching skills", "err", err)
 	}
 	return module.SaveSnapshot(ctx, out)
+}
+
+// withoutAuth joins errs with module.ErrAuth hidden: ErrAuth pauses the
+// module until a manual update, which only fits when every character needs
+// to log in again. Other errors stay matchable.
+func withoutAuth(errs []error) error {
+	out := make([]error, 0, len(errs))
+	for _, err := range errs {
+		if errors.Is(err, module.ErrAuth) {
+			err = errors.New(err.Error())
+		}
+		out = append(out, err)
+	}
+	return errors.Join(out...)
 }
 
 func fetch(ctx context.Context, c *esi.Client, id int64) (fetched, error) {
