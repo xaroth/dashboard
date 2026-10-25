@@ -20,7 +20,7 @@ modules:
 
 ### Implementation order
 
-1. `p1` and `solar` write series, below. S-Miles Cloud as a fallback source for `solar` if the DTU's Modbus proves unreliable.
+1. S-Miles Cloud as a fallback source for `solar` if the DTU's Modbus proves unreliable.
 
 Authentication errors from these sources (HTTP 401/403) are returned as `module.ErrAuth`.
 
@@ -30,7 +30,7 @@ Added to the module contract when a module needs them: active hours, backfill ho
 
 ## Time series
 
-`p1` and `solar` write series (P1 flow and meter readings, solar power) and expose queries over them for charts on the energy page. Device health writes battery voltage as a series.
+Device health writes battery voltage as a series.
 
 Write load estimate for the series flush: one flush per minute touching a handful of pages is roughly 100-200 KB per minute including WAL and checkpoint, about 50-100 GB per year. Consumer SSDs are rated for hundreds of TB written. The estimate is to be confirmed by measuring bytes written per day.
 

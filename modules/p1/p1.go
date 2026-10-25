@@ -3,6 +3,7 @@
 package p1
 
 import (
+	"cmp"
 	"context"
 	"embed"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/series"
 )
 
 //go:embed sql/migrations/*.sql
@@ -43,6 +45,11 @@ var Module = module.Define[p1, config](
 	module.WithStaleAfter(10*time.Minute),
 	module.WithMigrations(migrations),
 	module.WithQuery("actual", (*p1).actual),
+	module.WithQuery("flow", (*p1).flow),
+	module.WithSeries("flow", series.Rate),
+	module.WithSeries("taken", series.Counter),
+	module.WithSeries("returned", series.Counter),
+	module.WithSeries("gas", series.Counter),
 )
 
 func (m *p1) Initialize(_ context.Context, cfg *config) error {
@@ -76,7 +83,39 @@ func (m *p1) Update(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("saving start of day: %w", err)
 	}
+	samples := map[string]float64{
+		"flow":     r.PowerDelivered - r.PowerReturned,
+		"taken":    r.DeliveredTariff1 + r.DeliveredTariff2,
+		"returned": r.ReturnedTariff1 + r.ReturnedTariff2,
+	}
+	if r.Gas != nil {
+		samples["gas"] = *r.Gas
+	}
+	for name, v := range samples {
+		if err := module.Series(ctx).Add(name, r.MeasuredAt, v); err != nil {
+			return err
+		}
+	}
 	return module.SaveSnapshot(ctx, r)
+}
+
+type historyParams struct {
+	// Hours back from now, 1 to 168.
+	Hours int `json:"hours"`
+	// StepMinutes is the bucket size; it divides a day.
+	StepMinutes int `json:"stepMinutes"`
+}
+
+// flow returns the average flow in kW per step over the last hours,
+// positive when taking from the net.
+func (*p1) flow(ctx context.Context, p historyParams) ([]series.Point, error) {
+	hours, step := cmp.Or(p.Hours, 24), cmp.Or(p.StepMinutes, 15)
+	if hours < 1 || hours > 168 {
+		return nil, fmt.Errorf("hours must be 1 to 168, got %d", hours)
+	}
+	now := module.Clock(ctx)()
+	// Up to a second past now: the bucket holding now has the latest sample.
+	return module.Series(ctx).Query(ctx, "flow", now.Add(-time.Duration(hours)*time.Hour), now.Add(time.Second), time.Duration(step)*time.Minute)
 }
 
 // Actual is the latest reading with usage today and yesterday.

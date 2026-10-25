@@ -108,6 +108,10 @@ Query `p1.actual` takes no params and returns:
 - `flowKw`: power delivered minus power returned; positive is taken from the net, negative is returned to it.
 - `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter or when the gas counter went down; the meter reports gas every 5 minutes, DSMR 4 meters hourly, so gas lags `to`). A period is null when a day has no row, or when an electricity counter went down in it (meter replaced).
 
+Each update also writes [series](#time-series) at the meter's time: `p1.flow` (kW, rate, as `flowKw`), and the counters `p1.taken` and `p1.returned` (kWh, both tariffs) and `p1.gas` (m³, when reported).
+
+Query `p1.flow` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15) and returns the average flow in kW per step up to now, as series points.
+
 ### Solar
 
 Reads Hoymiles micro inverters through the DTU's Modbus TCP interface (DTU-Pro, DTU-Pro-S). Register map and the plant's inverters: [research.md](research.md#solar-hoymiles-micro-inverters). Config keys under `modules.solar`:
@@ -126,6 +130,10 @@ Reads Hoymiles micro inverters through the DTU's Modbus TCP interface (DTU-Pro, 
 - `link` drops to 0 at times while an input's counters keep updating; totals count every input regardless.
 
 Query `solar.production` takes no params and returns `powerW` (the sum over all inputs) and `panels`: `inverter` (serial), `port` and `powerW` per input, in DTU order.
+
+Each update also writes [series](#time-series) at the service's clock (the DTU reports no measurement time): `solar.power` (W, rate, the sum over all inputs) and `solar.total` (Wh, counter, the inputs' lifetime totals summed).
+
+Query `solar.power` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
 
 `solar.NewFakeDTU(tb)` (test only, in `fake_test.go`) serves FC03 in-process over `net.Pipe`, so tests run inside a synctest bubble; it can send wrong byte counts, an exception, or hang.
 
@@ -613,7 +621,7 @@ A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run 
 
 ### Types
 
-Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
+Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`; a struct from a package other than the module's is named for that package, e.g. `SeriesPoint`), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
 
 Mapping rules: `time.Time` is a string (RFC 3339), pointers are `T | null`, and exported fields are named by their `json` tag (`omitempty` and `omitzero` make them optional). Slices are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default. Embedded fields, maps, `[]byte`, interfaces, the `,string` option and types with their own JSON encoding are errors; gentypes supports a shape once a query needs it.
 

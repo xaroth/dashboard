@@ -3,6 +3,7 @@ package solar_test
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -14,6 +15,7 @@ import (
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/solar"
+	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -241,5 +243,26 @@ func TestProductionBeforeFirstUpdate(t *testing.T) {
 	res := set.Resolve(t.Context(), "solar", "production", nil)
 	if res.Value.(*solar.Production) != nil || !res.Stale {
 		t.Errorf("got %v, stale %v, want no production, stale", res.Value, res.Stale)
+	}
+}
+
+func TestPower(t *testing.T) {
+	t.Parallel()
+	fake := solar.NewFakeDTU(t)
+	fake.SetInputs(solar.RealInput, solar.FakeInput("138292184687", 2, 40.3, true))
+	set := load(t, fake, "")
+	if err := set.Update(t.Context(), "solar"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := set.FlushSeries(t.Context()); err != nil {
+		t.Fatalf("FlushSeries: %v", err)
+	}
+	res := set.Resolve(t.Context(), "solar", "power", map[string]any{"hours": 1, "stepMinutes": 1})
+	if res.Error != "" {
+		t.Fatalf("power: %s", res.Error)
+	}
+	pts := res.Value.([]series.Point)
+	if last := pts[len(pts)-1]; last.V == nil || math.Abs(*last.V-82.4) > 1e-9 {
+		t.Errorf("got %v W in the last minute, want 82.4", last.V)
 	}
 }
