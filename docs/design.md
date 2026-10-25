@@ -64,6 +64,7 @@ device         -> render
 | `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills` (logged-in characters); SDE types for skill names | snapshot (each character's queue, trained skills and skill points) in module state |
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
 | `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days` |
+| `solar` | Hoymiles DTU-Pro-S, Modbus TCP | snapshot (DTU serial and every inverter input) in module state |
 | `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
@@ -103,6 +104,27 @@ Query `p1.actual` takes no params and returns:
 - `voltage`: `l1`, `l2`, `l3` in V; null for phases the meter does not have.
 - `flowKw`: power delivered minus power returned; positive is taken from the net, negative is returned to it.
 - `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter or when the gas counter went down; the meter reports gas every 5 minutes, DSMR 4 meters hourly, so gas lags `to`). A period is null when a day has no row, or when an electricity counter went down in it (meter replaced).
+
+### Solar
+
+Reads Hoymiles micro inverters through the DTU's Modbus TCP interface (DTU-Pro, DTU-Pro-S). Register map and the plant's inverters: [research.md](research.md#solar-hoymiles-micro-inverters). Config keys under `modules.solar`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `host` | empty | The DTU's address. Empty disables the module. |
+| `port` | `502` | Modbus TCP port |
+| `unused` | empty | Inputs without a panel, as `serial:port`, e.g. `138292184687:1`. Left out of the snapshot and totals. |
+| `night_interval` | `10m` | Update interval while no input produces; at least 1 minute |
+
+`Update` runs every minute (more frequent polling is reported to crash DTUs) and every `night_interval` while every input reads 0 W; data is stale after 30 minutes. Each update opens one connection, reads the DTU serial (FC03 at `0x2000`) and then each input's 20 registers at `0x1000 + i*40` (unit ID 1) until an input with an all-zero serial, at most 99, and closes it. The whole read has a 30 s timeout: the DTU stops answering at times. An update reading no inputs fails.
+
+- The client in `modbus.go` implements FC03 only. It takes the frame length from the MBAP header and ignores the PDU's byte count, which some DTUs send wrong.
+- One panel per input: an input's power is its panel's.
+- `link` drops to 0 at times while an input's counters keep updating; totals count every input regardless.
+
+Query `solar.production` takes no params and returns `powerW` (the sum over all inputs) and `panels`: `inverter` (serial), `port` and `powerW` per input, in DTU order.
+
+`solar.NewFakeDTU(tb)` (test only, in `fake_test.go`) serves FC03 in-process over `net.Pipe`, so tests run inside a synctest bubble; it can send wrong byte counts, an exception, or hang.
 
 ### Car
 
