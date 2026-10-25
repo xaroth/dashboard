@@ -16,6 +16,8 @@ import (
 	"time"
 
 	defaults "github.com/eve-online-tools/lib-esi-go"
+	"github.com/eve-online-tools/lib-esi-go/middleware/ratelimiting"
+	"github.com/eve-online-tools/lib-esi-go/middleware/ratelimiting/memory"
 	"github.com/eve-online-tools/lib-esi-go/transport"
 
 	"github.com/xaroth/dashboard/module"
@@ -80,7 +82,8 @@ func newClient(ctx context.Context, cfg *config, decls []Scopes) (*Client, error
 	slices.Sort(scopes)
 	base := module.HTTPClient(ctx)
 	rt := transport.New("dashboard", version(), cfg.Contact, defaults.CompatibilityDate,
-		transport.WithTransport(cmp.Or(base.Transport, http.DefaultTransport)))
+		transport.WithTransport(cmp.Or(base.Transport, http.DefaultTransport)),
+		transport.WithMiddleware(ratelimiting.Middleware(memory.New())))
 	return &Client{
 		esi:        &http.Client{Timeout: base.Timeout, Transport: rt},
 		sso:        base,

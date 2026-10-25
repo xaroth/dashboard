@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -133,6 +134,32 @@ func TestESIRequest(t *testing.T) {
 	if diff := cmp.Diff(want, gotHeaders); diff != "" {
 		t.Errorf("headers (-want +got):\n%s", diff)
 	}
+}
+
+func TestRateLimit(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		var sent []time.Time
+		set := load(t, "eveonline_esi: {contact: [x]}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sent = append(sent, time.Now())
+			// A 4 token bucket refilling one token per second, used up.
+			w.Header().Set("X-Ratelimit-Group", "status")
+			w.Header().Set("X-Ratelimit-Limit", "4/4s")
+			w.Header().Set("X-Ratelimit-Remaining", "0")
+			fmt.Fprint(w, `{}`)
+		}))
+		for range 2 {
+			if err := set.Update(t.Context(), "probe"); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+		}
+		if len(sent) != 2 {
+			t.Fatalf("got %d requests, want 2", len(sent))
+		}
+		if gap := sent[1].Sub(sent[0]); gap < time.Second {
+			t.Errorf("got %v between requests, want at least 1s: the second waits for the bucket to drain below 75%%", gap)
+		}
+	})
 }
 
 func TestVersion(t *testing.T) {
