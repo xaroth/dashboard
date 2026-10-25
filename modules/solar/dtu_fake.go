@@ -7,30 +7,24 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"testing"
 )
 
-var fakes sync.Map // address to *FakeDTU
-
-func init() {
-	dial = func(_ context.Context, _, addr string) (net.Conn, error) {
-		f, ok := fakes.Load(addr)
-		if !ok {
-			return nil, errors.New("connection refused")
-		}
-		client, server := net.Pipe()
-		go f.(*FakeDTU).serve(server)
-		return client, nil
-	}
+// RealInput is the registers of an input of 138292184456 producing 42.1 W,
+// read from a DTU-Pro-S on V00.07.04.
+var RealInput = []byte{
+	0x0c, 0x13, 0x82, 0x92, 0x18, 0x44, 0x56, 0x01, 0x01, 0x4e, 0x00, 0x7e, 0x09, 0x32, 0x13, 0x86,
+	0x01, 0xa5, 0x01, 0x12, 0x00, 0x0c, 0xd7, 0x76, 0x00, 0xbb, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00,
+	0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 }
 
-// FakeDTU answers Modbus FC03 like a DTU-Pro-S, in-process. It works inside
-// a synctest bubble.
-type FakeDTU struct {
-	Host string
+// FakeHost is the host a FakeDTU answers at, on port 502.
+const FakeHost = "dtu"
 
+// FakeDTU answers Modbus FC03 like a DTU-Pro-S, in-process over net.Pipe,
+// so it works inside a synctest bubble. It is the module.Options Dialer.
+type FakeDTU struct {
 	mu        sync.Mutex
 	inputs    [][]byte
 	badCount  bool
@@ -39,14 +33,28 @@ type FakeDTU struct {
 	requests  int
 }
 
-// NewFakeDTU serves a DTU without inverters at Host, port 502.
-func NewFakeDTU(tb testing.TB) *FakeDTU {
-	f := &FakeDTU{Host: "dtu-" + strings.NewReplacer("/", "-", " ", "-").Replace(tb.Name())}
-	addr := net.JoinHostPort(f.Host, "502")
-	fakes.Store(addr, f)
-	tb.Cleanup(func() { fakes.Delete(addr) })
+// FakeOption sets up a FakeDTU.
+type FakeOption func(testing.TB, *FakeDTU)
+
+// NewFake returns a DTU without inverters, then opts applied.
+func NewFake(tb testing.TB, opts ...FakeOption) *FakeDTU {
+	tb.Helper()
+	f := &FakeDTU{}
+	for _, opt := range opts {
+		opt(tb, f)
+	}
 	return f
 }
+
+// ExpectWrongByteCount makes responses carry a wrong PDU byte count, as
+// some DTUs send.
+func ExpectWrongByteCount(_ testing.TB, f *FakeDTU) { f.badCount = true }
+
+// ExpectHang makes the DTU read requests without answering.
+func ExpectHang(_ testing.TB, f *FakeDTU) { f.hang = true }
+
+// ExpectException makes the DTU answer exception 2 (illegal address).
+func ExpectException(_ testing.TB, f *FakeDTU) { f.exception = true }
 
 // FakeInput returns the registers of an input: power in W, with voltage,
 // current and counters derived from it.
@@ -77,18 +85,22 @@ func (f *FakeDTU) SetInputs(inputs ...[]byte) {
 	f.inputs = inputs
 }
 
-// SetWrongByteCount makes responses carry a wrong PDU byte count, as some
-// DTUs send.
-func (f *FakeDTU) SetWrongByteCount(v bool) { f.mu.Lock(); f.badCount = v; f.mu.Unlock() }
-
-// SetHang makes the DTU read requests without answering.
-func (f *FakeDTU) SetHang(v bool) { f.mu.Lock(); f.hang = v; f.mu.Unlock() }
-
-// SetException makes the DTU answer exception 2 (illegal address).
-func (f *FakeDTU) SetException(v bool) { f.mu.Lock(); f.exception = v; f.mu.Unlock() }
-
 // Requests returns the number of requests answered or hung on.
-func (f *FakeDTU) Requests() int { f.mu.Lock(); defer f.mu.Unlock(); return f.requests }
+func (f *FakeDTU) Requests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.requests
+}
+
+// DialContext connects to the DTU at FakeHost:502 and refuses other addresses.
+func (f *FakeDTU) DialContext(_ context.Context, _, address string) (net.Conn, error) {
+	if address != net.JoinHostPort(FakeHost, "502") {
+		return nil, errors.New("connection refused")
+	}
+	client, server := net.Pipe()
+	go f.serve(server)
+	return client, nil
+}
 
 func (f *FakeDTU) serve(conn net.Conn) {
 	defer conn.Close()

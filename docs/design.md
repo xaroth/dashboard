@@ -68,7 +68,7 @@ render         -> screen
 | Module | Source | Data |
 | --- | --- | --- |
 | `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills` (logged-in characters); SDE types for skill names | snapshot (each character's queue, trained skills and skill points) in module state |
-| `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
+| `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; player count in a series while online |
 | `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days` |
 | `solar` | Hoymiles DTU-Pro-S, Modbus TCP | snapshot (DTU serial and every inverter input) in module state |
 | `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
@@ -113,7 +113,7 @@ Query `p1.actual` takes no params and returns:
 
 Each update also writes [series](#time-series) at the meter's time: `p1.flow` (kW, rate, as `flowKw`), and the counters `p1.taken` and `p1.returned` (kWh, both tariffs). `p1.gas` (m³, when reported) is written at the gas meter's time (`gas_delivered_timestamp`; the meter's time when the dongle does not send it), and a gas reading whose time has not advanced since the last update is skipped.
 
-Query `p1.flow` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15, at most 1440) and returns the average flow in kW per step up to now, as series points.
+Query `p1.flow` takes [history params](#time-series) and returns the average flow in kW per step up to now, as series points.
 
 ### Solar
 
@@ -136,9 +136,9 @@ Query `solar.production` takes no params and returns `powerW` (the sum over all 
 
 Each update also writes [series](#time-series) at the service's clock (the DTU reports no measurement time): `solar.power` (W, rate, the sum over all inputs) and `solar.total` (Wh, counter, the inputs' lifetime totals summed).
 
-Query `solar.power` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15, at most 1440) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
+Query `solar.power` takes [history params](#time-series) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
 
-`solar.NewFakeDTU(tb)` (test only, in `fake_test.go`) serves FC03 in-process over `net.Pipe`, so tests run inside a synctest bubble; it can send wrong byte counts, an exception, or hang.
+The DTU is dialed through `module.Dialer(ctx)`. `solar.NewFake(tb, opts...)` (in `dtu_fake.go`) is a dialer for `module.Options` that serves FC03 at `solar.FakeHost` in-process over `net.Pipe`, so tests run inside a synctest bubble; `ExpectWrongByteCount`, `ExpectException` and `ExpectHang` make it send wrong byte counts, an exception, or hang.
 
 ### Car
 
@@ -280,7 +280,7 @@ modules:
 
 ### Dependencies
 
-Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `module.NextUpdate(ctx, d)` (from `Update`) runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual (the most recent success decides), the last call wins, and it has no effect on the backoff after a failure. A delay longer than `stale_after` shows the data as stale while the module waits.
+Dependencies come through the context: `module.Database(ctx)`, `module.Logger(ctx)`, `module.HTTPClient(ctx)` (30 s timeout; calls are traced as children of the update or query), `module.Dialer(ctx)` (for sources that are not HTTP), `module.Clock(ctx)`. The service puts them on the context it passes to `Initialize`, `Update` and query functions. `module.SaveSnapshot(ctx, v)` (from `Update`) and `module.LoadSnapshot(ctx, &v)` store and read the module's snapshot (see [State](#state)). `module.NextUpdate(ctx, d)` (from `Update`) runs the next scheduled update `d` after this one instead of an interval later, for modules that poll adaptively; it applies when `Update` succeeds, scheduled or manual (the most recent success decides), the last call wins, and it has no effect on the backoff after a failure. A delay longer than `stale_after` shows the data as stale while the module waits.
 
 ### Shared values
 
@@ -350,12 +350,12 @@ Characters:
 
 #### Server status
 
-`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that hits lib-esi-go's 10 s timeout (ESI's own) after connecting, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update, including a timeout before connecting (DNS, dial), which is our network rather than the cluster. Each successful update also stores a sample (time, online, players) in `eveonline_status_samples`, kept indefinitely: about 105,000 rows a year at the default interval.
+`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that hits lib-esi-go's 10 s timeout (ESI's own) after connecting, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update, including a timeout before connecting (DNS, dial), which is our network rather than the cluster. Each successful update while online also writes the player count to the series `eveonline_status.players` (rate).
 
 Queries:
 
 - `eveonline_status.server` takes no params and returns the stored status.
-- `eveonline_status.history` returns the player count over time, one point per step, oldest first: `hours` (default 24, at most 2160) and `stepMinutes` (default 5), at most 2000 points. Steps align to multiples of the step, and the last one holds now. A point is the rounded average of the online samples in its step, or null when the server was offline or not polled throughout it, so a chart shows downtime as a gap.
+- `eveonline_status.history` takes [history params](#time-series) and returns the average player count per step up to now, as series points. A point is null when the server was offline or not polled throughout its step, so a chart shows downtime as a gap.
 
 #### Skill queues
 
@@ -383,8 +383,7 @@ device/sql/migrations/00001_keys.sql
 device/sql/queries.sql
 modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
-modules/eveonline/status/sql/migrations/00001_samples.sql
-modules/eveonline/status/sql/queries.sql
+modules/eveonline/status/sql/migrations/00002_drop_samples.sql
 modules/eveonline/esi/sql/migrations/00001_characters.sql
 modules/eveonline/esi/sql/queries.sql
 modules/eveonline/sde/sql/migrations/00001_sde.sql
@@ -447,6 +446,7 @@ Samples taken every minute or so (power, meter readings) go to the service-owned
 - **Alignment**: buckets under an hour align to Unix time; hours and days align to local time (`timezone`), so a day is a local midnight to midnight, 23 or 25 hours on DST dates, and the repeated hour of a fall back is a bucket of its own. Steps between an hour and a day align to the local wall clock, so a 6-hour bucket spanning a DST change is 5 or 7 hours.
 - **Retention**: raw samples 7 days, 5-minute buckets 90 days, hours and days forever. Pruned hourly.
 - **Queries**: `step` is at least a minute and divides a day, or is a whole number of days; at most 2000 points. The query reads the coarsest level that divides `step` and still holds `from` (raw, 5 minutes, 1 hour, 1 day), falling back to the finest that does, and groups it into steps; so 1-minute steps older than 7 days have a value every fifth minute. It returns every bucket from the one holding `from` up to `to`, as `{t, v}` with `v` null for a bucket without samples, so charts show gaps.
+- **History params**: module queries for a series up to now take `series.HistoryParams`: `hours` (default 24, 1 to 2160, the 5-minute retention) and `stepMinutes` (default 15, dividing 1440). `Range(now)` validates them and returns the `from`, `to` (the second after now's; samples are whole seconds, so the bucket holding now is the last and has the latest sample) and `step` for `Query`.
 
 ## Scheduler
 
@@ -628,7 +628,7 @@ A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run 
 
 ### Types
 
-Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`; a struct from a package other than the module's is named for that package, e.g. `SeriesPoint`), and a `Queries` map from `"module.query"` to `{params, result}`. It also writes `pages/generated/props.ts` from `render.Props` and the types it uses (`Device`, `Wake`, `Viewport`, `System`, `Result<T>`, `Props<D>`); `screen.PowerSource` becomes a union of `screen.PowerSources`. `page.ts` re-exports them. `query()` and `PageProps` use both, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated files are committed; CI checks they are up to date.
+Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`; a struct from a package other than the module's is named for that package, e.g. `SeriesPoint`, params included, e.g. `SeriesHistoryParams`), and a `Queries` map from `"module.query"` to `{params, result}`. It also writes `pages/generated/props.ts` from `render.Props` and the types it uses (`Device`, `Wake`, `Viewport`, `System`, `Result<T>`, `Props<D>`); `screen.PowerSource` becomes a union of `screen.PowerSources`. `page.ts` re-exports them. `query()` and `PageProps` use both, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated files are committed; CI checks they are up to date.
 
 Mapping rules: `time.Time` is a string (RFC 3339), pointers are `T | null`, and exported fields are named by their `json` tag (`omitempty` and `omitzero` make them optional). Slices are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default. Embedded fields, maps, `[]byte`, interfaces, the `,string` option and types with their own JSON encoding are errors; gentypes supports a shape once a query needs it.
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -19,6 +20,7 @@ const (
 	keyDatabase ctxKey = iota
 	keyLogger
 	keyHTTPClient
+	keyDialer
 	keyClock
 	keyState
 	keySeries
@@ -37,6 +39,14 @@ func Logger(ctx context.Context) *slog.Logger {
 func HTTPClient(ctx context.Context) *http.Client {
 	return value[*http.Client](ctx, keyHTTPClient)
 }
+
+// ContextDialer opens connections; *net.Dialer is one.
+type ContextDialer interface {
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// Dialer is the dialer for calls to sources that are not HTTP.
+func Dialer(ctx context.Context) ContextDialer { return value[ContextDialer](ctx, keyDialer) }
 
 // Clock returns the current time.
 func Clock(ctx context.Context) func() time.Time {

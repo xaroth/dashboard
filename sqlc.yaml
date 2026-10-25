@@ -32,14 +32,6 @@ sql:
         package: weather
         out: modules/weather
   - <<: *owner
-    schema: modules/eveonline/status/sql/migrations
-    queries: modules/eveonline/status/sql/queries.sql
-    gen:
-      go:
-        <<: *go
-        package: status
-        out: modules/eveonline/status
-  - <<: *owner
     schema: modules/eveonline/esi/sql/migrations
     queries: modules/eveonline/esi/sql/queries.sql
     gen:
