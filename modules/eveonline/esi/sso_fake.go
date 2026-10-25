@@ -25,6 +25,7 @@ type FakeSSO struct {
 	// refreshes are the unused refresh tokens.
 	refreshes map[string]fakeGrant
 	issued    int
+	serving   bool
 	forms     []url.Values
 	during    func()
 }
@@ -44,6 +45,7 @@ func NewFake(tb testing.TB, opts ...FakeOption) *FakeSSO {
 	for _, opt := range opts {
 		opt(tb, f)
 	}
+	f.serving = true
 	return f
 }
 
@@ -54,9 +56,12 @@ func ExpectCharacter(code string, char Character, scopes ...string) FakeOption {
 
 // ExpectToken_Revoked rejects the refresh tokens issued so far to the
 // character with id, as when its owner revokes the app. Logging in again
-// issues working ones.
+// issues working ones. It is for Set: NewFake has issued no tokens.
 func ExpectToken_Revoked(id int64) FakeOption {
-	return func(_ testing.TB, f *FakeSSO) {
+	return func(tb testing.TB, f *FakeSSO) {
+		if !f.serving {
+			tb.Fatalf("ExpectToken_Revoked(%d) before any login: pass it to Set", id)
+		}
 		maps.DeleteFunc(f.refreshes, func(_ string, g fakeGrant) bool { return g.char.ID == id })
 	}
 }

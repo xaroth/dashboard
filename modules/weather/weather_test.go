@@ -185,6 +185,21 @@ func TestUpdateErrors(t *testing.T) {
 	}
 }
 
+func TestCustomURLs(t *testing.T) {
+	t.Parallel()
+	fake := weather.NewFake(t, weather.ExpectURLs("http://geo.test/search", "http://forecast.test/v1/forecast"))
+	set := load(t, t.TempDir(), fake, `geocoding_url: "http://geo.test/search", forecast_url: "http://forecast.test/v1/forecast"`)
+	if err := set.Update(t.Context(), "weather"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := fake.GeocodeCalls(); got != 1 {
+		t.Errorf("got %d geocode calls, want 1", got)
+	}
+	if fake.ForecastParams() == nil {
+		t.Errorf("got no forecast request at the custom URL")
+	}
+}
+
 func TestConfig(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {

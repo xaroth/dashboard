@@ -16,15 +16,17 @@ var (
 )
 
 // FakeOpenMeteo serves the Open-Meteo geocoding and forecast APIs at their
-// default URLs, for moduletest.HTTPClient. It answers with responses
+// default URLs, or those set with ExpectURLs, for moduletest.HTTPClient. It answers with responses
 // recorded for Amsterdam on 2026-10-16 at 00:45 local time, and records the
 // requests.
 type FakeOpenMeteo struct {
-	mu       sync.Mutex
-	geocodes int
-	params   url.Values
-	down     bool
-	forecast []byte
+	mu          sync.Mutex
+	geocodeURL  string
+	forecastURL string
+	geocodes    int
+	params      url.Values
+	down        bool
+	forecast    []byte
 }
 
 // FakeOption sets up a FakeOpenMeteo.
@@ -34,7 +36,8 @@ type FakeOption func(testing.TB, *FakeOpenMeteo)
 // applied.
 func NewFake(tb testing.TB, opts ...FakeOption) *FakeOpenMeteo {
 	tb.Helper()
-	f := &FakeOpenMeteo{forecast: fakeForecast}
+	cfg := defaultConfig()
+	f := &FakeOpenMeteo{geocodeURL: cfg.GeocodingURL, forecastURL: cfg.ForecastURL, forecast: fakeForecast}
 	for _, opt := range opts {
 		opt(tb, f)
 	}
@@ -44,6 +47,12 @@ func NewFake(tb testing.TB, opts ...FakeOption) *FakeOpenMeteo {
 // ExpectForecast replaces the forecast response.
 func ExpectForecast(body []byte) FakeOption {
 	return func(_ testing.TB, f *FakeOpenMeteo) { f.forecast = body }
+}
+
+// ExpectURLs serves the APIs at the geocoding_url and forecast_url given,
+// instead of the defaults.
+func ExpectURLs(geocoding, forecast string) FakeOption {
+	return func(_ testing.TB, f *FakeOpenMeteo) { f.geocodeURL, f.forecastURL = geocoding, forecast }
 }
 
 // ExpectUnavailable makes every request fail with 502.
@@ -70,11 +79,11 @@ func (f *FakeOpenMeteo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream down", http.StatusBadGateway)
 		return
 	}
-	switch "https://" + r.URL.Host + r.URL.Path {
-	case defaultConfig().GeocodingURL:
+	switch r.URL.Scheme + "://" + r.URL.Host + r.URL.Path {
+	case f.geocodeURL:
 		f.geocodes++
 		w.Write(fakeGeocode)
-	case defaultConfig().ForecastURL:
+	case f.forecastURL:
 		f.params = r.URL.Query()
 		w.Write(f.forecast)
 	default:
