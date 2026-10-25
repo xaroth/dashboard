@@ -303,6 +303,7 @@ func TestDisplayPower(t *testing.T) {
 		{"no header", device.PowerAuto, "", false, "default", 3600},
 		{"header usb", device.PowerAuto, "true", true, "header", 300},
 		{"header battery", "", "false", false, "header", 3600},
+		{"bad header", device.PowerAuto, "maybe", false, "default", 3600},
 		{"config usb", device.PowerUSB, "", true, "config", 300},
 		{"config battery over header", device.PowerBattery, "true", false, "config", 3600},
 	}
