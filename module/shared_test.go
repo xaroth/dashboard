@@ -25,20 +25,20 @@ type greetingConfig struct {
 	Fail bool   `yaml:"fail"`
 }
 
-// greeting greets the names the modules declare. As an http.Handler it
+// greeting greets the names the modules declare. As an AdminHandler it
 // serves its text and the number of migration rows it can see.
 type greeting struct{ Text string }
 
 // Version reports the number of migration rows the reader can see.
-func (g *greeting) Version(ctx context.Context) (string, error) {
+func (g *greeting) Version(ctx context.Context, q module.Query) (string, error) {
 	var n int
-	err := module.Database(ctx).QueryRowContext(ctx, "SELECT COUNT(*) FROM greeting_log").Scan(&n)
+	err := q.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM greeting_log").Scan(&n)
 	return fmt.Sprintf("v%d", n), err
 }
 
-func (g *greeting) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (g *greeting) ServeAdmin(w http.ResponseWriter, r *http.Request, q module.Query) {
 	var n int
-	err := module.Database(r.Context()).QueryRowContext(r.Context(), "SELECT COUNT(*) FROM greeting_log").Scan(&n)
+	err := q.DB.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM greeting_log").Scan(&n)
 	fmt.Fprintf(w, "%s %s %d %v", r.URL.Path, g.Text, n, err)
 }
 
@@ -46,7 +46,7 @@ var greetingMigrations = fstest.MapFS{"sql/migrations/00001_init.sql": {Data: []
 	"-- +goose Up\nCREATE TABLE greeting_log (id INTEGER PRIMARY KEY);\n")}}
 
 var greetingShared = module.DefineShared("greeting", func() *greetingConfig { return &greetingConfig{Text: "hello"} },
-	func(_ context.Context, cfg *greetingConfig, names []string) (*greeting, error) {
+	func(_ context.Context, cfg *greetingConfig, names []string, _ module.Env) (*greeting, error) {
 		if cfg.Fail {
 			return nil, errors.New("no words")
 		}
@@ -54,20 +54,17 @@ var greetingShared = module.DefineShared("greeting", func() *greetingConfig { re
 	},
 	module.SharedMigrations(greetingMigrations))
 
-// greeter reads the shared greeting in Initialize and in its query.
+// greeter reads the shared greeting in its query.
 type greeter struct{}
 
 type greeterConfig struct{}
 
-func (*greeter) Initialize(ctx context.Context, _ *greeterConfig) error {
-	greetingShared.Get(ctx)
-	return nil
-}
-func (*greeter) Enabled(context.Context) (bool, error) { return false, nil }
-func (*greeter) Update(context.Context) error          { return nil }
+func (*greeter) Initialize(context.Context, *greeterConfig, module.Env) error { return nil }
+func (*greeter) Enabled(context.Context, module.Query) (bool, error)          { return false, nil }
+func (*greeter) Update(context.Context, *module.Update) error                 { return nil }
 
-func (*greeter) greeting(ctx context.Context, _ struct{}) (*greeting, error) {
-	return greetingShared.Get(ctx), nil
+func (*greeter) greeting(_ context.Context, q module.Query, _ struct{}) (*greeting, error) {
+	return greetingShared.Get(q), nil
 }
 
 func greeterRegistration(name string, opts ...module.Option) module.Registration {
@@ -170,7 +167,7 @@ func TestSharedFailures(t *testing.T) {
 				greeterRegistration("a", module.WithShared(greetingShared)),
 				greeterRegistration("b", module.WithShared(module.DefineShared("greeting",
 					func() *greetingConfig { return &greetingConfig{} },
-					func(context.Context, *greetingConfig, []string) (int, error) { return 0, nil }))),
+					func(context.Context, *greetingConfig, []string, module.Env) (int, error) { return 0, nil }))),
 			},
 			wantLoad: "shared greeting: defined twice",
 		},
@@ -180,12 +177,6 @@ func TestSharedFailures(t *testing.T) {
 			regs:       []module.Registration{greeterRegistration("a", module.WithShared(greetingShared))},
 			wantInit:   "greeting: no words",
 			wantShared: []module.SharedStatus{{Name: "greeting", Error: "greeting: no words"}},
-		},
-		{
-			name:       "not declared",
-			regs:       []module.Registration{greeterRegistration("a")},
-			wantInit:   "panicked: module: context has no shared greeting; declare it with WithShared",
-			wantShared: []module.SharedStatus{},
 		},
 	}
 	for _, testCase := range testCases {
@@ -212,6 +203,18 @@ func TestSharedFailures(t *testing.T) {
 	}
 }
 
+func TestSharedNotDeclared(t *testing.T) {
+	t.Parallel()
+	set, err := tryLoad(t, "", greeterRegistration("a"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := set.Resolve(t.Context(), "a", "greeting", nil)
+	if want := "query panicked: module: a did not declare shared greeting; declare it with WithShared"; got.Error != want {
+		t.Errorf("got error %q, want %q", got.Error, want)
+	}
+}
+
 func TestDefineSharedRejectsInvalidName(t *testing.T) {
 	t.Parallel()
 	defer func() {
@@ -220,19 +223,19 @@ func TestDefineSharedRejectsInvalidName(t *testing.T) {
 		}
 	}()
 	module.DefineShared("Bad-Name", func() *greetingConfig { return nil },
-		func(context.Context, *greetingConfig, []string) (int, error) { return 0, nil })
+		func(context.Context, *greetingConfig, []string, module.Env) (int, error) { return 0, nil })
 }
 
 // counter counts its updates in counter_log. An update blocks until its
 // context is done while block is set.
 type counter struct{ block bool }
 
-func (c *counter) Update(ctx context.Context) error {
+func (c *counter) Update(ctx context.Context, u *module.Update) error {
 	if c.block {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	_, err := module.Database(ctx).ExecContext(ctx, "INSERT INTO counter_log DEFAULT VALUES")
+	_, err := u.DB.ExecContext(ctx, "INSERT INTO counter_log DEFAULT VALUES")
 	return err
 }
 
@@ -241,7 +244,7 @@ type counterConfig struct {
 }
 
 var counterShared = module.DefineShared("counter", func() *counterConfig { return &counterConfig{} },
-	func(_ context.Context, cfg *counterConfig, _ []struct{}) (*counter, error) {
+	func(_ context.Context, cfg *counterConfig, _ []struct{}, _ module.Env) (*counter, error) {
 		return &counter{block: cfg.Block}, nil
 	},
 	module.SharedMigrations(fstest.MapFS{"sql/migrations/00001_init.sql": {Data: []byte(
@@ -294,7 +297,9 @@ func TestSharedUpdateTimeout(t *testing.T) {
 func TestSharedScheduleBuildFails(t *testing.T) {
 	t.Parallel()
 	failing := module.DefineShared("failing", func() *struct{} { return &struct{}{} },
-		func(context.Context, *struct{}, []struct{}) (*counter, error) { return nil, errors.New("no source") },
+		func(context.Context, *struct{}, []struct{}, module.Env) (*counter, error) {
+			return nil, errors.New("no source")
+		},
 		module.SharedSchedule(time.Hour, time.Hour))
 	set, err := tryLoad(t, "", greeterRegistration("a", module.WithShared(failing)))
 	if err != nil {
@@ -325,7 +330,7 @@ func TestDefineSharedRejectsSchedule(t *testing.T) {
 			name: "not an Updater",
 			define: func() {
 				module.DefineShared("x", func() *struct{} { return nil },
-					func(context.Context, *struct{}, []struct{}) (int, error) { return 0, nil },
+					func(context.Context, *struct{}, []struct{}, module.Env) (int, error) { return 0, nil },
 					module.SharedSchedule(time.Hour, time.Hour))
 			},
 			wantMsg: "module: shared x: scheduled but int does not implement Updater",
@@ -334,7 +339,7 @@ func TestDefineSharedRejectsSchedule(t *testing.T) {
 			name: "zero interval",
 			define: func() {
 				module.DefineShared("x", func() *struct{} { return nil },
-					func(context.Context, *struct{}, []struct{}) (*counter, error) { return nil, nil },
+					func(context.Context, *struct{}, []struct{}, module.Env) (*counter, error) { return nil, nil },
 					module.SharedSchedule(0, time.Hour))
 			},
 			wantMsg: "module: shared x: schedule durations must be positive",
@@ -343,7 +348,7 @@ func TestDefineSharedRejectsSchedule(t *testing.T) {
 			name: "negative timeout",
 			define: func() {
 				module.DefineShared("x", func() *struct{} { return nil },
-					func(context.Context, *struct{}, []struct{}) (*counter, error) { return nil, nil },
+					func(context.Context, *struct{}, []struct{}, module.Env) (*counter, error) { return nil, nil },
 					module.SharedSchedule(time.Hour, time.Hour), module.SharedUpdateTimeout(-time.Minute))
 			},
 			wantMsg: "module: shared x: schedule durations must be positive",
@@ -352,7 +357,7 @@ func TestDefineSharedRejectsSchedule(t *testing.T) {
 			name: "timeout without a schedule",
 			define: func() {
 				module.DefineShared("x", func() *struct{} { return nil },
-					func(context.Context, *struct{}, []struct{}) (*counter, error) { return nil, nil },
+					func(context.Context, *struct{}, []struct{}, module.Env) (*counter, error) { return nil, nil },
 					module.SharedUpdateTimeout(time.Minute))
 			},
 			wantMsg: "module: shared x: update timeout without a schedule",

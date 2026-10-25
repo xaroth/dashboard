@@ -15,18 +15,19 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-type query struct {
+type queryDef struct {
 	moduleType reflect.Type
 	params     reflect.Type
 	result     reflect.Type
-	call       func(ctx context.Context, m any, params []byte) (any, error)
+	call       func(ctx context.Context, m any, q Query, params []byte) (any, error)
 	check      func(params []byte) error
 }
 
 // WithQuery exposes fn as the module's query name. Pages ask for it as
 // "module.name" with params that decode into P; the JSON result R reaches
-// the page. fn is a method expression, e.g. (*module).forecast.
-func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P) (R, error)) Option {
+// the page. fn is a method expression, e.g. (*module).forecast; it gets a
+// Query on the read-only pool.
+func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, Query, P) (R, error)) Option {
 	decode := func(raw []byte) (P, error) {
 		var p P
 		dec := json.NewDecoder(bytes.NewReader(orDefault(raw, []byte("{}"))))
@@ -36,11 +37,11 @@ func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P)
 		}
 		return p, nil
 	}
-	q := query{
+	def := queryDef{
 		moduleType: reflect.TypeFor[*M](),
 		params:     reflect.TypeFor[P](),
 		result:     reflect.TypeFor[R](),
-		call: func(ctx context.Context, m any, raw []byte) (res any, err error) {
+		call: func(ctx context.Context, m any, q Query, raw []byte) (res any, err error) {
 			// Queries run in the pipeline's goroutines, outside net/http's recovery.
 			defer func() {
 				if r := recover(); r != nil {
@@ -51,7 +52,7 @@ func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P)
 			if err != nil {
 				return nil, err
 			}
-			return fn(m.(*M), ctx, p)
+			return fn(m.(*M), ctx, q, p)
 		},
 		check: func(raw []byte) error {
 			_, err := decode(raw)
@@ -65,7 +66,7 @@ func WithQuery[M any, P any, R any](name string, fn func(*M, context.Context, P)
 		if _, ok := r.queries[name]; ok {
 			panic(fmt.Sprintf("module: %s: query %s defined twice", r.name, name))
 		}
-		r.queries[name] = q
+		r.queries[name] = def
 	}
 }
 
@@ -124,8 +125,7 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 	}
 	raw, err := json.Marshal(params)
 	if err == nil {
-		qctx, _ := s.context(ctx, inst, s.reader, false)
-		res.Value, err = q.call(qctx, inst.module, raw)
+		res.Value, err = q.call(ctx, inst.module, s.query(inst, s.reader), raw)
 	}
 	if err != nil {
 		span.RecordError(err)
@@ -135,18 +135,18 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 	return res
 }
 
-func (s *Set) lookup(module, name string) (*instance, query, error) {
+func (s *Set) lookup(module, name string) (*instance, queryDef, error) {
 	for _, inst := range s.instances {
 		if inst.reg.name != module {
 			continue
 		}
 		q, ok := inst.reg.queries[name]
 		if !ok {
-			return nil, query{}, fmt.Errorf("unknown query %s.%s (have %s)", module, name, strings.Join(inst.reg.queryNames(), ", "))
+			return nil, queryDef{}, fmt.Errorf("unknown query %s.%s (have %s)", module, name, strings.Join(inst.reg.queryNames(), ", "))
 		}
 		return inst, q, nil
 	}
-	return nil, query{}, fmt.Errorf("%w %q", ErrUnknownModule, module)
+	return nil, queryDef{}, fmt.Errorf("%w %q", ErrUnknownModule, module)
 }
 
 // QueryType describes a query's params and result types, for code generation.

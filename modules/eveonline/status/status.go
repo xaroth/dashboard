@@ -49,22 +49,22 @@ var Module = module.Define[status, config](
 	module.WithSeries("players", series.Rate),
 )
 
-func (*status) Initialize(context.Context, *config) error { return nil }
+func (*status) Initialize(context.Context, *config, module.Env) error { return nil }
 
-func (*status) Enabled(context.Context) (bool, error) { return true, nil }
+func (*status) Enabled(context.Context, module.Query) (bool, error) { return true, nil }
 
-func (*status) Update(ctx context.Context) error {
-	st, err := fetch(ctx)
+func (*status) Update(ctx context.Context, u *module.Update) error {
+	st, err := fetch(ctx, esi.Shared.Get(u.Query))
 	if err != nil {
 		return err
 	}
 	// Offline steps stay empty, so charts show downtime as a gap.
 	if st.Online {
-		if err := module.Series(ctx).Add("players", module.Clock(ctx)(), float64(st.Players)); err != nil {
+		if err := u.AddSample("players", u.Now(), float64(st.Players)); err != nil {
 			return err
 		}
 	}
-	return module.SaveSnapshot(ctx, st)
+	return u.SaveSnapshot(st)
 }
 
 func isTimeout(err error) bool {
@@ -72,12 +72,12 @@ func isTimeout(err error) bool {
 	return ok && ne.Timeout()
 }
 
-func fetch(ctx context.Context) (Status, error) {
+func fetch(ctx context.Context, c *esi.Client) (Status, error) {
 	var connected atomic.Bool
 	tctx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
 	})
-	resp, err := getstatus.Request(tctx, esi.Shared.Get(ctx))
+	resp, err := getstatus.Request(tctx, c)
 	if err != nil {
 		// ESI does not answer /status while the cluster is offline: the
 		// request hits lib-esi-go's timeout, which matches ESI's own. A
@@ -104,9 +104,9 @@ func fetch(ctx context.Context) (Status, error) {
 type serverParams struct{}
 
 // server returns the last stored status.
-func (*status) server(ctx context.Context, _ serverParams) (*Status, error) {
+func (*status) server(ctx context.Context, q module.Query, _ serverParams) (*Status, error) {
 	var st Status
-	ok, err := module.LoadSnapshot(ctx, &st)
+	ok, err := q.LoadSnapshot(ctx, &st)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -115,10 +115,10 @@ func (*status) server(ctx context.Context, _ serverParams) (*Status, error) {
 
 // history returns the average player count per step over the last hours,
 // null for steps the server was offline or not polled throughout.
-func (*status) history(ctx context.Context, p series.HistoryParams) ([]series.Point, error) {
-	from, to, step, err := p.Range(module.Clock(ctx)())
+func (*status) history(ctx context.Context, q module.Query, p series.HistoryParams) ([]series.Point, error) {
+	from, to, step, err := p.Range(q.Now())
 	if err != nil {
 		return nil, err
 	}
-	return module.Series(ctx).Query(ctx, "players", from, to, step)
+	return q.QuerySeries(ctx, "players", from, to, step)
 }

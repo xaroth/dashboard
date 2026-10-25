@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/xaroth/dashboard/module"
 )
 
 // Location is a geocoded place.
@@ -63,7 +61,7 @@ type Day struct {
 }
 
 // geocode resolves "Place" or "Place, Country" to coordinates.
-func geocode(ctx context.Context, base, query string) (Location, error) {
+func geocode(ctx context.Context, c *http.Client, base, query string) (Location, error) {
 	name, country, _ := strings.Cut(query, ",")
 	name, country = strings.TrimSpace(name), strings.TrimSpace(country)
 	v := url.Values{"name": {name}, "count": {"10"}, "language": {"en"}, "format": {"json"}}
@@ -77,7 +75,7 @@ func geocode(ctx context.Context, base, query string) (Location, error) {
 			Timezone    string  `json:"timezone"`
 		} `json:"results"`
 	}
-	if err := getJSON(ctx, base+"?"+v.Encode(), &resp); err != nil {
+	if err := getJSON(ctx, c, base+"?"+v.Encode(), &resp); err != nil {
 		return Location{}, fmt.Errorf("geocoding %q: %w", query, err)
 	}
 	for _, r := range resp.Results {
@@ -90,7 +88,7 @@ func geocode(ctx context.Context, base, query string) (Location, error) {
 
 // fetchForecast asks for times as Unix seconds in the location's timezone,
 // so daily values cover local days.
-func fetchForecast(ctx context.Context, base, model string, loc Location, days int) (Forecast, error) {
+func fetchForecast(ctx context.Context, c *http.Client, base, model string, loc Location, days int) (Forecast, error) {
 	v := url.Values{
 		"latitude":        {strconv.FormatFloat(loc.Latitude, 'f', -1, 64)},
 		"longitude":       {strconv.FormatFloat(loc.Longitude, 'f', -1, 64)},
@@ -134,7 +132,7 @@ func fetchForecast(ctx context.Context, base, model string, loc Location, days i
 			Sunset                      []int64    `json:"sunset"`
 		} `json:"daily"`
 	}
-	if err := getJSON(ctx, base+"?"+v.Encode(), &r); err != nil {
+	if err := getJSON(ctx, c, base+"?"+v.Encode(), &r); err != nil {
 		return Forecast{}, fmt.Errorf("forecast: %w", err)
 	}
 	tz, err := time.LoadLocation(loc.Timezone)
@@ -188,12 +186,12 @@ func sameLen(n int, rest ...int) bool {
 	return true
 }
 
-func getJSON(ctx context.Context, u string, v any) error {
+func getJSON(ctx context.Context, c *http.Client, u string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return err
 	}
-	resp, err := module.HTTPClient(ctx).Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return err
 	}

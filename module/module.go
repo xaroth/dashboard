@@ -19,12 +19,12 @@ import (
 // Module is the contract every data source implements on its pointer type.
 type Module[C any] interface {
 	// Initialize receives the config. Migrations have run; no network I/O.
-	Initialize(ctx context.Context, cfg *C) error
+	Initialize(ctx context.Context, cfg *C, env Env) error
 	// Enabled reports whether the scheduler should run Update. An error
 	// marks the module failed and backs off, as a failed Update does.
-	Enabled(ctx context.Context) (bool, error)
+	Enabled(ctx context.Context, q Query) (bool, error)
 	// Update fetches from the source and writes to storage.
-	Update(ctx context.Context) error
+	Update(ctx context.Context, u *Update) error
 }
 
 // ErrAuth marks an update error the source rejected for credentials: retries
@@ -44,13 +44,13 @@ type Registration struct {
 	interval   time.Duration
 	staleAfter time.Duration
 	migrations fs.FS
-	queries    map[string]query
+	queries    map[string]queryDef
 	series     map[string]series.Kind
 	shared     []sharedUse
 	moduleType reflect.Type
-	initialize func(ctx context.Context, m any, cfg any) error
-	enabled    func(ctx context.Context, m any) (bool, error)
-	update     func(ctx context.Context, m any) error
+	initialize func(ctx context.Context, m any, cfg any, env Env) error
+	enabled    func(ctx context.Context, m any, q Query) (bool, error)
+	update     func(ctx context.Context, m any, u *Update) error
 }
 
 // recovered turns a panic into *err. Module methods run in the scheduler's
@@ -84,7 +84,7 @@ func WithMigrations(fsys fs.FS) Option {
 }
 
 // WithSeries declares a time series the module writes, stored as
-// "<module>.<name>"; see Series.
+// "<module>.<name>"; see Update.AddSample and Query.QuerySeries.
 func WithSeries(name string, kind series.Kind) Option {
 	return func(r *Registration) {
 		if !validName.MatchString(name) {
@@ -113,20 +113,20 @@ func Define[M any, C any, PM interface {
 		newConfig:  func() any { return defaults() },
 		interval:   defaultInterval,
 		staleAfter: defaultStaleAfter,
-		queries:    map[string]query{},
+		queries:    map[string]queryDef{},
 		series:     map[string]series.Kind{},
 		moduleType: reflect.TypeFor[*M](),
-		initialize: func(ctx context.Context, m any, cfg any) (err error) {
+		initialize: func(ctx context.Context, m any, cfg any, env Env) (err error) {
 			defer recovered(&err)
-			return m.(PM).Initialize(ctx, cfg.(*C))
+			return m.(PM).Initialize(ctx, cfg.(*C), env)
 		},
-		enabled: func(ctx context.Context, m any) (on bool, err error) {
+		enabled: func(ctx context.Context, m any, q Query) (on bool, err error) {
 			defer recovered(&err)
-			return m.(PM).Enabled(ctx)
+			return m.(PM).Enabled(ctx, q)
 		},
-		update: func(ctx context.Context, m any) (err error) {
+		update: func(ctx context.Context, m any, u *Update) (err error) {
 			defer recovered(&err)
-			return m.(PM).Update(ctx)
+			return m.(PM).Update(ctx, u)
 		},
 	}
 	for _, opt := range opts {

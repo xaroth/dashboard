@@ -23,9 +23,9 @@ type cfg struct{}
 
 type mod struct{}
 
-func (*mod) Initialize(context.Context, *cfg) error { return nil }
-func (*mod) Enabled(context.Context) (bool, error)  { return false, nil }
-func (*mod) Update(context.Context) error           { return nil }
+func (*mod) Initialize(context.Context, *cfg, module.Env) error  { return nil }
+func (*mod) Enabled(context.Context, module.Query) (bool, error) { return false, nil }
+func (*mod) Update(context.Context, *module.Update) error        { return nil }
 
 type Item struct {
 	ID       string          `json:"id"`
@@ -63,13 +63,13 @@ type shared struct {
 	V int `json:"v"`
 }
 
-func (*mod) list(context.Context, listParams) ([]Item, error) { return nil, nil }
-func (*mod) extra(context.Context, struct{}) (Extra, error)   { return Extra{}, nil }
-func (*mod) echo(context.Context, shared) (shared, error)     { return shared{}, nil }
-func (*mod) one(context.Context, struct{}) (*Item, error)     { return nil, nil }
+func (*mod) list(context.Context, module.Query, listParams) ([]Item, error) { return nil, nil }
+func (*mod) extra(context.Context, module.Query, struct{}) (Extra, error)   { return Extra{}, nil }
+func (*mod) echo(context.Context, module.Query, shared) (shared, error)     { return shared{}, nil }
+func (*mod) one(context.Context, module.Query, struct{}) (*Item, error)     { return nil, nil }
 
 // Params from another package: named for it.
-func (*mod) history(context.Context, series.HistoryParams) ([]series.Point, error) {
+func (*mod) history(context.Context, module.Query, series.HistoryParams) ([]series.Point, error) {
 	return nil, nil
 }
 
@@ -192,12 +192,18 @@ type marshaler struct {
 	At net.IP `json:"at"`
 }
 
-func (*mod) embedded(context.Context, struct{}) (embedded, error)   { return embedded{}, nil }
-func (*mod) mapped(context.Context, struct{}) (mapped, error)       { return mapped{}, nil }
-func (*mod) asString(context.Context, struct{}) (asString, error)   { return asString{}, nil }
-func (*mod) raw(context.Context, struct{}) (raw, error)             { return raw{}, nil }
-func (*mod) marshaler(context.Context, struct{}) (marshaler, error) { return marshaler{}, nil }
-func (*mod) badParams(context.Context, int) (string, error)         { return "", nil }
+func (*mod) embedded(context.Context, module.Query, struct{}) (embedded, error) {
+	return embedded{}, nil
+}
+func (*mod) mapped(context.Context, module.Query, struct{}) (mapped, error) { return mapped{}, nil }
+func (*mod) asString(context.Context, module.Query, struct{}) (asString, error) {
+	return asString{}, nil
+}
+func (*mod) raw(context.Context, module.Query, struct{}) (raw, error) { return raw{}, nil }
+func (*mod) marshaler(context.Context, module.Query, struct{}) (marshaler, error) {
+	return marshaler{}, nil
+}
+func (*mod) badParams(context.Context, module.Query, int) (string, error) { return "", nil }
 
 func TestGenerateErrors(t *testing.T) {
 	t.Parallel()

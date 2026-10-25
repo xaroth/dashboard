@@ -196,8 +196,8 @@ type vehicleParams struct {
 
 // vehicle returns the stored state of one vehicle, or null before the first
 // update.
-func (m *car) vehicle(ctx context.Context, p vehicleParams) (*Vehicle, error) {
-	vs, err := m.vehicles(ctx, struct{}{})
+func (m *car) vehicle(ctx context.Context, q module.Query, p vehicleParams) (*Vehicle, error) {
+	vs, err := m.vehicles(ctx, q, struct{}{})
 	if err != nil || len(vs) == 0 {
 		return nil, err
 	}
@@ -215,18 +215,18 @@ func (m *car) vehicle(ctx context.Context, p vehicleParams) (*Vehicle, error) {
 // vehicles returns the stored state of every vehicle, by short name, then
 // VIN. Short names and key expiry come from the admin page's current
 // settings, not the last update.
-func (*car) vehicles(ctx context.Context, _ struct{}) ([]Vehicle, error) {
+func (*car) vehicles(ctx context.Context, q module.Query, _ struct{}) ([]Vehicle, error) {
 	var snap Snapshot
-	ok, err := module.LoadSnapshot(ctx, &snap)
+	ok, err := q.LoadSnapshot(ctx, &snap)
 	if err != nil || !ok {
 		return []Vehicle{}, err
 	}
-	q := New(module.Database(ctx))
-	rows, err := q.ListVehicles(ctx)
+	db := New(q.DB)
+	rows, err := db.ListVehicles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading vehicles: %w", err)
 	}
-	keys, err := q.ListKeys(ctx)
+	keys, err := db.ListKeys(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reading keys: %w", err)
 	}

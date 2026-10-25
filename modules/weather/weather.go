@@ -50,7 +50,7 @@ var Module = module.Define[weather, config](
 	module.WithQuery("forecast", (*weather).forecast),
 )
 
-func (m *weather) Initialize(_ context.Context, cfg *config) error {
+func (m *weather) Initialize(_ context.Context, cfg *config, _ module.Env) error {
 	if cfg.ForecastDays < 1 || cfg.ForecastDays > 16 {
 		return fmt.Errorf("forecast_days must be 1 to 16, got %d", cfg.ForecastDays)
 	}
@@ -58,24 +58,26 @@ func (m *weather) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *weather) Enabled(context.Context) (bool, error) { return m.cfg.Location != "", nil }
+func (m *weather) Enabled(context.Context, module.Query) (bool, error) {
+	return m.cfg.Location != "", nil
+}
 
-func (m *weather) Update(ctx context.Context) error {
-	loc, err := m.location(ctx)
+func (m *weather) Update(ctx context.Context, u *module.Update) error {
+	loc, err := m.location(ctx, u)
 	if err != nil {
 		return err
 	}
-	f, err := fetchForecast(ctx, m.cfg.ForecastURL, m.cfg.Model, loc, m.cfg.ForecastDays)
+	f, err := fetchForecast(ctx, u.HTTP, m.cfg.ForecastURL, m.cfg.Model, loc, m.cfg.ForecastDays)
 	if err != nil {
 		return err
 	}
-	return module.SaveSnapshot(ctx, f)
+	return u.SaveSnapshot(f)
 }
 
 // location returns the coordinates for the configured location, geocoding
 // it on first use and when the setting changes.
-func (m *weather) location(ctx context.Context) (Location, error) {
-	q := New(module.Database(ctx))
+func (m *weather) location(ctx context.Context, u *module.Update) (Location, error) {
+	q := New(u.DB)
 	row, err := q.GetLocation(ctx, m.cfg.Location)
 	if err == nil {
 		return Location{Name: row.Name, Country: row.Country, Latitude: row.Latitude, Longitude: row.Longitude, Timezone: row.Timezone}, nil
@@ -83,19 +85,19 @@ func (m *weather) location(ctx context.Context) (Location, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Location{}, fmt.Errorf("reading cached location: %w", err)
 	}
-	loc, err := geocode(ctx, m.cfg.GeocodingURL, m.cfg.Location)
+	loc, err := geocode(ctx, u.HTTP, m.cfg.GeocodingURL, m.cfg.Location)
 	if err != nil {
 		return Location{}, err
 	}
 	err = q.SaveLocation(ctx, SaveLocationParams{
 		Query: m.cfg.Location, Name: loc.Name, Country: loc.Country,
 		Latitude: loc.Latitude, Longitude: loc.Longitude, Timezone: loc.Timezone,
-		ResolvedAt: module.Clock(ctx)(),
+		ResolvedAt: u.Now(),
 	})
 	if err != nil {
 		return Location{}, fmt.Errorf("caching location: %w", err)
 	}
-	module.Logger(ctx).Info("geocoded location", "query", m.cfg.Location, "name", loc.Name, "lat", loc.Latitude, "lon", loc.Longitude)
+	u.Log.Info("geocoded location", "query", m.cfg.Location, "name", loc.Name, "lat", loc.Latitude, "lon", loc.Longitude)
 	return loc, nil
 }
 
@@ -108,12 +110,12 @@ type forecastParams struct {
 
 // forecast returns the stored forecast from now on: Hours hourly entries
 // starting at the current hour, Days daily entries starting today.
-func (m *weather) forecast(ctx context.Context, p forecastParams) (*Forecast, error) {
+func (m *weather) forecast(ctx context.Context, q module.Query, p forecastParams) (*Forecast, error) {
 	if p.Hours < 0 || p.Days < 0 {
 		return nil, errors.New("hours and days must not be negative")
 	}
 	var f Forecast
-	ok, err := module.LoadSnapshot(ctx, &f)
+	ok, err := q.LoadSnapshot(ctx, &f)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -121,7 +123,7 @@ func (m *weather) forecast(ctx context.Context, p forecastParams) (*Forecast, er
 	if err != nil {
 		return nil, fmt.Errorf("forecast timezone: %w", err)
 	}
-	now := module.Clock(ctx)()
+	now := q.Now()
 	f.Hourly = from(f.Hourly, func(h Hour) bool { return now.Before(h.Time.Add(time.Hour)) }, cmp.Or(p.Hours, 24))
 	// The next local midnight, not Date+24h: days are 23 or 25 hours on DST changes.
 	f.Daily = from(f.Daily, func(d Day) bool {

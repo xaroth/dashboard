@@ -39,14 +39,17 @@ type config struct{}
 // checks for a new build every hour; latest.jsonl is cached for 5 minutes and
 // builds come at unannounced times, often days apart. An update downloads
 // about 100 MB when there is one. Modules declare it with the datasets they
-// need and read it with Shared.Get(ctx).
+// need and read it with Shared.Get.
 var Shared = module.DefineShared("eveonline_sde", func() *config { return &config{} }, newStore,
 	module.SharedMigrations(migrations),
 	module.SharedSchedule(time.Hour, 6*time.Hour),
 	module.SharedUpdateTimeout(10*time.Minute))
 
+// Load only detects this by type assertion.
+var _ module.Versioned = (*Store)(nil)
+
 // Store imports the SDE and answers lookups from the imported build. Lookups
-// use module.Database(ctx), so they work in Update and in queries.
+// take the caller's Query, so they work in Update and in queries.
 type Store struct {
 	// http is the service's client, for latest.jsonl.
 	http *http.Client
@@ -57,7 +60,7 @@ type Store struct {
 	datasets []Dataset
 }
 
-func newStore(ctx context.Context, _ *config, decls []Dataset) (*Store, error) {
+func newStore(_ context.Context, _ *config, decls []Dataset, env module.Env) (*Store, error) {
 	if len(decls) == 0 {
 		return nil, errors.New("no datasets declared")
 	}
@@ -66,7 +69,7 @@ func newStore(ctx context.Context, _ *config, decls []Dataset) (*Store, error) {
 			return nil, fmt.Errorf("unknown dataset %q", d)
 		}
 	}
-	base := module.HTTPClient(ctx)
+	base := env.HTTP
 	return &Store{
 		http:     base,
 		download: &http.Client{Transport: cmp.Or(base.Transport, http.DefaultTransport)},
@@ -75,8 +78,8 @@ func newStore(ctx context.Context, _ *config, decls []Dataset) (*Store, error) {
 }
 
 // imported returns the imported build. ok is false before the first import.
-func (s *Store) imported(ctx context.Context) (b GetBuildRow, ok bool, err error) {
-	b, err = New(module.Database(ctx)).GetBuild(ctx)
+func (s *Store) imported(ctx context.Context, db *sql.DB) (b GetBuildRow, ok bool, err error) {
+	b, err = New(db).GetBuild(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b, false, nil
 	}
@@ -87,8 +90,8 @@ func (s *Store) imported(ctx context.Context) (b GetBuildRow, ok bool, err error
 }
 
 // Version reports the imported build, for the admin UI.
-func (s *Store) Version(ctx context.Context) (string, error) {
-	b, ok, err := s.imported(ctx)
+func (s *Store) Version(ctx context.Context, q module.Query) (string, error) {
+	b, ok, err := s.imported(ctx, q.DB)
 	if err != nil || !ok {
 		return "", err
 	}
@@ -101,11 +104,11 @@ type Type = ListTypesRow
 // Types returns the types with the given IDs. An ID the imported build does
 // not have is left out, as are all before the first import. It needs the
 // Types dataset.
-func (s *Store) Types(ctx context.Context, ids []int64) (map[int64]Type, error) {
+func (s *Store) Types(ctx context.Context, q module.Query, ids []int64) (map[int64]Type, error) {
 	if err := s.check(Types); err != nil {
 		return nil, err
 	}
-	rows, err := New(module.Database(ctx)).ListTypes(ctx, ids)
+	rows, err := New(q.DB).ListTypes(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("reading SDE types: %w", err)
 	}
@@ -118,11 +121,11 @@ type SolarSystem = ListSolarSystemsRow
 
 // SolarSystems returns the solar systems with the given IDs, as Types does.
 // It needs the SolarSystems dataset.
-func (s *Store) SolarSystems(ctx context.Context, ids []int64) (map[int64]SolarSystem, error) {
+func (s *Store) SolarSystems(ctx context.Context, q module.Query, ids []int64) (map[int64]SolarSystem, error) {
 	if err := s.check(SolarSystems); err != nil {
 		return nil, err
 	}
-	rows, err := New(module.Database(ctx)).ListSolarSystems(ctx, ids)
+	rows, err := New(q.DB).ListSolarSystems(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("reading SDE solar systems: %w", err)
 	}

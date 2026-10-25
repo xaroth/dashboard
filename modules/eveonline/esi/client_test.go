@@ -28,25 +28,25 @@ type probeConfig struct {
 	Need esi.Scopes `yaml:"need"`
 }
 
-func (m *probe) Initialize(_ context.Context, cfg *probeConfig) error {
+func (m *probe) Initialize(_ context.Context, cfg *probeConfig, _ module.Env) error {
 	m.cfg = cfg
 	return nil
 }
 
-func (*probe) Enabled(context.Context) (bool, error) { return false, nil }
+func (*probe) Enabled(context.Context, module.Query) (bool, error) { return false, nil }
 
-func (m *probe) Update(ctx context.Context) error {
-	c := esi.Shared.Get(ctx)
+func (m *probe) Update(ctx context.Context, u *module.Update) error {
+	c := esi.Shared.Get(u.Query)
 	if len(m.cfg.Need) == 0 {
 		_, err := getstatus.Request(ctx, c)
 		return err
 	}
-	chars, err := c.Characters(ctx, m.cfg.Need)
+	chars, err := c.Characters(ctx, u.Query, m.cfg.Need)
 	if err != nil {
 		return err
 	}
 	for _, ch := range chars {
-		tok, err := c.Token(ctx, ch.ID)
+		tok, err := c.Token(ctx, u, ch.ID)
 		if err != nil {
 			return err
 		}
@@ -57,8 +57,8 @@ func (m *probe) Update(ctx context.Context) error {
 	return nil
 }
 
-func (m *probe) characters(ctx context.Context, _ struct{}) ([]esi.Character, error) {
-	return esi.Shared.Get(ctx).Characters(ctx, m.cfg.Need)
+func (m *probe) characters(ctx context.Context, q module.Query, _ struct{}) ([]esi.Character, error) {
+	return esi.Shared.Get(q).Characters(ctx, q, m.cfg.Need)
 }
 
 const (

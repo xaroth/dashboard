@@ -17,27 +17,20 @@ type meterConfig struct{}
 
 type meter struct{ reading float64 }
 
-func (*meter) Initialize(context.Context, *meterConfig) error { return nil }
-func (*meter) Enabled(context.Context) (bool, error)          { return true, nil }
+func (*meter) Initialize(context.Context, *meterConfig, module.Env) error { return nil }
+func (*meter) Enabled(context.Context, module.Query) (bool, error)        { return true, nil }
 
-func (m *meter) Update(ctx context.Context) error {
+func (m *meter) Update(_ context.Context, u *module.Update) error {
 	m.reading++
-	return module.Series(ctx).Add("power", module.Clock(ctx)(), m.reading)
+	return u.AddSample("power", u.Now(), m.reading)
 }
 
 type powerParams struct{}
 
-func (*meter) power(ctx context.Context, _ powerParams) ([]series.Point, error) {
-	now := module.Clock(ctx)()
-	if err := module.Series(ctx).Add("power", now, 1); err == nil {
-		return nil, errorString("Add worked in a query")
-	}
-	return module.Series(ctx).Query(ctx, "power", now.Add(-2*time.Minute), now.Add(time.Minute), time.Minute)
+func (*meter) power(ctx context.Context, q module.Query, _ powerParams) ([]series.Point, error) {
+	now := q.Now()
+	return q.QuerySeries(ctx, "power", now.Add(-2*time.Minute), now.Add(time.Minute), time.Minute)
 }
-
-type errorString string
-
-func (e errorString) Error() string { return string(e) }
 
 func TestSeries(t *testing.T) {
 	t.Parallel()

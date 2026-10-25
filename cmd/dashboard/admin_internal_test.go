@@ -31,14 +31,14 @@ type adminConfig struct {
 // adminModule is a module for the admin UI to show; fail makes its updates fail.
 type adminModule struct{ fail bool }
 
-func (m *adminModule) Initialize(_ context.Context, cfg *adminConfig) error {
+func (m *adminModule) Initialize(_ context.Context, cfg *adminConfig, _ module.Env) error {
 	m.fail = cfg.Fail
 	return nil
 }
 
-func (*adminModule) Enabled(context.Context) (bool, error) { return true, nil }
+func (*adminModule) Enabled(context.Context, module.Query) (bool, error) { return true, nil }
 
-func (m *adminModule) Update(context.Context) error {
+func (m *adminModule) Update(context.Context, *module.Update) error {
 	if m.fail {
 		return errors.New("token refused")
 	}
@@ -53,12 +53,12 @@ func adminRegistration(name string, opts ...module.Option) module.Registration {
 // loginsPage is a shared value with a page, like a login flow.
 type loginsPage struct{}
 
-func (loginsPage) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (loginsPage) ServeAdmin(w http.ResponseWriter, r *http.Request, _ module.Query) {
 	fmt.Fprint(w, "logins at ", r.URL.Path)
 }
 
 var logins = module.DefineShared("logins", func() *struct{} { return &struct{}{} },
-	func(context.Context, *struct{}, []struct{}) (loginsPage, error) { return loginsPage{}, nil })
+	func(context.Context, *struct{}, []struct{}, module.Env) (loginsPage, error) { return loginsPage{}, nil })
 
 // fixture is the admin UI on a real pipeline, devices and module set: modules
 // "sun", which uses the shared logins page, and "car", whose updates fail,
