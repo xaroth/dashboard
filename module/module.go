@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"slices"
 	"time"
+
+	"github.com/xaroth/dashboard/series"
 )
 
 // Module is the contract every data source implements on its pointer type.
@@ -42,6 +44,7 @@ type Registration struct {
 	staleAfter time.Duration
 	migrations fs.FS
 	queries    map[string]query
+	series     map[string]series.Kind
 	shared     []sharedUse
 	moduleType reflect.Type
 	initialize func(ctx context.Context, m any, cfg any) error
@@ -76,6 +79,20 @@ func WithMigrations(fsys fs.FS) Option {
 	return func(r *Registration) { r.migrations = fsys }
 }
 
+// WithSeries declares a time series the module writes, stored as
+// "<module>.<name>"; see Series.
+func WithSeries(name string, kind series.Kind) Option {
+	return func(r *Registration) {
+		if !validName.MatchString(name) {
+			panic(fmt.Sprintf("module: %s: invalid series name %q", r.name, name))
+		}
+		if _, ok := r.series[name]; ok {
+			panic(fmt.Sprintf("module: %s: series %s defined twice", r.name, name))
+		}
+		r.series[name] = kind
+	}
+}
+
 var validName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // Define builds a registration. PM is inferred: *M must implement Module[C].
@@ -93,6 +110,7 @@ func Define[M any, C any, PM interface {
 		interval:   defaultInterval,
 		staleAfter: defaultStaleAfter,
 		queries:    map[string]query{},
+		series:     map[string]series.Kind{},
 		moduleType: reflect.TypeFor[*M](),
 		initialize: func(ctx context.Context, m any, cfg any) (err error) {
 			defer recovered(&err)
