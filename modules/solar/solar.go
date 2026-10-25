@@ -93,7 +93,7 @@ func (m *solar) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *solar) Enabled(context.Context) bool { return m.cfg.Host != "" }
+func (m *solar) Enabled(context.Context) (bool, error) { return m.cfg.Host != "", nil }
 
 // Plant is the snapshot one update stores.
 type Plant struct {

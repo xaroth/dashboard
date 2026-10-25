@@ -63,8 +63,8 @@ func (*greeter) Initialize(ctx context.Context, _ *greeterConfig) error {
 	greetingShared.Get(ctx)
 	return nil
 }
-func (*greeter) Enabled(context.Context) bool { return false }
-func (*greeter) Update(context.Context) error { return nil }
+func (*greeter) Enabled(context.Context) (bool, error) { return false, nil }
+func (*greeter) Update(context.Context) error          { return nil }
 
 func (*greeter) greeting(ctx context.Context, _ struct{}) (*greeting, error) {
 	return greetingShared.Get(ctx), nil

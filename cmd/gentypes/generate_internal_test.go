@@ -23,7 +23,7 @@ type cfg struct{}
 type mod struct{}
 
 func (*mod) Initialize(context.Context, *cfg) error { return nil }
-func (*mod) Enabled(context.Context) bool           { return false }
+func (*mod) Enabled(context.Context) (bool, error)  { return false, nil }
 func (*mod) Update(context.Context) error           { return nil }
 
 type Item struct {

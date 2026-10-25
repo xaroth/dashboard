@@ -20,7 +20,7 @@ type meterConfig struct{}
 type meter struct{ reading float64 }
 
 func (*meter) Initialize(context.Context, *meterConfig) error { return nil }
-func (*meter) Enabled(context.Context) bool                   { return true }
+func (*meter) Enabled(context.Context) (bool, error)          { return true, nil }
 
 func (m *meter) Update(ctx context.Context) error {
 	m.reading++
