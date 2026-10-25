@@ -607,7 +607,7 @@ func (m *weather) forecast(ctx context.Context, p forecastParams) (*Forecast, er
 
 A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run in `renderer.dir`), started on the first request and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
 
-- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` with `Bun.build` into JS plus CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle.
+- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` with `Bun.build` into JS plus CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle, and a watcher error is logged and ends rebuilding.
 - **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
 
 | Request | Response |
@@ -615,7 +615,8 @@ A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run 
 | `{"id":1,"op":"describe"}` | `{"id":1,"pages":[{"name":"e1001/weather","data":{...}}]}` |
 | `{"id":2,"op":"render","page":"e1001/weather","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
-- **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines.
+- **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines. A failed render logs the page and stack there; the error frame carries only the message.
+- **Requests**: a type guard checks each request header (`id`, `op`, and for render `page` and `props` with `viewport` and `data`); an invalid one gets an error frame.
 - **Supervision**: a process that exits is replaced on the next request, with backoff from 500 ms to 30 s between starts. Each request has its own timeout, 30 s for a render and 60 s for describe (it may bundle); a process that does not answer in time is killed and restarted, so requests queued behind it are not stuck. A request in flight when the process dies fails; the device keeps its last image and gets it again on the next wake.
 - **Callers leaving**: when a caller's context ends (a device disconnects), the caller gets its error at once, while the response is still read in the background, within the same timeout, before the next request uses the process. Only a response that does not arrive in time restarts the process.
 
@@ -657,7 +658,7 @@ Each step has its own test with no network:
 | Pipeline, renderer process | `go test` | fake renderer and queries, including failing and stale ones; frame encoding; timeouts, restarts, backoff; one integration test against the real Bun renderer |
 | Service and admin UI | `go test` | config parsing, startup checks, previews, simulator, `/healthz`, `/metrics`, request spans, shutdown drain |
 | Types | `go test`, `tsc --noEmit` | gentypes against a golden file; pages against generated types |
-| Formatting, renderer frames | `bun test` | table tests on pure functions; frame encoding and rendering in `renderer/` |
+| Formatting, renderer frames, pages | `bun test` | table tests on pure functions; frame encoding, the request guard and rendering in `renderer/`; every page rendered at both orientations with typed fixtures (missing, stale and populated data); every CSS module class a component uses exists |
 
 ### Fonts
 
@@ -678,7 +679,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |
 | `/{name}/...` | Pages of modules and shared values that are `http.Handler`s, e.g. `/eveonline_esi/` (characters, SSO login and callback); linked from `/` in the module and Shared tables |
-| `GET /healthz` | Liveness, `ok` |
+| `GET /healthz` | Liveness, `ok`; `dashboard healthz [addr]` (default `127.0.0.1:8081`) checks it for the image's `HEALTHCHECK` |
 | `GET /metrics` | Prometheus metrics, see [Observability](#observability) |
 
 The simulator runs on its own `device.Devices`, mounted only on the admin listener: its page, wake and image store (4 images) are separate from the real devices', so it never evicts their images. It shares the stored API keys, which belong to a MAC rather than to a device's state. The device listener has no simulator mode.

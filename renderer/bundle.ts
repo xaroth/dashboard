@@ -3,12 +3,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ComponentType } from "react";
+import type { Props, Result } from "../pages/generated/props";
 import type { Query } from "../pages/lib/page";
+
+/** Props as Go sends them; each page narrows data to its own queries. */
+export type RenderProps = Props<Record<string, Result<unknown>>>;
 
 export type Page = {
   name: string;
   data: Record<string, Query>;
-  component: ComponentType<any>;
+  component: ComponentType<RenderProps>;
   css: string;
 };
 

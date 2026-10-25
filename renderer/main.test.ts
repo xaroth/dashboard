@@ -18,23 +18,19 @@ test("process answers describe and render over frames", async () => {
   expect(desc!.header.id).toBe(1);
   expect(desc!.header.pages).toContainEqual({ name: "e1001/hello", data: {} });
 
-  proc.stdin.write(encodeFrame({ id: 2, op: "render", page: "nope", props: {} }));
+  const props = {
+    data: {},
+    device: { name: "t", model: "m", rotation: 0 },
+    viewport: { width: 800, height: 480, portrait: false },
+    system: { staleModules: [] },
+    now: "2026-10-16T05:30:00Z",
+    timezone: "UTC",
+  };
+  proc.stdin.write(encodeFrame({ id: 2, op: "render", page: "nope", props }));
   proc.stdin.flush();
   expect((await reader.next())!.header).toMatchObject({ id: 2, error: "unknown page nope" });
 
-  proc.stdin.write(encodeFrame({
-    id: 3,
-    op: "render",
-    page: "e1001/hello",
-    props: {
-      data: {},
-      device: { name: "t", model: "m", rotation: 0 },
-      viewport: { width: 800, height: 480, portrait: false },
-      system: { staleModules: [] },
-      now: "2026-10-16T05:30:00Z",
-      timezone: "UTC",
-    },
-  }));
+  proc.stdin.write(encodeFrame({ id: 3, op: "render", page: "e1001/hello", props }));
   proc.stdin.flush();
   const png = await reader.next();
   expect(png!.header.id).toBe(3);
@@ -51,7 +47,7 @@ test("a throwing page with stray output yields an error frame and the process ke
     stderr: "pipe",
   });
   const reader = new FrameReader(proc.stdout);
-  const props = { viewport: { width: 100, height: 100, portrait: false } };
+  const props = { data: {}, viewport: { width: 100, height: 100, portrait: false } };
 
   for (const id of [1, 2]) {
     proc.stdin.write(encodeFrame({ id, op: "render", page: "test/broken", props }));
@@ -59,7 +55,15 @@ test("a throwing page with stray output yields an error frame and the process ke
     expect((await reader.next())!.header).toMatchObject({ id, error: "boom" });
   }
 
-  proc.stdin.write(encodeFrame({ id: 3, op: "describe" }));
+  proc.stdin.write(encodeFrame({ id: 3, op: "render", page: "test/broken", props: {} }));
+  proc.stdin.flush();
+  expect((await reader.next())!.header).toMatchObject({ id: 3, error: "invalid render request" });
+
+  proc.stdin.write(encodeFrame({ id: 4, op: "nope" }));
+  proc.stdin.flush();
+  expect((await reader.next())!.header).toMatchObject({ id: 4, error: "invalid nope request" });
+
+  proc.stdin.write(encodeFrame({ id: 5, op: "describe" }));
   proc.stdin.flush();
   expect((await reader.next())!.header.pages).toEqual([
     { name: "test/broken", data: { forecast: { module: "weather", query: "forecast", params: { hours: 2 } } } },
@@ -67,5 +71,7 @@ test("a throwing page with stray output yields an error frame and the process ke
 
   proc.stdin.end();
   expect(await proc.exited).toBe(0);
-  expect(await new Response(proc.stderr).text()).toContain("stray output");
+  const stderr = await new Response(proc.stderr).text();
+  expect(stderr).toContain("stray output");
+  expect(stderr).toMatch(/rendering test\/broken failed:.*\n.*at Broken/);
 }, 20000);
