@@ -130,6 +130,12 @@ func (m *car) Update(ctx context.Context) error {
 			err = fmt.Errorf("%s key %s: %w", k.Brand, k.ClientID, err)
 			failed = append(failed, err)
 			snap.Vehicles = append(snap.Vehicles, keyVehicles(prev, rows, k.ClientID)...)
+			// A car in use behind a failing key keeps the short interval.
+			for _, r := range rows {
+				if r.ClientID == k.ClientID && r.ActiveAt != nil {
+					lastActive = latest(lastActive, *r.ActiveAt)
+				}
+			}
 			var ke errKey
 			if !errors.As(err, &ke) {
 				module.Logger(ctx).Warn("key failed; its vehicles keep their last data", "err", err)
