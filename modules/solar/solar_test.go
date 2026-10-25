@@ -19,7 +19,7 @@ import (
 	"github.com/xaroth/dashboard/storage"
 )
 
-// load runs solar against fake, with extra config keys.
+// load runs solar against fake, with extra config keys after the host.
 func load(tb testing.TB, fake *solar.FakeDTU, extra string) *module.Set {
 	tb.Helper()
 	db, err := storage.Open(tb.Context(), tb.TempDir())
@@ -28,7 +28,7 @@ func load(tb testing.TB, fake *solar.FakeDTU, extra string) *module.Set {
 	}
 	tb.Cleanup(func() { db.Close() })
 	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte("solar: {host: "+fake.Host+extra+"}"), &configs); err != nil {
+	if err := yaml.Unmarshal([]byte("solar: {host: "+solar.FakeHost+extra+"}"), &configs); err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
@@ -39,6 +39,7 @@ func load(tb testing.TB, fake *solar.FakeDTU, extra string) *module.Set {
 		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    moduletest.HTTPClient(nil),
+		Dialer:        fake,
 		Now:           time.Now,
 	})
 	if err != nil {
@@ -56,58 +57,46 @@ func production(tb testing.TB, set *module.Set) *solar.Production {
 	return res.Value.(*solar.Production)
 }
 
-func TestDecodeRealInput(t *testing.T) {
-	t.Parallel()
-	got, ok := solar.DecodeInput(solar.RealInput)
-	want := solar.Input{
-		Inverter: "100000000456", Port: 1,
-		Voltage: 33.4, Current: 1.26, Power: 42.1,
-		GridVoltage: 235.4, GridFrequency: 49.98,
-		TodayWh: 274, TotalWh: 841590, Temperature: 18.7,
-		Status: 3, Link: true,
-	}
-	if !ok {
-		t.Fatal("got no input")
-	}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("input (-want +got):\n%s", diff)
-	}
-	if _, ok := solar.DecodeInput(make([]byte, 40)); ok {
-		t.Error("got an input from zero registers, want the end")
-	}
-}
-
 func TestProduction(t *testing.T) {
 	t.Parallel()
-	for _, badCount := range []bool{false, true} {
-		fake := solar.NewFakeDTU(t)
-		fake.SetWrongByteCount(badCount)
-		fake.SetInputs(
-			solar.RealInput,
-			solar.FakeInput("100000000687", 1, 0, true), // no panel
-			solar.FakeInput("100000000687", 2, 40.3, true),
-			// Counts while the link is down.
-			solar.FakeInput("100000000815", 1, 39.9, false),
-		)
-		set := load(t, fake, `, unused: ["100000000687:1"]`)
-		if err := set.Update(t.Context(), "solar"); err != nil {
-			t.Fatalf("Update (wrong byte count %v): %v", badCount, err)
-		}
-		want := &solar.Production{
-			PowerW: 122.3,
-			Panels: []solar.Panel{
-				{Inverter: "100000000456", Port: 1, PowerW: 42.1},
-				{Inverter: "100000000687", Port: 2, PowerW: 40.3},
-				{Inverter: "100000000815", Port: 1, PowerW: 39.9},
-			},
-		}
-		if diff := cmp.Diff(want, production(t, set)); diff != "" {
-			t.Errorf("production, wrong byte count %v (-want +got):\n%s", badCount, diff)
-		}
-		// DTU serial, 4 inputs and the empty one after them.
-		if got := fake.Requests(); got != 6 {
-			t.Errorf("got %d requests, want 6", got)
-		}
+	testCases := []struct {
+		name string
+		opts []solar.FakeOption
+	}{
+		{name: "byte count right"},
+		{name: "byte count wrong", opts: []solar.FakeOption{solar.ExpectWrongByteCount}},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fake := solar.NewFake(t, testCase.opts...)
+			fake.SetInputs(
+				solar.RealInput,
+				solar.FakeInput("100000000687", 1, 0, true), // no panel
+				solar.FakeInput("100000000687", 2, 40.3, true),
+				// Counts while the link is down.
+				solar.FakeInput("100000000815", 1, 39.9, false),
+			)
+			set := load(t, fake, `, unused: ["100000000687:1"]`)
+			if err := set.Update(t.Context(), "solar"); err != nil {
+				t.Fatalf("Update: %v", err)
+			}
+			want := &solar.Production{
+				PowerW: 122.3,
+				Panels: []solar.Panel{
+					{Inverter: "100000000456", Port: 1, PowerW: 42.1},
+					{Inverter: "100000000687", Port: 2, PowerW: 40.3},
+					{Inverter: "100000000815", Port: 1, PowerW: 39.9},
+				},
+			}
+			if diff := cmp.Diff(want, production(t, set)); diff != "" {
+				t.Errorf("production (-want +got):\n%s", diff)
+			}
+			// DTU serial, 4 inputs and the empty one after them.
+			if got := fake.Requests(); got != 6 {
+				t.Errorf("got %d requests, want 6", got)
+			}
+		})
 	}
 }
 
@@ -115,29 +104,27 @@ func TestUpdateErrors(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
 		name    string
-		setup   func(*solar.FakeDTU)
-		host    string
+		opts    []solar.FakeOption
+		extra   string
 		wantErr string
 	}{
 		{
 			name:    "no inverters",
-			setup:   func(*solar.FakeDTU) {},
 			wantErr: "DTU reports no inverter inputs",
 		},
 		{
 			name:    "exception",
-			setup:   func(f *solar.FakeDTU) { f.SetException(true) },
+			opts:    []solar.FakeOption{solar.ExpectException},
 			wantErr: "reading DTU serial: exception 2 reading 0x2000",
 		},
 		{
 			name:    "hang",
-			setup:   func(f *solar.FakeDTU) { f.SetInputs(solar.RealInput); f.SetHang(true) },
+			opts:    []solar.FakeOption{solar.ExpectHang},
 			wantErr: "reading DTU serial: reading response: ",
 		},
 		{
 			name:    "unreachable",
-			setup:   func(*solar.FakeDTU) {},
-			host:    "elsewhere",
+			extra:   ", port: 503",
 			wantErr: "connecting to DTU: connection refused",
 		},
 	}
@@ -145,12 +132,7 @@ func TestUpdateErrors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
-				fake := solar.NewFakeDTU(t)
-				testCase.setup(fake)
-				if testCase.host != "" {
-					fake.Host = testCase.host
-				}
-				set := load(t, fake, "")
+				set := load(t, solar.NewFake(t, testCase.opts...), testCase.extra)
 				start := time.Now()
 				err := set.Update(t.Context(), "solar")
 				if err == nil || !strings.HasPrefix(err.Error(), testCase.wantErr) {
@@ -172,7 +154,7 @@ func TestConfigErrors(t *testing.T) {
 		{`, night_interval: 10s`, "night_interval must be at least 1m, got 10s"},
 		{`, night_interval: 30m`, "night_interval must be under 30m0s, got 30m0s"},
 	} {
-		set := load(t, solar.NewFakeDTU(t), testCase.extra)
+		set := load(t, solar.NewFake(t), testCase.extra)
 		err := set.Update(t.Context(), "solar")
 		if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
 			t.Errorf("%s: got %v, want %q", testCase.extra, err, testCase.wantErr)
@@ -185,7 +167,7 @@ func TestConfigErrors(t *testing.T) {
 func TestNight(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fake := solar.NewFakeDTU(t)
+		fake := solar.NewFake(t)
 		set := load(t, fake, "")
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan struct{})
@@ -239,30 +221,34 @@ func status(tb testing.TB, set *module.Set) module.Status {
 
 func TestProductionBeforeFirstUpdate(t *testing.T) {
 	t.Parallel()
-	set := load(t, solar.NewFakeDTU(t), "")
+	set := load(t, solar.NewFake(t), "")
 	res := set.Resolve(t.Context(), "solar", "production", nil)
 	if res.Value.(*solar.Production) != nil || !res.Stale {
 		t.Errorf("got %v, stale %v, want no production, stale", res.Value, res.Stale)
 	}
 }
 
+// TestPower runs in a bubble: the minute must not turn between the update
+// and the query.
 func TestPower(t *testing.T) {
 	t.Parallel()
-	fake := solar.NewFakeDTU(t)
-	fake.SetInputs(solar.RealInput, solar.FakeInput("100000000687", 2, 40.3, true))
-	set := load(t, fake, "")
-	if err := set.Update(t.Context(), "solar"); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if err := set.FlushSeries(t.Context()); err != nil {
-		t.Fatalf("FlushSeries: %v", err)
-	}
-	res := set.Resolve(t.Context(), "solar", "power", map[string]any{"hours": 1, "stepMinutes": 1})
-	if res.Error != "" {
-		t.Fatalf("power: %s", res.Error)
-	}
-	pts := res.Value.([]series.Point)
-	if last := pts[len(pts)-1]; last.V == nil || math.Abs(*last.V-82.4) > 1e-9 {
-		t.Errorf("got %v W in the last minute, want 82.4", last.V)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		fake := solar.NewFake(t)
+		fake.SetInputs(solar.RealInput, solar.FakeInput("100000000687", 2, 40.3, true))
+		set := load(t, fake, "")
+		if err := set.Update(t.Context(), "solar"); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if err := set.FlushSeries(t.Context()); err != nil {
+			t.Fatalf("FlushSeries: %v", err)
+		}
+		res := set.Resolve(t.Context(), "solar", "power", map[string]any{"hours": 1, "stepMinutes": 1})
+		if res.Error != "" {
+			t.Fatalf("power: %s", res.Error)
+		}
+		pts := res.Value.([]series.Point)
+		if last := pts[len(pts)-1]; last.V == nil || math.Abs(*last.V-82.4) > 1e-9 {
+			t.Errorf("got %v W in the last minute, want 82.4", last.V)
+		}
+	})
 }

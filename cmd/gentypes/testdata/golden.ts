@@ -40,6 +40,11 @@ export interface DemoModShared {
   v: number;
 }
 
+export interface SeriesHistoryParams {
+  hours?: number;
+  stepMinutes?: number;
+}
+
 export interface SeriesPoint {
   t: string;
   v: number | null;
@@ -49,6 +54,7 @@ export interface SeriesPoint {
 export interface Queries {
   "demo_mod.echo": { params: DemoModEchoParams; result: DemoModShared };
   "demo_mod.extra": { params: Record<string, never>; result: DemoModExtra };
+  "demo_mod.history": { params: SeriesHistoryParams; result: SeriesPoint[] };
   "demo_mod.list": { params: DemoModListParams; result: DemoModItem[] };
   "demo_mod.one": { params: Record<string, never>; result: DemoModItem | null };
 }

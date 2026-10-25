@@ -2,7 +2,6 @@
 package status
 
 import (
-	"cmp"
 	"context"
 	"embed"
 	"errors"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/modules/eveonline/esi"
+	"github.com/xaroth/dashboard/series"
 )
 
 //go:embed sql/migrations/*.sql
@@ -46,6 +46,7 @@ var Module = module.Define[status, config](
 	module.WithMigrations(migrations),
 	module.WithQuery("server", (*status).server),
 	module.WithQuery("history", (*status).history),
+	module.WithSeries("players", series.Rate),
 )
 
 func (*status) Initialize(context.Context, *config) error { return nil }
@@ -57,11 +58,11 @@ func (*status) Update(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = New(module.Database(ctx)).SaveSample(ctx, SaveSampleParams{
-		At: module.Clock(ctx)().Unix(), Online: st.Online, Players: st.Players,
-	})
-	if err != nil {
-		return fmt.Errorf("saving sample: %w", err)
+	// Offline steps stay empty, so charts show downtime as a gap.
+	if st.Online {
+		if err := module.Series(ctx).Add("players", module.Clock(ctx)(), float64(st.Players)); err != nil {
+			return err
+		}
 	}
 	return module.SaveSnapshot(ctx, st)
 }
@@ -108,61 +109,12 @@ func (*status) server(ctx context.Context, _ serverParams) (*Status, error) {
 	return &st, nil
 }
 
-const (
-	maxHours  = 90 * 24
-	maxPoints = 2000
-)
-
-type historyParams struct {
-	// Hours of history up to now; default 24, at most 2160 (90 days).
-	Hours int `json:"hours"`
-	// StepMinutes is the width of one point; default 5.
-	StepMinutes int `json:"stepMinutes"`
-}
-
-// Point is the average player count while online over one step. Players is
-// null when the server was offline or not polled throughout the step.
-type Point struct {
-	Time    time.Time `json:"time"` // start of the step
-	Players *int64    `json:"players"`
-}
-
-// history returns one point per step over the last Hours, oldest first.
-// Steps align to multiples of the step; the last one holds now.
-func (*status) history(ctx context.Context, p historyParams) ([]Point, error) {
-	if p.Hours < 0 || p.StepMinutes < 0 {
-		return nil, errors.New("hours and stepMinutes must not be negative")
-	}
-	hours, step := cmp.Or(p.Hours, 24), time.Duration(cmp.Or(p.StepMinutes, 5))*time.Minute
-	if hours > maxHours {
-		return nil, fmt.Errorf("hours must be at most %d, got %d", maxHours, hours)
-	}
-	n := int(time.Duration(hours) * time.Hour / step)
-	if n > maxPoints || n < 1 {
-		return nil, fmt.Errorf("hours and stepMinutes give %d points, want 1 to %d", n, maxPoints)
-	}
-	end := module.Clock(ctx)().Truncate(step).Add(step)
-	start := end.Add(-time.Duration(n) * step)
-	rows, err := New(module.Database(ctx)).ListSamples(ctx, start.Unix())
+// history returns the average player count per step over the last hours,
+// null for steps the server was offline or not polled throughout.
+func (*status) history(ctx context.Context, p series.HistoryParams) ([]series.Point, error) {
+	from, to, step, err := p.Range(module.Clock(ctx)())
 	if err != nil {
-		return nil, fmt.Errorf("reading samples: %w", err)
+		return nil, err
 	}
-	sums, counts := make([]int64, n), make([]int64, n)
-	for _, r := range rows {
-		i := int((r.At - start.Unix()) / int64(step/time.Second))
-		if !r.Online || i >= n {
-			continue
-		}
-		sums[i] += r.Players
-		counts[i]++
-	}
-	out := make([]Point, n)
-	for i := range out {
-		out[i].Time = start.Add(time.Duration(i) * step).UTC()
-		if counts[i] > 0 {
-			avg := (sums[i] + counts[i]/2) / counts[i]
-			out[i].Players = &avg
-		}
-	}
-	return out, nil
+	return module.Series(ctx).Query(ctx, "players", from, to, step)
 }

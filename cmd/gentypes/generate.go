@@ -124,6 +124,10 @@ func (g *generator) params(t reflect.Type, name string) (string, error) {
 	if t.NumField() == 0 {
 		return "Record<string, never>", nil
 	}
+	// Shared by modules, e.g. series.HistoryParams: named for its package.
+	if t.Name() != "" && t.PkgPath() != g.pkg {
+		name = pascal(path.Base(t.PkgPath())) + pascal(t.Name())
+	}
 	return g.declare(t, name, true)
 }
 

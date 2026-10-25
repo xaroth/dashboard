@@ -68,6 +68,11 @@ func (*mod) extra(context.Context, struct{}) (Extra, error)   { return Extra{}, 
 func (*mod) echo(context.Context, shared) (shared, error)     { return shared{}, nil }
 func (*mod) one(context.Context, struct{}) (*Item, error)     { return nil, nil }
 
+// Params from another package: named for it.
+func (*mod) history(context.Context, series.HistoryParams) ([]series.Point, error) {
+	return nil, nil
+}
+
 func TestGenerate(t *testing.T) {
 	t.Parallel()
 	reg := module.Define[mod, cfg]("demo_mod", func() *cfg { return &cfg{} },
@@ -75,6 +80,7 @@ func TestGenerate(t *testing.T) {
 		module.WithQuery("one", (*mod).one),
 		module.WithQuery("extra", (*mod).extra),
 		module.WithQuery("echo", (*mod).echo),
+		module.WithQuery("history", (*mod).history),
 	)
 	got, err := generate([]module.Registration{reg})
 	if err != nil {

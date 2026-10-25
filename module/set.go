@@ -55,6 +55,7 @@ type Options struct {
 	Reader     *sql.DB
 	Log        *slog.Logger
 	HTTPClient *http.Client
+	Dialer     ContextDialer
 	Now        func() time.Time
 	// Location aligns series buckets of an hour or longer; nil is UTC.
 	Location *time.Location
@@ -66,6 +67,7 @@ type Set struct {
 	reader     *sql.DB
 	log        *slog.Logger
 	httpClient *http.Client
+	dialer     ContextDialer
 	now        func() time.Time
 	instances  []*instance
 	series     *series.Store
@@ -137,7 +139,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		}
 	}
 
-	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, now: o.Now, shared: map[sharedDef]built{}, sharedOrder: shared}
+	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, dialer: o.Dialer, now: o.Now, shared: map[sharedDef]built{}, sharedOrder: shared}
 	// Three passes, so a config error stops startup before any migration, and
 	// every module's tables exist before any Initialize.
 	sharedConfigs := make([]any, len(shared))
@@ -359,6 +361,7 @@ func (s *Set) sharedErr(inst *instance) error {
 func (s *Set) baseContext(ctx context.Context, log *slog.Logger) context.Context {
 	ctx = context.WithValue(ctx, keyLogger, log)
 	ctx = context.WithValue(ctx, keyHTTPClient, s.httpClient)
+	ctx = context.WithValue(ctx, keyDialer, s.dialer)
 	return context.WithValue(ctx, keyClock, s.now)
 }
 

@@ -3,7 +3,6 @@
 package p1
 
 import (
-	"cmp"
 	"context"
 	"embed"
 	"fmt"
@@ -119,26 +118,14 @@ func addGas(ctx context.Context, r Reading) error {
 	return module.Series(ctx).Add("gas", *r.GasAt, *r.Gas)
 }
 
-type historyParams struct {
-	// Hours back from now, 1 to 168.
-	Hours int `json:"hours"`
-	// StepMinutes is the bucket size; it divides a day.
-	StepMinutes int `json:"stepMinutes"`
-}
-
 // flow returns the average flow in kW per step over the last hours,
 // positive when taking from the net.
-func (*p1) flow(ctx context.Context, p historyParams) ([]series.Point, error) {
-	hours, step := cmp.Or(p.Hours, 24), cmp.Or(p.StepMinutes, 15)
-	if hours < 1 || hours > 168 {
-		return nil, fmt.Errorf("hours must be 1 to 168, got %d", hours)
+func (*p1) flow(ctx context.Context, p series.HistoryParams) ([]series.Point, error) {
+	from, to, step, err := p.Range(module.Clock(ctx)())
+	if err != nil {
+		return nil, err
 	}
-	if step < 1 || step > 1440 {
-		return nil, fmt.Errorf("stepMinutes must be 1 to 1440, got %d", step)
-	}
-	now := module.Clock(ctx)()
-	// Up to a second past now: the bucket holding now has the latest sample.
-	return module.Series(ctx).Query(ctx, "flow", now.Add(-time.Duration(hours)*time.Hour), now.Add(time.Second), time.Duration(step)*time.Minute)
+	return module.Series(ctx).Query(ctx, "flow", from, to, step)
 }
 
 // Actual is the latest reading with usage today and yesterday.
