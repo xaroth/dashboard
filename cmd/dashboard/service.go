@@ -21,6 +21,7 @@ import (
 
 	"github.com/xaroth/dashboard/device"
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules"
 	"github.com/xaroth/dashboard/render"
 	"github.com/xaroth/dashboard/storage"
@@ -83,12 +84,16 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 			err = errors.Join(err, s.close())
 		}
 	}()
+	moduleConfigs, err := yamlconfig.Sections(cfg.Modules)
+	if err != nil {
+		return nil, err
+	}
 	if s.db, err = storage.Open(ctx, cfg.DataDir); err != nil {
 		return nil, fmt.Errorf("opening storage: %w", err)
 	}
 	s.modules, err = module.Load(ctx, module.Options{
 		Registrations: s.regs,
-		Configs:       cfg.Modules,
+		Configs:       moduleConfigs,
 		Migrator:      s.db,
 		Writer:        s.db.Writer,
 		Reader:        s.db.Reader,

@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	updateTimeout = 2 * time.Minute
-	maxJitter     = 30 * time.Second
-	minBackoff    = 30 * time.Second
-	maxBackoff    = 6 * time.Hour
-	recordTimeout = 10 * time.Second
+	updateTimeout  = 2 * time.Minute
+	enabledTimeout = 30 * time.Second
+	maxJitter      = 30 * time.Second
+	minBackoff     = 30 * time.Second
+	maxBackoff     = 6 * time.Hour
+	recordTimeout  = 10 * time.Second
 )
 
 // Run runs every module's schedule and the series store until ctx is
@@ -79,18 +80,10 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		case <-timer:
 		}
 
-		uctx, _ := s.context(ctx, inst, s.writer, false)
-		on, err := inst.reg.enabled(uctx, inst.module)
-		next := inst.interval
-		if err != nil {
-			err = fmt.Errorf("enabled: %w", err)
-			s.recordFailure(ctx, inst, err)
-		} else if !on {
+		on, next, err := s.scheduledUpdate(ctx, inst)
+		if err == nil && !on {
 			phase, delay = PhaseDisabled, inst.interval
 			continue
-		} else {
-			inst.set(PhaseUpdating, time.Time{})
-			next, err = s.runUpdate(ctx, inst)
 		}
 		if ctx.Err() != nil {
 			return
@@ -111,6 +104,38 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 	}
 }
 
+// scheduledUpdate asks Enabled and, if on, runs an update. It skips both
+// when an update succeeded while it waited for a manual one, as that was
+// the update this one would repeat.
+func (s *Set) scheduledUpdate(ctx context.Context, inst *instance) (on bool, next time.Duration, err error) {
+	seen := inst.successCount()
+	if err := inst.lock(ctx); err != nil {
+		return false, 0, err
+	}
+	defer inst.unlock()
+	inst.mu.Lock()
+	skip, next := inst.successes != seen, inst.next
+	inst.mu.Unlock()
+	if skip {
+		return true, next, nil
+	}
+	ectx, _ := s.context(ctx, inst, s.writer, false)
+	ectx, cancel := context.WithTimeout(ectx, enabledTimeout)
+	defer cancel()
+	on, err = inst.reg.enabled(ectx, inst.module)
+	if err != nil {
+		err = fmt.Errorf("enabled: %w", err)
+		s.recordFailure(ctx, inst, err)
+		return false, 0, err
+	}
+	if !on {
+		return false, 0, nil
+	}
+	inst.set(PhaseUpdating, time.Time{})
+	next, err = s.runUpdate(ctx, inst)
+	return true, next, err
+}
+
 // FlushSeries stores the buffered series samples now, as Run does every
 // minute.
 func (s *Set) FlushSeries(ctx context.Context) error { return s.series.Flush(ctx) }
@@ -126,7 +151,12 @@ func (s *Set) Update(ctx context.Context, name string) error {
 		if inst.initErr != nil {
 			return fmt.Errorf("%s: initialize failed: %w", name, inst.initErr)
 		}
-		if _, err := s.runUpdate(ctx, inst); err != nil {
+		if err := inst.lock(ctx); err != nil {
+			return err
+		}
+		_, err := s.runUpdate(ctx, inst)
+		inst.unlock()
+		if err != nil {
 			return err
 		}
 		select {
@@ -141,10 +171,8 @@ func (s *Set) Update(ctx context.Context, name string) error {
 // runUpdate calls Update with a timeout and records success, with the
 // snapshot it saved, or failure. It returns the delay to the next update. A
 // scheduled update starts its own trace; a manual one is part of the
-// request's.
+// request's. The caller holds inst.updating.
 func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration, err error) {
-	inst.updating.Lock()
-	defer inst.updating.Unlock()
 	ctx, span := tracer.Start(ctx, inst.reg.name+".update", trace.WithAttributes(attribute.String("module", inst.reg.name)))
 	defer func() {
 		if err != nil {
@@ -185,6 +213,7 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 	next = cmp.Or(state.next, inst.interval)
 	inst.mu.Lock()
 	inst.next = next
+	inst.successes++
 	inst.mu.Unlock()
 	return next, nil
 }
@@ -199,6 +228,24 @@ func (s *Set) recordFailure(ctx context.Context, inst *instance, err error) {
 
 func backoff(failures int) time.Duration {
 	return min(minBackoff<<min(failures-1, 20), maxBackoff)
+}
+
+// lock takes updating, unless ctx ends first.
+func (i *instance) lock(ctx context.Context) error {
+	select {
+	case i.updating <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (i *instance) unlock() { <-i.updating }
+
+func (i *instance) successCount() uint64 {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.successes
 }
 
 func (i *instance) set(p Phase, next time.Time) {

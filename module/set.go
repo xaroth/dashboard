@@ -1,7 +1,6 @@
 package module
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -15,8 +14,6 @@ import (
 	"slices"
 	"sync"
 	"time"
-
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/series"
 )
@@ -44,19 +41,28 @@ type Schedule struct {
 	StaleAfter     time.Duration `yaml:"stale_after"`
 }
 
-// Options are what Load needs.
+// Config is a modules.<name> section of the config file, decoded by the
+// caller's format; the zero value is an empty section, all defaults.
+type Config struct {
+	// Decode overlays the section, without the reserved schedule key, on the
+	// defaults in v, rejecting unknown keys; nil decodes nothing.
+	Decode func(v any) error
+	// Schedule decodes the schedule key; nil if the section has none.
+	Schedule func(s *Schedule) error
+}
+
+// Options are what Load needs. Migrator, Writer and Reader are required.
 type Options struct {
 	Registrations []Registration
-	// Configs are the modules.<name> sections of the config file.
-	Configs  map[string]yaml.Node
-	Migrator Migrator
+	Configs       map[string]Config
+	Migrator      Migrator
 	// Writer is the only connection that writes; Reader is read-only.
 	Writer     *sql.DB
 	Reader     *sql.DB
-	Log        *slog.Logger
+	Log        *slog.Logger // nil discards
 	HTTPClient *http.Client
 	Dialer     ContextDialer
-	Now        func() time.Time
+	Now        func() time.Time // nil is time.Now
 	// Location aligns series buckets of an hour or longer; nil is UTC.
 	Location *time.Location
 }
@@ -84,10 +90,13 @@ type instance struct {
 	// timeout bounds one update; zero is the default.
 	timeout time.Duration
 	log     *slog.Logger
+	// shared is a scheduled shared value; its admin page is the shared value's.
+	shared bool
 
-	// updating serializes scheduled and manual updates; modules are not
-	// required to be safe for concurrent Update calls.
-	updating sync.Mutex
+	// updating serializes Enabled and scheduled and manual updates; modules
+	// are not required to be safe for concurrent calls. A one-slot channel
+	// rather than a mutex, so a waiter can give up when its context ends.
+	updating chan struct{}
 	// kick tells the schedule a manual update succeeded.
 	kick chan struct{}
 
@@ -98,6 +107,9 @@ type instance struct {
 	// next is the delay after the last successful update, scheduled or
 	// manual: the interval, or what it set with NextUpdate.
 	next time.Duration
+	// successes counts successful updates, so a scheduled update can tell
+	// one landed while it waited.
+	successes uint64
 }
 
 // Phase is where a module's schedule stands.
@@ -118,6 +130,15 @@ const (
 // turns the modules involved off. A scheduled shared value runs alongside the
 // modules, under its own name.
 func Load(ctx context.Context, o Options) (*Set, error) {
+	if o.Migrator == nil || o.Writer == nil || o.Reader == nil {
+		return nil, errors.New("module: Options need a Migrator, Writer and Reader")
+	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
 	regs := slices.SortedFunc(slices.Values(o.Registrations), func(a, b Registration) int { return cmp.Compare(a.name, b.name) })
 	known := map[string]bool{}
 	for _, r := range regs {
@@ -167,6 +188,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 			staleAfter: cmp.Or(sched.StaleAfter, r.staleAfter),
 			log:        o.Log.With("module", r.name),
 			kick:       make(chan struct{}, 1),
+			updating:   make(chan struct{}, 1),
 			phase:      PhaseWaiting,
 		})
 	}
@@ -243,6 +265,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 func (s *Set) sharedInstance(d sharedDef, sc *sharedSchedule, sched Schedule) *instance {
 	b := s.shared[d]
 	inst := &instance{
+		shared: true,
 		reg: Registration{
 			name:    d.sharedName(),
 			queries: map[string]query{},
@@ -259,6 +282,7 @@ func (s *Set) sharedInstance(d sharedDef, sc *sharedSchedule, sched Schedule) *i
 		timeout:    sc.timeout,
 		log:        s.log.With("shared", d.sharedName()),
 		kick:       make(chan struct{}, 1),
+		updating:   make(chan struct{}, 1),
 		phase:      PhaseWaiting,
 	}
 	if b.err != nil {
@@ -300,51 +324,25 @@ func declarations(regs []Registration, d sharedDef) []any {
 	return out
 }
 
-// isEmpty reports whether a config section is absent, or present without
-// keys ("weather:"); both mean defaults.
-func isEmpty(node yaml.Node) bool {
-	return node.Kind == 0 || (node.Kind == yaml.ScalarNode && node.Tag == "!!null")
-}
-
-// decodeConfig overlays node on the defaults in cfg. With scheduled, the
-// reserved schedule key is decoded into the returned Schedule; without, it is
-// an unknown key. Unknown keys are errors.
-func decodeConfig(node yaml.Node, cfg any, scheduled bool) (Schedule, error) {
+// decodeConfig overlays c on the defaults in cfg and returns its schedule.
+// Without scheduled, a schedule key is an error.
+func decodeConfig(c Config, cfg any, scheduled bool) (Schedule, error) {
 	var sched Schedule
-	if isEmpty(node) {
+	if c.Schedule != nil {
+		if !scheduled {
+			return sched, errors.New("schedule: has no schedule to override")
+		}
+		if err := c.Schedule(&sched); err != nil {
+			return sched, fmt.Errorf("schedule: %w", err)
+		}
+		if sched.UpdateInterval < 0 || sched.StaleAfter < 0 {
+			return sched, errors.New("schedule: durations must be positive")
+		}
+	}
+	if c.Decode == nil {
 		return sched, nil
 	}
-	if node.Kind != yaml.MappingNode {
-		return sched, errors.New("must be a mapping")
-	}
-	// Take the reserved schedule key out before decoding the module's own keys.
-	rest := node
-	rest.Content = nil
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		k, v := node.Content[i], node.Content[i+1]
-		if scheduled && k.Value == "schedule" {
-			if err := strictDecode(v, &sched); err != nil {
-				return sched, fmt.Errorf("schedule: %w", err)
-			}
-			if sched.UpdateInterval < 0 || sched.StaleAfter < 0 {
-				return sched, errors.New("schedule: durations must be positive")
-			}
-			continue
-		}
-		rest.Content = append(rest.Content, k, v)
-	}
-	return sched, strictDecode(&rest, cfg)
-}
-
-// strictDecode decodes n into v, rejecting unknown keys; Node.Decode cannot.
-func strictDecode(n *yaml.Node, v any) error {
-	b, err := yaml.Marshal(n)
-	if err != nil {
-		return fmt.Errorf("encoding config: %w", err)
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(b))
-	dec.KnownFields(true)
-	return dec.Decode(v)
+	return sched, c.Decode(cfg)
 }
 
 // sharedErr is the first error among the shared values inst declares.

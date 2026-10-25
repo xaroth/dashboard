@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/p1"
 	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
@@ -37,8 +37,8 @@ func open(tb testing.TB, handler http.Handler, now func() time.Time) (*module.Se
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte("p1: {url: http://p1.example/}"), &configs); err != nil {
+	configs, err := yamlconfig.Parse([]byte("p1: {url: http://p1.example/}"))
+	if err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{

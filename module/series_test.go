@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"go.yaml.in/yaml/v3"
-
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
@@ -54,7 +52,6 @@ func TestSeries(t *testing.T) {
 			module.WithSeries("power", series.Rate),
 			module.WithQuery("power", (*meter).power),
 		)},
-		Configs:  map[string]yaml.Node{},
 		Migrator: db,
 		Writer:   db.Writer,
 		Reader:   db.Reader,

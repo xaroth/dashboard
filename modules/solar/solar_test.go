@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/solar"
 	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
@@ -27,8 +27,8 @@ func load(tb testing.TB, fake *solar.FakeDTU, extra string) *module.Set {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte("solar: {host: "+solar.FakeHost+extra+"}"), &configs); err != nil {
+	configs, err := yamlconfig.Parse([]byte("solar: {host: " + solar.FakeHost + extra + "}"))
+	if err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
