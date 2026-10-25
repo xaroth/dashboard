@@ -62,6 +62,9 @@ func recovered(err *error) {
 
 func (r Registration) Name() string { return r.name }
 
+// PkgPath is the import path of the module's package.
+func (r Registration) PkgPath() string { return r.moduleType.Elem().PkgPath() }
+
 // Option configures a registration.
 type Option func(*Registration)
 

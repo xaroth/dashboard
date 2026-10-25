@@ -18,6 +18,7 @@ import (
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/p1"
+	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -338,5 +339,41 @@ func TestActualBeforeFirstUpdate(t *testing.T) {
 	res := set.Resolve(t.Context(), "p1", "actual", nil)
 	if res.Value.(*p1.Actual) != nil || !res.Stale {
 		t.Errorf("got %v, stale %v, want no reading, stale", res.Value, res.Stale)
+	}
+}
+
+func TestFlow(t *testing.T) {
+	t.Parallel()
+	fake := &fakeDongle{}
+	set := load(t, fake, fake.now)
+	// Taking 1.5 kW, then returning 2 kW a minute later.
+	fake.set("261025120000W", 1, 2, 3, 4, 1.5, 0, 5)
+	if err := set.Update(t.Context(), "p1"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	fake.set("261025120100W", 1, 2, 3, 4, 0, 2, 5)
+	if err := set.Update(t.Context(), "p1"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := set.FlushSeries(t.Context()); err != nil {
+		t.Fatalf("FlushSeries: %v", err)
+	}
+	res := set.Resolve(t.Context(), "p1", "flow", map[string]any{"hours": 1, "stepMinutes": 1})
+	if res.Error != "" {
+		t.Fatalf("flow: %s", res.Error)
+	}
+	pts := res.Value.([]series.Point)
+	var got []float64
+	for _, p := range pts[len(pts)-2:] {
+		if p.V == nil {
+			t.Fatalf("no flow at %v", p.T)
+		}
+		got = append(got, *p.V)
+	}
+	if diff := cmp.Diff([]float64{1.5, -2}, got); diff != "" {
+		t.Errorf("flow (-want +got):\n%s", diff)
+	}
+	if res := set.Resolve(t.Context(), "p1", "flow", map[string]any{"hours": 200}); res.Error != "hours must be 1 to 168, got 200" {
+		t.Errorf("got error %q for 200 hours", res.Error)
 	}
 }

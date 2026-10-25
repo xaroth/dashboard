@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/series"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/golden.ts")
@@ -52,6 +53,8 @@ type Extra struct {
 	Paged  Page[int] `json:"paged"`
 	Hyphen int       `json:"with-hyphen"`
 	Dash   int       `json:"-,"`
+	// From another package: named for it.
+	Point series.Point `json:"point"`
 }
 
 // shared is both a params and a result type.

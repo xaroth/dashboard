@@ -37,3 +37,26 @@ export function formatVolt(v: number | null): string {
 export function panelLabel(inverter: string, port: number): string {
   return `${inverter.slice(-3)}.${port}`;
 }
+
+export type SeriesPoint = { t: string; v: number | null };
+
+/** Splits points into runs without gaps, so charts break where data is missing. */
+export function runs(points: SeriesPoint[]): { t: number; v: number }[][] {
+  const out: { t: number; v: number }[][] = [];
+  let run: { t: number; v: number }[] = [];
+  for (const p of points) {
+    if (p.v == null) {
+      if (run.length) out.push(run);
+      run = [];
+      continue;
+    }
+    run.push({ t: Date.parse(p.t), v: p.v });
+  }
+  if (run.length) out.push(run);
+  return out;
+}
+
+/** 1,2 kW from watts, for axis labels. */
+export function formatKwAxis(w: number): string {
+  return `${number1.format(fixed(w / 1000, 1))} kW`;
+}

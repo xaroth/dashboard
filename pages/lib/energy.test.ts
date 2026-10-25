@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatFlow, formatGas, formatKwh, formatVolt, formatWatt, panelLabel } from "./energy";
+import { formatFlow, formatGas, formatKwAxis, formatKwh, formatVolt, formatWatt, panelLabel, runs } from "./energy";
 
 test("flow is signed: + taken, - returned", () => {
   expect(formatFlow(1.234)).toBe("+1,23 kW");
@@ -19,4 +19,17 @@ test("units with a decimal comma", () => {
 
 test("panel labels", () => {
   expect(panelLabel("138292184456", 3)).toBe("456.3");
+});
+
+test("runs break at gaps", () => {
+  const p = (m: number, v: number | null) => ({ t: `2026-10-25T12:0${m}:00Z`, v });
+  const got = runs([p(0, null), p(1, 1), p(2, 2), p(3, null), p(4, 4)]);
+  expect(got.map((r) => r.map((x) => x.v))).toEqual([[1, 2], [4]]);
+  expect(got[0]![0]!.t).toBe(Date.parse("2026-10-25T12:01:00Z"));
+  expect(runs([])).toEqual([]);
+});
+
+test("axis labels in kW", () => {
+  expect(formatKwAxis(1234)).toBe("1,2 kW");
+  expect(formatKwAxis(-20)).toBe("0,0 kW");
 });

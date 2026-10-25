@@ -99,6 +99,11 @@ export interface P1Actual {
   yesterday: P1Usage | null;
 }
 
+export interface P1FlowParams {
+  hours?: number;
+  stepMinutes?: number;
+}
+
 export interface P1Phases {
   l1: number | null;
   l2: number | null;
@@ -113,10 +118,20 @@ export interface P1Usage {
   gasM3: number | null;
 }
 
+export interface SeriesPoint {
+  t: string;
+  v: number | null;
+}
+
 export interface SolarPanel {
   inverter: string;
   port: number;
   powerW: number;
+}
+
+export interface SolarPowerParams {
+  hours?: number;
+  stepMinutes?: number;
 }
 
 export interface SolarProduction {
@@ -182,6 +197,8 @@ export interface Queries {
   "eveonline_status.history": { params: EveonlineStatusHistoryParams; result: EveonlineStatusPoint[] };
   "eveonline_status.server": { params: Record<string, never>; result: EveonlineStatusStatus | null };
   "p1.actual": { params: Record<string, never>; result: P1Actual | null };
+  "p1.flow": { params: P1FlowParams; result: SeriesPoint[] };
+  "solar.power": { params: SolarPowerParams; result: SeriesPoint[] };
   "solar.production": { params: Record<string, never>; result: SolarProduction | null };
   "weather.forecast": { params: WeatherForecastParams; result: WeatherForecast | null };
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"path"
 	"reflect"
 	"regexp"
 	"slices"
@@ -34,8 +35,10 @@ type declKey struct {
 type generator struct {
 	names map[declKey]string
 	decls map[string]string
-	// prefix names the module whose types are being walked.
+	// prefix names the module whose types are being walked; pkg is its
+	// package path.
 	prefix string
+	pkg    string
 }
 
 func generate(regs []module.Registration) ([]byte, error) {
@@ -43,7 +46,7 @@ func generate(regs []module.Registration) ([]byte, error) {
 	g := &generator{names: map[declKey]string{}, decls: map[string]string{}}
 	var entries []string
 	for _, r := range regs {
-		g.prefix = pascal(r.Name())
+		g.prefix, g.pkg = pascal(r.Name()), r.PkgPath()
 		for _, q := range r.QueryTypes() {
 			params, err := g.params(q.Params, g.prefix+pascal(q.Name)+"Params")
 			if err != nil {
@@ -119,7 +122,12 @@ func (g *generator) typeOf(t reflect.Type, hint string) (string, error) {
 		name := hint
 		if t.Name() != "" {
 			// Generic instantiations are named like Page[int]; keep the identifier characters.
-			name = g.prefix + pascal(nonIdentifierRune.ReplaceAllString(t.Name(), "_"))
+			prefix := g.prefix
+			// From another package, e.g. series.Point: named for that package.
+			if t.PkgPath() != g.pkg {
+				prefix = pascal(path.Base(t.PkgPath()))
+			}
+			name = prefix + pascal(nonIdentifierRune.ReplaceAllString(t.Name(), "_"))
 		}
 		return g.declare(t, name, false)
 	}
