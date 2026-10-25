@@ -30,13 +30,14 @@ type Listen struct {
 	Admin  string `yaml:"admin"`
 }
 
-// Schedule is when devices wake: every Interval from FirstWake up to and
-// including LastWake.
+// Schedule is when devices wake: every IntervalBattery or IntervalUSB from
+// FirstWake up to and including LastWake.
 type Schedule struct {
-	FirstWake     string        `yaml:"first_wake"`
-	LastWake      string        `yaml:"last_wake"`
-	Interval      time.Duration `yaml:"interval"`
-	DetailTimeout time.Duration `yaml:"detail_timeout"`
+	FirstWake       string        `yaml:"first_wake"`
+	LastWake        string        `yaml:"last_wake"`
+	IntervalBattery time.Duration `yaml:"interval_battery"`
+	IntervalUSB     time.Duration `yaml:"interval_usb"`
+	DetailTimeout   time.Duration `yaml:"detail_timeout"`
 }
 
 // RendererConfig is how the Bun render process is started.
@@ -54,7 +55,7 @@ func DefaultConfig() Config {
 		Listen:   Listen{Device: ":8080", Admin: "127.0.0.1:8081"},
 		Timezone: "Europe/Amsterdam",
 		DataDir:  "/data",
-		Schedule: Schedule{FirstWake: "07:00", LastWake: "00:00", Interval: time.Hour, DetailTimeout: 5 * time.Minute},
+		Schedule: Schedule{FirstWake: "07:00", LastWake: "00:00", IntervalBattery: time.Hour, IntervalUSB: 5 * time.Minute, DetailTimeout: 5 * time.Minute},
 		Renderer: RendererConfig{Bun: "bun", Dir: "."},
 	}
 }
@@ -75,8 +76,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("schedule: %q is not HH:MM", s)
 		}
 	}
-	if i := c.Schedule.Interval; i < time.Minute || i > 24*time.Hour || i%time.Minute != 0 {
-		return fmt.Errorf("schedule: interval must be whole minutes from 1m to 24h")
+	for key, i := range map[string]time.Duration{"interval_battery": c.Schedule.IntervalBattery, "interval_usb": c.Schedule.IntervalUSB} {
+		if i < time.Minute || i > 24*time.Hour || i%time.Minute != 0 {
+			return fmt.Errorf("schedule: %s must be whole minutes from 1m to 24h", key)
+		}
 	}
 	if c.Schedule.DetailTimeout <= 0 {
 		return fmt.Errorf("schedule: detail_timeout must be positive")
@@ -89,7 +92,8 @@ func (s Schedule) device(loc *time.Location) device.Schedule {
 	return device.Schedule{
 		First:    sinceMidnight(s.FirstWake),
 		Last:     sinceMidnight(s.LastWake),
-		Interval: s.Interval,
+		Battery:  s.IntervalBattery,
+		USB:      s.IntervalUSB,
 		Detail:   s.DetailTimeout,
 		Location: loc,
 	}

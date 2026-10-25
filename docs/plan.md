@@ -38,7 +38,7 @@ Usage over a period, for counters, is the difference between bucket values; a dr
 
 ## Device health
 
-Recorded per `/api/display`: battery voltage (also as a series), charging (`Battery-Charging`), USB connected (`USB-Connected`), RSSI, firmware version, wake reason, last seen. Battery voltage converts to a percentage through a resting-voltage table per model (the firmware measures before Wi-Fi and the display draw current).
+Recorded per `/api/display`: battery voltage (also as a series), RSSI, firmware version, wake reason, last seen. The reTerminals do not send `Battery-Charging` or `USB-Connected`; power comes from the device's `power` setting (see [Wake data](design.md#wake-data)). Battery voltage converts to a percentage through a resting-voltage table per model (the firmware measures before Wi-Fi and the display draw current).
 
 Health reaches people through the screens: the `system` prop carries this device's battery and stale modules, plus the other devices' last seen and battery. A unit that runs flat shows up on the other one.
 

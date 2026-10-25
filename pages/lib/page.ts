@@ -28,7 +28,15 @@ export type Device = {
   model: string;
   rotation: number;
   // Headers from the device's latest request, absent in previews without a device.
-  wake?: { source?: string; battery?: number; rssi?: number; firmware?: string; at?: string };
+  wake?: {
+    source?: string;
+    battery?: number;
+    rssi?: number;
+    firmware?: string;
+    at?: string;
+    usb?: boolean;
+    powerSource?: "header" | "config" | "default";
+  };
 };
 
 export type System = { staleModules: string[] };

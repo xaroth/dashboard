@@ -13,6 +13,8 @@ type Device struct {
 	// Layout is a folder under pages/layouts/; Pages are files in it.
 	Layout string   `yaml:"layout"`
 	Pages  []string `yaml:"pages"`
+	// Power is auto (the USB-Connected header, else battery), usb or battery.
+	Power string `yaml:"power"`
 	// Params overrides query params per page data key, e.g. "weather.forecast".
 	Params map[string]map[string]any `yaml:"params"`
 }
@@ -66,6 +68,11 @@ func validateDevices(devices map[string]Device) error {
 		}
 		if len(d.Pages) == 0 {
 			return fmt.Errorf("devices.%s: pages is empty", name)
+		}
+		switch device.Power(d.Power) {
+		case "", device.PowerAuto, device.PowerUSB, device.PowerBattery:
+		default:
+			return fmt.Errorf("devices.%s: power must be auto, usb or battery", name)
 		}
 	}
 	return nil

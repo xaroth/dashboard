@@ -37,7 +37,7 @@ type env struct {
 
 // hourly wakes on the hour from 07:00 up to and including 00:00.
 func hourly(loc *time.Location) device.Schedule {
-	return device.Schedule{First: 7 * time.Hour, Last: 0, Interval: time.Hour, Detail: 5 * time.Minute, Location: loc}
+	return device.Schedule{First: 7 * time.Hour, Last: 0, Battery: time.Hour, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: loc}
 }
 
 func newEnv(tb testing.TB, opts ...func(*device.Options)) *env {
@@ -210,7 +210,7 @@ func TestDisplay(t *testing.T) {
 	target, _ := e.devices.Target("hallway")
 	battery, rssi := 4.05, -61
 	wantTarget := render.Target{Name: "hallway", Model: "reterminal_e1003", Wake: &render.Wake{
-		Source: "timer", Battery: &battery, RSSI: &rssi, Firmware: "1.8.7", At: time.Unix(1792087200, 0),
+		Source: "timer", Battery: &battery, RSSI: &rssi, Firmware: "1.8.7", At: time.Unix(1792087200, 0), PowerSource: "default",
 	}}
 	if diff := cmp.Diff(wantTarget, target); diff != "" {
 		t.Errorf("target (-want +got):\n%s", diff)
@@ -265,13 +265,13 @@ func TestDisplayRefresh(t *testing.T) {
 		{"night sleep on DST end", hourly(amsterdam), "2026-10-25 00:00:00", "timer", 8 * 3600},
 		{"night sleep on DST start", hourly(amsterdam), "2027-03-28 00:00:00", "timer", 6 * 3600},
 		{"exactly a minute before the hour", hourly(amsterdam), "2026-10-15 17:59:00", "timer", 3660},
-		{"window past midnight", device.Schedule{First: 7 * time.Hour, Last: 2 * time.Hour, Interval: time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-16 01:00:00", "timer", 3600},
-		{"once a day", device.Schedule{First: 7 * time.Hour, Last: 7 * time.Hour, Interval: 24 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 07:00:00", "timer", 24 * 3600},
+		{"window past midnight", device.Schedule{First: 7 * time.Hour, Last: 2 * time.Hour, Battery: time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-16 01:00:00", "timer", 3600},
+		{"once a day", device.Schedule{First: 7 * time.Hour, Last: 7 * time.Hour, Battery: 24 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 07:00:00", "timer", 24 * 3600},
 		{"detail rounds up", hourly(amsterdam), "2026-10-15 18:59:59.6", "button", 1},
 		{"detail", hourly(amsterdam), "2026-10-15 18:30:00", "button", 300},
 		{"detail cut short by wake", hourly(amsterdam), "2026-10-15 18:58:00", "button", 120},
-		{"half-hourly", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Interval: 30 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 18:00:00", "timer", 1800},
-		{"two-hourly skips past last", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Interval: 2 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 21:00:00", "timer", 10 * 3600},
+		{"half-hourly", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Battery: 30 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 18:00:00", "timer", 1800},
+		{"two-hourly skips past last", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Battery: 2 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 21:00:00", "timer", 10 * 3600},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -285,6 +285,44 @@ func TestDisplayRefresh(t *testing.T) {
 			_, body := e.display(t, e.setup(t), testCase.source)
 			if body["refresh_rate"] != testCase.want {
 				t.Errorf("got refresh_rate %v, want %v", body["refresh_rate"], testCase.want)
+			}
+		})
+	}
+}
+
+func TestDisplayPower(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name       string
+		power      device.Power
+		header     string // USB-Connected, if set
+		wantUSB    bool
+		wantSource string
+		want       float64
+	}{
+		{"no header", device.PowerAuto, "", false, "default", 3600},
+		{"header usb", device.PowerAuto, "true", true, "header", 300},
+		{"header battery", "", "false", false, "header", 3600},
+		{"config usb", device.PowerUSB, "", true, "config", 300},
+		{"config battery over header", device.PowerBattery, "true", false, "config", 3600},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEnv(t, func(o *device.Options) { o.Devices[0].Power = testCase.power })
+			// 18:00: the USB interval's next wake is 18:05, the battery one's 19:00.
+			e.clock.Store(time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC).UnixNano())
+			headers := map[string]string{"ID": mac, "Access-Token": e.setup(t), "Update-Source": "timer"}
+			if testCase.header != "" {
+				headers["USB-Connected"] = testCase.header
+			}
+			_, body := e.do(t, http.MethodGet, "/api/display", headers)
+			if body["refresh_rate"] != testCase.want {
+				t.Errorf("got refresh_rate %v, want %v", body["refresh_rate"], testCase.want)
+			}
+			w := e.devices.Statuses()[0].Wake
+			if w.USB != testCase.wantUSB || w.PowerSource != testCase.wantSource {
+				t.Errorf("got usb %v from %q, want %v from %q", w.USB, w.PowerSource, testCase.wantUSB, testCase.wantSource)
 			}
 		})
 	}
