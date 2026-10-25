@@ -113,6 +113,17 @@ export interface P1Usage {
   gasM3: number | null;
 }
 
+export interface SolarPanel {
+  inverter: string;
+  port: number;
+  powerW: number;
+}
+
+export interface SolarProduction {
+  powerW: number;
+  panels: SolarPanel[];
+}
+
 export interface WeatherCurrent {
   time: string;
   temperature: number;
@@ -171,5 +182,6 @@ export interface Queries {
   "eveonline_status.history": { params: EveonlineStatusHistoryParams; result: EveonlineStatusPoint[] };
   "eveonline_status.server": { params: Record<string, never>; result: EveonlineStatusStatus | null };
   "p1.actual": { params: Record<string, never>; result: P1Actual | null };
+  "solar.production": { params: Record<string, never>; result: SolarProduction | null };
   "weather.forecast": { params: WeatherForecastParams; result: WeatherForecast | null };
 }

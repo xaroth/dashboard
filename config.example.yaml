@@ -37,3 +37,6 @@ modules:
     # max_interval: 12h      # a parked car is polled every quarter of its idle time, up to this
   p1:   # Smartstuff P1 dongle, DSMR-API firmware
     # url: http://192.168.1.20   # empty disables the module
+  solar:   # Hoymiles DTU-Pro-S over Modbus TCP
+    # host: 192.168.1.21   # empty disables the module
+    # unused: ["100000000687:1"]   # inputs without a panel, serial:port
