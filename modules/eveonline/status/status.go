@@ -67,6 +67,11 @@ func (*status) Update(ctx context.Context) error {
 	return module.SaveSnapshot(ctx, st)
 }
 
+func isTimeout(err error) bool {
+	ne, ok := errors.AsType[net.Error](err)
+	return ok && ne.Timeout()
+}
+
 func fetch(ctx context.Context) (Status, error) {
 	var connected atomic.Bool
 	tctx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
@@ -77,8 +82,7 @@ func fetch(ctx context.Context) (Status, error) {
 		// ESI does not answer /status while the cluster is offline: the
 		// request hits lib-esi-go's timeout, which matches ESI's own. A
 		// timeout before connecting is our network, not the cluster.
-		var ne net.Error
-		if ctx.Err() == nil && connected.Load() && (errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()) {
+		if ctx.Err() == nil && connected.Load() && (errors.Is(err, context.DeadlineExceeded) || isTimeout(err)) {
 			return Status{}, nil
 		}
 		return Status{}, fmt.Errorf("requesting status: %w", err)

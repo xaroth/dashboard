@@ -43,11 +43,7 @@ func (e *apiError) Error() string {
 
 func (e *apiError) is(codes ...string) bool { return slices.Contains(codes, e.code) }
 
-func asAPIError(err error) (*apiError, bool) {
-	var e *apiError
-	ok := errors.As(err, &e)
-	return e, ok
-}
+func asAPIError(err error) (*apiError, bool) { return errors.AsType[*apiError](err) }
 
 // pleos calls the Vehicle Data API with one My Vehicle API key. Access tokens
 // have no refresh token and an undocumented lifetime: one is issued on first

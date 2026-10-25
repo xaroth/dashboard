@@ -136,9 +136,8 @@ func (m *car) Update(ctx context.Context) error {
 					lastActive = latest(lastActive, *r.ActiveAt)
 				}
 			}
-			var ke errKey
-			if !errors.As(err, &ke) {
-				module.Logger(ctx).Warn("key failed; its vehicles keep their last data", "err", err)
+			ke, ok := errors.AsType[errKey](err)
+			if !ok {
 				continue
 			}
 			rejected++
@@ -170,6 +169,12 @@ func (m *car) Update(ctx context.Context) error {
 		return fmt.Errorf("%w: %w", errors.Join(failed...), module.ErrAuth)
 	case len(failed) == len(keys):
 		return errors.Join(failed...)
+	}
+	// Logged only here: the scheduler logs a failed update's error.
+	for _, err := range failed {
+		if _, ok := errors.AsType[errKey](err); !ok {
+			module.Logger(ctx).Warn("key failed; its vehicles keep their last data", "err", err)
+		}
 	}
 	next := pollInterval(now.Sub(lastActive), m.cfg.ActiveInterval, m.cfg.MaxInterval)
 	if err := module.NextUpdate(ctx, next); err != nil {
