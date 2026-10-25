@@ -27,6 +27,7 @@ storage/                   SQLite: connections, per-owner migrations
 module/                    registration API, module contract, scheduler, query dispatch,
                            module state
 module/sql/                module state migrations and queries
+module/yamlconfig/         decodes the modules.<name> YAML sections for module.Load
 device/                    TRMNL protocol, API keys, page selection, screen schedule,
                            in-memory image store
 series/                    time series: write buffer, rollups, retention, bucketed queries
@@ -51,8 +52,9 @@ tools/                     standalone scripts (dtu_read.py: read-only Modbus che
 Packages are one level deep and named for what they do. They do not import each other sideways; `cmd/dashboard` wires them together:
 
 ```
-cmd/dashboard  -> storage, module, modules, device, render
+cmd/dashboard  -> storage, module, module/yamlconfig, modules, device, render
 module         -> series
+module/yamlconfig -> module
 cmd/gentypes   -> module, modules, render, screen
 modules        -> module, modules/<name>
 modules/<name> -> module
@@ -262,8 +264,8 @@ Update and queries are split so a slow or failing source never blocks a screen: 
 
 ### Configuration and lifecycle
 
-- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys, decode errors and a section for an unknown module stop startup: they are operator errors.
-- The scheduler asks `Enabled` before each update. A disabled module skips the update and shows as disabled (not failed) in the admin UI; its queries still serve stored data, marked stale once older than `stale_after`. Because it is asked every time, a module can enable itself later, e.g. once a token appears in its table.
+- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys, decode errors and a section for an unknown module stop startup: they are operator errors. `module` does not know the file format: `Options.Configs` holds a `module.Config` per section, decode functions that `cmd/dashboard` builds with `module/yamlconfig`.
+- The scheduler asks `Enabled` before each update, with a 30 s timeout, never concurrently with an update. A disabled module skips the update and shows as disabled (not failed) in the admin UI; its queries still serve stored data, marked stale once older than `stale_after`. Because it is asked every time, a module can enable itself later, e.g. once a token appears in its table.
 - Timing overrides live under a reserved `schedule` key that the service strips before decoding:
 
 ```yaml
@@ -276,7 +278,7 @@ modules:
 
 - A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call. A successful `Update` is recorded even if its context is canceled as it returns (shutdown, or a manual update's request going away), so module state matches the tables it wrote.
 - Start: each schedule starts after a random delay of up to 30 s (or the interval, if shorter).
-- Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval (or the delay set with `NextUpdate`) after it.
+- Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval (or the delay set with `NextUpdate`) after it. A scheduled update that fires while a manual one runs waits for it and is skipped if it succeeded, so a rate-limited source is not called twice in a row.
 
 ### Dependencies
 

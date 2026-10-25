@@ -148,7 +148,7 @@ func TestSharedFailures(t *testing.T) {
 			name:     "schedule key",
 			yaml:     "greeting: {schedule: {update_interval: 1m}}",
 			regs:     []module.Registration{greeterRegistration("a", module.WithShared(greetingShared))},
-			wantLoad: "modules.greeting: yaml: unmarshal errors:\n  line 1: field schedule not found in type module_test.greetingConfig",
+			wantLoad: "modules.greeting: schedule: has no schedule to override",
 		},
 		{
 			name:     "section without a declaring module",

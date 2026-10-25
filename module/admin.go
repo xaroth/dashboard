@@ -69,7 +69,7 @@ func (s *Set) AdminPages() []string {
 // page returns the module's admin page. A scheduled shared value is an
 // instance too, but its page is the shared value's.
 func (i *instance) page() (http.Handler, bool) {
-	if i.reg.newModule == nil || i.initErr != nil {
+	if i.shared || i.initErr != nil {
 		return nil, false
 	}
 	h, ok := i.module.(http.Handler)

@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/car"
 	"github.com/xaroth/dashboard/storage"
 )
@@ -47,8 +47,8 @@ func open(ctx context.Context, tb testing.TB, fake *car.FakePleos, dir, keys str
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte("car: {api_url: http://pleos.test, "+keys+"}"), &configs); err != nil {
+	configs, err := yamlconfig.Parse([]byte("car: {api_url: http://pleos.test, " + keys + "}"))
+	if err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(ctx, module.Options{

@@ -15,16 +15,16 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/storage"
 )
 
 type testConfig struct {
 	Key string `yaml:"key"`
-	// Fail makes Initialize ("init"), Enabled ("enabled") or Update
-	// ("update", "auth") fail;
+	// Fail makes Initialize ("init"), Enabled ("enabled", or "enabled_hang"
+	// until its context ends) or Update ("update", "auth") fail;
 	// "next_in_init" calls NextUpdate from Initialize.
 	Fail string `yaml:"fail"`
 	// FailAfter makes updates fail after this many successes.
@@ -61,12 +61,16 @@ func (m *testModule) Initialize(ctx context.Context, cfg *testConfig) error {
 	return nil
 }
 
-func (m *testModule) Enabled(context.Context) (bool, error) {
+func (m *testModule) Enabled(ctx context.Context) (bool, error) {
 	if m.cfg.Panic == "enabled" {
 		panic("boom")
 	}
 	if m.cfg.Fail == "enabled" {
 		return false, errors.New("database locked")
+	}
+	if m.cfg.Fail == "enabled_hang" {
+		<-ctx.Done()
+		return false, ctx.Err()
 	}
 	return m.cfg.Key != "", nil
 }
@@ -75,7 +79,13 @@ func (m *testModule) Enabled(context.Context) (bool, error) {
 // as a caller going away just as the update finishes.
 type cancelKey struct{}
 
+// blockKey holds a channel that Update waits on before it starts.
+type blockKey struct{}
+
 func (m *testModule) Update(ctx context.Context) error {
+	if block, ok := ctx.Value(blockKey{}).(chan struct{}); ok {
+		<-block
+	}
 	m.updates++
 	if cancel, ok := ctx.Value(cancelKey{}).(context.CancelFunc); ok {
 		defer cancel()
@@ -125,10 +135,10 @@ func namedRegistration(name string) module.Registration {
 	)
 }
 
-func parse(tb testing.TB, src string) map[string]yaml.Node {
+func parse(tb testing.TB, src string) map[string]module.Config {
 	tb.Helper()
-	var out map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte(src), &out); err != nil {
+	out, err := yamlconfig.Parse([]byte(src))
+	if err != nil {
 		tb.Fatalf("parsing yaml: %v", err)
 	}
 	return out
@@ -194,15 +204,16 @@ func TestLoadErrors(t *testing.T) {
 				t.Fatalf("storage: %v", err)
 			}
 			defer db.Close()
-			_, err = module.Load(t.Context(), module.Options{
-				Registrations: []module.Registration{registration()},
-				Configs:       parse(t, testCase.yaml),
-				Migrator:      db,
-				Writer:        db.Writer,
-				Reader:        db.Reader,
-				Log:           slog.New(slog.DiscardHandler),
-				Now:           time.Now,
-			})
+			configs, err := yamlconfig.Parse([]byte(testCase.yaml))
+			if err == nil {
+				_, err = module.Load(t.Context(), module.Options{
+					Registrations: []module.Registration{registration()},
+					Configs:       configs,
+					Migrator:      db,
+					Writer:        db.Writer,
+					Reader:        db.Reader,
+				})
+			}
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Errorf("got %v, want error containing %q", err, testCase.want)
 			}
@@ -227,6 +238,47 @@ func TestLoadEmptySection(t *testing.T) {
 	set, _ := load(t.Context(), t, "test:")
 	if got := status(t, set); got.Phase != module.PhaseWaiting || got.Interval != 10*time.Minute {
 		t.Errorf("got %+v, want defaults", got)
+	}
+}
+
+func TestLoadOptions(t *testing.T) {
+	t.Parallel()
+	db, err := storage.Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	defer db.Close()
+	o := module.Options{
+		Registrations: []module.Registration{registration()},
+		Configs:       parse(t, "test: {key: k}"),
+		Migrator:      db,
+		Writer:        db.Writer,
+		Reader:        db.Reader,
+	}
+	set, err := module.Load(t.Context(), o)
+	if err != nil {
+		t.Fatalf("Load without Log and Now: %v", err)
+	}
+	if err := set.Update(t.Context(), "test"); err != nil {
+		t.Errorf("Update without Log and Now: %v", err)
+	}
+	testCases := []struct {
+		name   string
+		mutate func(*module.Options)
+	}{
+		{"no migrator", func(o *module.Options) { o.Migrator = nil }},
+		{"no writer", func(o *module.Options) { o.Writer = nil }},
+		{"no reader", func(o *module.Options) { o.Reader = nil }},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			o := o
+			testCase.mutate(&o)
+			if _, err := module.Load(t.Context(), o); err == nil {
+				t.Error("got no error, want one")
+			}
+		})
 	}
 }
 
@@ -480,6 +532,42 @@ func TestScheduleEnabledError(t *testing.T) {
 		}
 		if d := got.NextRun.Sub(*got.AttemptedAt); d != 30*time.Second {
 			t.Errorf("got retry in %v, want the 30s backoff", d)
+		}
+	})
+}
+
+func TestScheduleEnabledTimeout(t *testing.T) {
+	run(t, "test: {key: k, fail: enabled_hang}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		time.Sleep(75 * time.Second) // up to 30 s jitter, then the 30 s Enabled timeout
+		synctest.Wait()
+		got := status(t, set)
+		if got.Phase != module.PhaseFailed || got.Error != "enabled: context deadline exceeded" {
+			t.Errorf("got %+v, want failed with the timeout", got)
+		}
+	})
+}
+
+// A scheduled update that fires during a manual one does not repeat it.
+func TestScheduleSkipsAfterManualUpdate(t *testing.T) {
+	run(t, "test: {key: k}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		time.Sleep(9 * time.Minute)
+		block := make(chan struct{})
+		done := make(chan error)
+		go func() { done <- set.Update(context.WithValue(t.Context(), blockKey{}, block), "test") }()
+		synctest.Wait()
+		time.Sleep(2 * time.Minute) // the scheduled update fires and waits
+		synctest.Wait()
+		close(block)
+		if err := <-done; err != nil {
+			t.Fatalf("manual update: %v", err)
+		}
+		synctest.Wait()
+		if diff := cmp.Diff(map[string]int{"updates": 2}, snapshot(t, db)); diff != "" {
+			t.Errorf("snapshot (-want +got):\n%s", diff)
+		}
+		if got := status(t, set); got.Phase != module.PhaseWaiting || !got.NextRun.Equal(time.Now().Add(10*time.Minute)) {
+			t.Errorf("got %s next run %v, want waiting a full interval from now %v", got.Phase, got.NextRun, time.Now())
 		}
 	})
 }

@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/eveonline/sde"
 	"github.com/xaroth/dashboard/modules/eveonline/skills"
 	"github.com/xaroth/dashboard/storage"
@@ -137,9 +137,9 @@ func load(tb testing.TB, fake *fakeEVE) *module.Set {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	var configs map[string]yaml.Node
 	cfg := `eveonline_esi: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline_esi/callback"}`
-	if err := yaml.Unmarshal([]byte(cfg), &configs); err != nil {
+	configs, err := yamlconfig.Parse([]byte(cfg))
+	if err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{

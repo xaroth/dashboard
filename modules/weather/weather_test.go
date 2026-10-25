@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/weather"
 	"github.com/xaroth/dashboard/storage"
 )
@@ -100,8 +100,8 @@ func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now ti
 	}
 	tb.Cleanup(func() { db.Close() })
 	src := fmt.Sprintf("weather: {geocoding_url: %q, forecast_url: %q, %s}", fake.URL+"/geocode", fake.URL+"/forecast", extra)
-	var configs map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte(src), &configs); err != nil {
+	configs, err := yamlconfig.Parse([]byte(src))
+	if err != nil {
 		tb.Fatalf("config: %v", err)
 	}
 	set, err := module.Load(tb.Context(), module.Options{
