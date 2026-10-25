@@ -63,3 +63,11 @@ sql:
         <<: *go
         package: car
         out: modules/car
+  - <<: *owner
+    schema: modules/p1/sql/migrations
+    queries: modules/p1/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: p1
+        out: modules/p1

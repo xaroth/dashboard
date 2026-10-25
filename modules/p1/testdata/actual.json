@@ -1,0 +1,87 @@
+{
+    "timestamp": {
+        "value": "261025141415W"
+    },
+    "energy_delivered_tariff1": {
+        "value": 12685.798,
+        "unit": "kWh"
+    },
+    "energy_delivered_tariff2": {
+        "value": 12078.626,
+        "unit": "kWh"
+    },
+    "energy_returned_tariff1": {
+        "value": 2883.015,
+        "unit": "kWh"
+    },
+    "energy_returned_tariff2": {
+        "value": 6710.904,
+        "unit": "kWh"
+    },
+    "electricity_tariff": {
+        "value": "0001"
+    },
+    "power_delivered": {
+        "value": 0,
+        "unit": "kW"
+    },
+    "power_returned": {
+        "value": 0.007,
+        "unit": "kW"
+    },
+    "voltage_l1": {
+        "value": 234.9,
+        "unit": "V"
+    },
+    "voltage_l2": {
+        "value": 231.5,
+        "unit": "V"
+    },
+    "voltage_l3": {
+        "value": 234.3,
+        "unit": "V"
+    },
+    "current_l1": {
+        "value": 0.851,
+        "unit": "A"
+    },
+    "current_l2": {
+        "value": 0.613,
+        "unit": "A"
+    },
+    "current_l3": {
+        "value": 0.264,
+        "unit": "A"
+    },
+    "power_delivered_l1": {
+        "value": 0.2,
+        "unit": "kW"
+    },
+    "power_delivered_l2": {
+        "value": 0,
+        "unit": "kW"
+    },
+    "power_delivered_l3": {
+        "value": 0,
+        "unit": "kW"
+    },
+    "power_returned_l1": {
+        "value": 0,
+        "unit": "kW"
+    },
+    "power_returned_l2": {
+        "value": 0.142,
+        "unit": "kW"
+    },
+    "power_returned_l3": {
+        "value": 0.062,
+        "unit": "kW"
+    },
+    "gas_delivered": {
+        "value": 5084.223,
+        "unit": "m3"
+    },
+    "gas_delivered_timestamp": {
+        "value": "261025141008W"
+    }
+}

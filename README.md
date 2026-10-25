@@ -5,7 +5,7 @@ E-ink dashboards for two Seeed reTerminal displays at home, running TRMNL firmwa
 - E1001: 7.5", 800x480, 4-level gray
 - E1003: 10.3", 1872x1404, 16-level gray (rendered with 4 levels)
 
-Pages: weather (Open-Meteo), `eveonline` (EVE Online server status), `eveonline_skills` (skill queues of the logged-in characters) and `hello`, a page showing what the service knows about the device. Car status, calendar, power usage and solar production are planned.
+Pages: weather (Open-Meteo), `eveonline` (EVE Online server status), `eveonline_skills` (skill queues of the logged-in characters) and `hello`, a page showing what the service knows about the device. The `car` and `p1` (smart meter) modules have no page yet. Calendar and solar production are planned.
 
 - [docs/design.md](docs/design.md): service design, as built
 - [docs/sde.md](docs/sde.md): EVE Online static data: datasets, tables and updates
