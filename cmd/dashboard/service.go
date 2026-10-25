@@ -15,8 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/xaroth/dashboard/device"
@@ -42,6 +44,10 @@ type Service struct {
 	regs     []module.Registration
 	device   *http.ServeMux
 	admin    *http.ServeMux
+	// metrics is where every package registers its metrics; /metrics serves gatherer.
+	metrics         prometheus.Registerer
+	gatherer        prometheus.Gatherer
+	requestDuration *prometheus.HistogramVec
 	// shutdownGrace is how long requests may finish after shutdown starts.
 	shutdownGrace time.Duration
 }
@@ -56,6 +62,12 @@ func WithRegistrations(regs ...module.Registration) Option {
 	return func(s *Service) { s.regs = regs }
 }
 
+// WithMetrics registers the metrics with reg and serves gatherer on /metrics,
+// in place of a registry of the service's own.
+func WithMetrics(reg prometheus.Registerer, gatherer prometheus.Gatherer) Option {
+	return func(s *Service) { s.metrics, s.gatherer = reg, gatherer }
+}
+
 // WithRenderer replaces the Bun render process.
 func WithRenderer(r Renderer) Option {
 	return func(s *Service) { s.renderer = r }
@@ -65,12 +77,13 @@ func WithRenderer(r Renderer) Option {
 // named by devices must exist.
 func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *Service, err error) {
 	s := &Service{
-		cfg:           cfg,
-		log:           log,
-		regs:          modules.All(),
-		device:        http.NewServeMux(),
-		admin:         http.NewServeMux(),
-		shutdownGrace: shutdownGrace,
+		cfg:             cfg,
+		log:             log,
+		regs:            modules.All(),
+		device:          http.NewServeMux(),
+		admin:           http.NewServeMux(),
+		shutdownGrace:   shutdownGrace,
+		requestDuration: newRequestDuration(),
 	}
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
@@ -79,6 +92,16 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.metrics == nil {
+		reg := prometheus.NewRegistry()
+		s.metrics, s.gatherer = reg, reg
+	}
+	if err := s.metrics.Register(s.requestDuration); err != nil {
+		return nil, fmt.Errorf("registering metrics: %w", err)
+	}
+	// otelhttp traces requests with the global provider; the packages use the
+	// same one, so their spans nest under the request's.
+	tracing := otel.GetTracerProvider()
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, s.close())
@@ -102,6 +125,8 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Dialer:        &net.Dialer{},
 		Now:           time.Now,
 		Location:      loc,
+		Metrics:       s.metrics,
+		Tracing:       tracing,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("loading modules: %w", err)
@@ -114,7 +139,17 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		s.renderer = render.NewProcess(cmd, cfg.Renderer.Dir, log.With("component", "renderer"))
 	}
 
-	pipeline := render.NewPipeline(s.renderer, resolver{set: s.modules, loc: loc}, loc, time.Now)
+	pipeline, err := render.NewPipeline(render.PipelineOptions{
+		Renderer: s.renderer,
+		Resolver: resolver{set: s.modules, loc: loc},
+		Location: loc,
+		Now:      time.Now,
+		Metrics:  s.metrics,
+		Tracing:  tracing,
+	})
+	if err != nil {
+		return nil, err
+	}
 	if err := s.checkPages(ctx, pipeline); err != nil {
 		return nil, fmt.Errorf("checking pages: %w", err)
 	}
@@ -122,7 +157,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	s.admin.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 	})
-	s.admin.Handle("GET /metrics", promhttp.Handler())
+	s.admin.Handle("GET /metrics", promhttp.HandlerFor(s.gatherer, promhttp.HandlerOpts{}))
 	var configs []device.Config
 	for name, d := range cfg.Devices {
 		mac, _ := device.NormalizeMAC(d.MAC) // validated with the config
@@ -138,6 +173,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Schedule:  cfg.Schedule.device(loc),
 		Log:       log.With("component", "device"),
 		Now:       time.Now,
+		Metrics:   s.metrics,
 	}
 	devices, err := device.Load(ctx, deviceOpts)
 	if err != nil {
@@ -150,7 +186,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	// which identify a MAC, not its state.
 	deviceOpts.Store = &device.Store{Max: 4}
 	deviceOpts.Log = log.With("component", "simulator")
-	deviceOpts.Simulated = true
+	deviceOpts.Metrics = nil // simulated wakes are not counted
 	simulated, err := device.Load(ctx, deviceOpts)
 	if err != nil {
 		return nil, fmt.Errorf("loading simulator devices: %w", err)
@@ -186,8 +222,8 @@ func (s *Service) Run(ctx context.Context) error {
 		s.modules.Run(ctx)
 		return nil
 	})
-	s.serve(ctx, g, "device", s.cfg.Listen.Device, instrument("device", s.device))
-	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, instrument("admin", s.admin))
+	s.serve(ctx, g, "device", s.cfg.Listen.Device, s.instrument("device", s.device))
+	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.instrument("admin", s.admin))
 	return errors.Join(g.Wait(), s.close())
 }
 

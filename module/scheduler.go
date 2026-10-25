@@ -173,7 +173,7 @@ func (s *Set) Update(ctx context.Context, name string) error {
 // scheduled update starts its own trace; a manual one is part of the
 // request's. The caller holds inst.updating.
 func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration, err error) {
-	ctx, span := tracer.Start(ctx, inst.reg.name+".update", trace.WithAttributes(attribute.String("module", inst.reg.name)))
+	ctx, span := s.tracer.Start(ctx, inst.reg.name+".update", trace.WithAttributes(attribute.String("module", inst.reg.name)))
 	defer func() {
 		if err != nil {
 			span.RecordError(err)
@@ -193,19 +193,19 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 	// caller went away meanwhile, so stored state matches.
 	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer rcancel()
-	updateDuration.WithLabelValues(inst.reg.name).Observe(time.Since(start).Seconds())
+	s.metrics.updateDuration.WithLabelValues(inst.reg.name).Observe(time.Since(start).Seconds())
 	if err != nil {
 		result := "failure"
 		if errors.Is(err, ErrAuth) {
 			result = "auth"
 		}
-		updatesTotal.WithLabelValues(inst.reg.name, result).Inc()
+		s.metrics.updatesTotal.WithLabelValues(inst.reg.name, result).Inc()
 		s.recordFailure(rctx, inst, err)
 		return 0, err
 	}
-	updatesTotal.WithLabelValues(inst.reg.name, "success").Inc()
+	s.metrics.updatesTotal.WithLabelValues(inst.reg.name, "success").Inc()
 	at := s.now()
-	lastSuccess.WithLabelValues(inst.reg.name).Set(float64(at.Unix()))
+	s.metrics.lastSuccess.WithLabelValues(inst.reg.name).Set(float64(at.Unix()))
 	// The update itself worked; a failed write here is not a source failure to back off from.
 	if err := New(s.writer).RecordSuccess(rctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
 		inst.log.Error("recording update", "err", err)

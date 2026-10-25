@@ -688,7 +688,7 @@ The simulator runs on its own `device.Devices`, mounted only on the admin listen
 
 ### Metrics
 
-Prometheus metrics on the admin listener at `/metrics`, registered with `promauto` in the package that records them, next to the Go runtime and process metrics.
+Prometheus metrics on the admin listener at `/metrics`, next to the Go runtime and process metrics. Each package that records metrics takes a `prometheus.Registerer` in its options (`module.Options.Metrics`, `device.Options.Metrics`, `render.PipelineOptions.Metrics`) and keeps its collectors in a struct, not in package variables; nil records to no registry. `main` passes the default registry; tests pass their own, so their assertions are exact. Registering the same metrics twice on one registry fails the load.
 
 | Metric | Labels | Meaning |
 | --- | --- | --- |
@@ -702,11 +702,11 @@ Prometheus metrics on the admin listener at `/metrics`, registered with `promaut
 | `dashboard_device_rssi_dbm` | `device` | `RSSI` of the latest wake |
 | `dashboard_device_last_wake_timestamp_seconds` | `device` | Latest wake |
 
-Simulated wakes are not counted in the device metrics.
+The simulator's `device.Devices` gets no registry, so simulated wakes are not counted in the device metrics.
 
 ### Traces
 
-OpenTelemetry traces, exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set; without either, spans are dropped. The other standard `OTEL_*` variables apply, e.g. `OTEL_SERVICE_NAME` (default `dashboard`). Incoming `traceparent` headers are honored.
+OpenTelemetry traces, exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set; without either, spans are dropped. The other standard `OTEL_*` variables apply, e.g. `OTEL_SERVICE_NAME` (default `dashboard`). Incoming `traceparent` headers are honored. `module` and `render` take a `trace.TracerProvider` in their options (`Tracing`; nil is a no-op); `main` passes the global provider it installs, which the request spans also use, so spans nest.
 
 | Span | Starts a trace | Children |
 | --- | --- | --- |

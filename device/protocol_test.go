@@ -38,6 +38,15 @@ type env struct {
 }
 
 // hourly wakes on the hour from 07:00 up to and including 00:00.
+func newPipeline(tb testing.TB, r render.Renderer, now func() time.Time) *render.Pipeline {
+	tb.Helper()
+	p, err := render.NewPipeline(render.PipelineOptions{Renderer: r, Resolver: render.NewFakeResolver(tb), Location: time.UTC, Now: now})
+	if err != nil {
+		tb.Fatalf("NewPipeline: %v", err)
+	}
+	return p
+}
+
 func hourly(loc *time.Location) device.Schedule {
 	return device.Schedule{First: 7 * time.Hour, Last: 0, Battery: time.Hour, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: loc}
 }
@@ -81,7 +90,7 @@ func envOptions(tb testing.TB, db *storage.DB, schedule device.Schedule, opts ..
 	store := &device.Store{Max: 4}
 	o := device.Options{
 		Devices:   []device.Config{{Name: "hallway", MAC: mac, Rotation: 0, Pages: []string{"main", "detail"}}},
-		Pipeline:  render.NewPipeline(fake, render.NewFakeResolver(tb), time.UTC, now),
+		Pipeline:  newPipeline(tb, fake, now),
 		Store:     store,
 		DB:        db.Writer,
 		Migrator:  db,

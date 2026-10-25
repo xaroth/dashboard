@@ -101,7 +101,10 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 		tb.Fatalf("modules: %v", err)
 	}
 	renderer := render.NewFakeRenderer(tb, append([]render.FakeRendererOption{render.ExpectPages(render.PageInfo{Name: "e1001/hello"})}, opts...)...)
-	pipeline := render.NewPipeline(renderer, resolver{set: set, loc: time.UTC}, time.UTC, now)
+	pipeline, err := render.NewPipeline(render.PipelineOptions{Renderer: renderer, Resolver: resolver{set: set, loc: time.UTC}, Location: time.UTC, Now: now})
+	if err != nil {
+		tb.Fatalf("pipeline: %v", err)
+	}
 
 	deviceOpts := device.Options{
 		Devices:   devices,
