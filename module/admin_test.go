@@ -28,7 +28,7 @@ func (p *pager) Initialize(_ context.Context, cfg *pagerConfig) error {
 	}
 	return nil
 }
-func (*pager) Enabled(context.Context) bool { return false }
+func (*pager) Enabled(context.Context) (bool, error) { return false, nil }
 func (*pager) Update(ctx context.Context) error {
 	return module.SaveSnapshot(ctx, "saved by update")
 }

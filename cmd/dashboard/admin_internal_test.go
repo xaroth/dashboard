@@ -36,7 +36,7 @@ func (m *adminModule) Initialize(_ context.Context, cfg *adminConfig) error {
 	return nil
 }
 
-func (*adminModule) Enabled(context.Context) bool { return true }
+func (*adminModule) Enabled(context.Context) (bool, error) { return true, nil }
 
 func (m *adminModule) Update(context.Context) error {
 	if m.fail {

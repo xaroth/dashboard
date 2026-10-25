@@ -20,6 +20,7 @@ const (
 	maxJitter     = 30 * time.Second
 	minBackoff    = 30 * time.Second
 	maxBackoff    = 6 * time.Hour
+	recordTimeout = 10 * time.Second
 )
 
 // Run runs every module's schedule and the series store until ctx is
@@ -157,9 +158,13 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 	defer cancel()
 	start := time.Now()
 	err = inst.reg.update(uctx, inst.module)
-	if ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil {
 		return 0, ctx.Err()
 	}
+	// The module already wrote its tables: record the result even if the
+	// caller went away meanwhile, so stored state matches.
+	rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer rcancel()
 	updateDuration.WithLabelValues(inst.reg.name).Observe(time.Since(start).Seconds())
 	if err != nil {
 		result := "failure"
@@ -167,14 +172,14 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 			result = "auth"
 		}
 		updatesTotal.WithLabelValues(inst.reg.name, result).Inc()
-		s.recordFailure(ctx, inst, err)
+		s.recordFailure(rctx, inst, err)
 		return 0, err
 	}
 	updatesTotal.WithLabelValues(inst.reg.name, "success").Inc()
 	at := s.now()
 	lastSuccess.WithLabelValues(inst.reg.name).Set(float64(at.Unix()))
 	// The update itself worked; a failed write here is not a source failure to back off from.
-	if err := New(s.writer).RecordSuccess(ctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
+	if err := New(s.writer).RecordSuccess(rctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
 		inst.log.Error("recording update", "err", err)
 	}
 	next = cmp.Or(state.next, inst.interval)

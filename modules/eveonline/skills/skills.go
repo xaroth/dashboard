@@ -91,9 +91,12 @@ type Skill struct {
 
 func (*skills) Initialize(context.Context, *config) error { return nil }
 
-func (*skills) Enabled(ctx context.Context) bool {
+func (*skills) Enabled(ctx context.Context) (bool, error) {
 	chars, err := esi.Shared.Get(ctx).Characters(ctx, scopes)
-	return err == nil && len(chars) > 0
+	if err != nil {
+		return false, err
+	}
+	return len(chars) > 0, nil
 }
 
 // Update fetches every character's queue and skills. A character that fails

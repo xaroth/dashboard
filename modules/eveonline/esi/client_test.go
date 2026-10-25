@@ -35,7 +35,7 @@ func (m *probe) Initialize(_ context.Context, cfg *probeConfig) error {
 	return nil
 }
 
-func (*probe) Enabled(context.Context) bool { return false }
+func (*probe) Enabled(context.Context) (bool, error) { return false, nil }
 
 func (m *probe) Update(ctx context.Context) error {
 	c := esi.Shared.Get(ctx)

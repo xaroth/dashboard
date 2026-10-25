@@ -211,8 +211,8 @@ func (m *weather) Initialize(ctx context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *weather) Enabled(ctx context.Context) bool {
-	return m.cfg.Location != ""
+func (m *weather) Enabled(ctx context.Context) (bool, error) {
+	return m.cfg.Location != "", nil
 }
 
 func (m *weather) Update(ctx context.Context) error {
@@ -248,7 +248,7 @@ Deliberately small; capabilities are added when a module needs them.
 | Method | Purpose |
 | --- | --- |
 | `Initialize(ctx, *C) error` | Receive config, set up clients. The module's migrations have run by then. No network I/O: it runs for every registered module, configured or not. |
-| `Enabled(ctx) bool` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). |
+| `Enabled(ctx) (bool, error)` | Whether the module's schedule runs. Decided by the module, typically from its config (e.g. `weather` is enabled when `location` is set). An error, e.g. from reading its tables, marks the module failed and is retried with backoff, as from `Update`. |
 | `Update(ctx) error` | Called by the scheduler: fetch from the source, write to storage. |
 
 A module whose type also implements `http.Handler` gets an admin page: it is served on the admin listener under `/<name>/` (the prefix stripped), with the module's context on the request (as in `Update`: the writer, its shared values), and linked from its name in the admin index's module table. Requests run concurrently with updates, so state they share goes through the database or is synchronized. A module whose `Initialize` failed is not served. A module or shared value page named after one of the admin UI's own path prefixes (`modules`, `simulate`, `images`, `preview`) stops startup. This is how settings like an API key are entered.
@@ -271,7 +271,7 @@ modules:
       stale_after: 3h
 ```
 
-- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call.
+- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call. A successful `Update` is recorded even if its context is canceled as it returns (shutdown, or a manual update's request going away), so module state matches the tables it wrote.
 - Start: each schedule starts after a random delay of up to 30 s (or the interval, if shorter).
 - Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval (or the delay set with `NextUpdate`) after it.
 

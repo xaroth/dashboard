@@ -23,7 +23,8 @@ import (
 
 type testConfig struct {
 	Key string `yaml:"key"`
-	// Fail makes Initialize ("init") or Update ("update", "auth") fail;
+	// Fail makes Initialize ("init"), Enabled ("enabled") or Update
+	// ("update", "auth") fail;
 	// "next_in_init" calls NextUpdate from Initialize.
 	Fail string `yaml:"fail"`
 	// FailAfter makes updates fail after this many successes.
@@ -60,15 +61,25 @@ func (m *testModule) Initialize(ctx context.Context, cfg *testConfig) error {
 	return nil
 }
 
-func (m *testModule) Enabled(context.Context) bool {
+func (m *testModule) Enabled(context.Context) (bool, error) {
 	if m.cfg.Panic == "enabled" {
 		panic("boom")
 	}
-	return m.cfg.Key != ""
+	if m.cfg.Fail == "enabled" {
+		return false, errors.New("database locked")
+	}
+	return m.cfg.Key != "", nil
 }
+
+// cancelKey holds a context.CancelFunc that Update calls once it is done,
+// as a caller going away just as the update finishes.
+type cancelKey struct{}
 
 func (m *testModule) Update(ctx context.Context) error {
 	m.updates++
+	if cancel, ok := ctx.Value(cancelKey{}).(context.CancelFunc); ok {
+		defer cancel()
+	}
 	if m.cfg.Panic == "update" {
 		panic("boom")
 	}
@@ -259,6 +270,21 @@ func TestUpdatePanic(t *testing.T) {
 	}
 }
 
+func TestUpdateCanceledAfterSuccess(t *testing.T) {
+	t.Parallel()
+	set, db := load(t.Context(), t, "test: {key: k}")
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := set.Update(context.WithValue(ctx, cancelKey{}, cancel), "test"); err != nil {
+		t.Fatalf("got %v, want the successful update", err)
+	}
+	if got := status(t, set); got.FetchedAt == nil || got.Error != "" {
+		t.Errorf("got %+v, want the success recorded", got)
+	}
+	if diff := cmp.Diff(map[string]int{"updates": 1}, snapshot(t, db)); diff != "" {
+		t.Errorf("snapshot (-want +got):\n%s", diff)
+	}
+}
+
 func TestUpdateErrors(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -443,6 +469,19 @@ func TestNextUpdateErrors(t *testing.T) {
 	if got := status(t, set); got.Phase != module.PhaseInitFail || !strings.Contains(got.Error, "set from Update") {
 		t.Errorf("from Initialize: got %+v, want initialize failed with the error", got)
 	}
+}
+
+func TestScheduleEnabledError(t *testing.T) {
+	run(t, "test: {key: k, fail: enabled}", func(t *testing.T, set *module.Set, db *storage.DB) {
+		waitFirstAttempt(t, set)
+		got := status(t, set)
+		if got.Phase != module.PhaseFailed || got.Error != "enabled: database locked" {
+			t.Errorf("got %+v, want failed with the error", got)
+		}
+		if d := got.NextRun.Sub(*got.AttemptedAt); d != 30*time.Second {
+			t.Errorf("got retry in %v, want the 30s backoff", d)
+		}
+	})
 }
 
 func TestScheduleDisabled(t *testing.T) {

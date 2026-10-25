@@ -63,7 +63,7 @@ func (m *p1) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *p1) Enabled(context.Context) bool { return m.url != "" }
+func (m *p1) Enabled(context.Context) (bool, error) { return m.url != "", nil }
 
 func (m *p1) Update(ctx context.Context) error {
 	r, err := fetch(ctx, m.url)

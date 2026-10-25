@@ -79,12 +79,12 @@ func (m *car) Initialize(_ context.Context, cfg *config) error {
 }
 
 // Enabled reports whether a key was entered.
-func (m *car) Enabled(ctx context.Context) bool {
+func (m *car) Enabled(ctx context.Context) (bool, error) {
 	n, err := New(module.Database(ctx)).CountKeys(ctx)
 	if err != nil {
-		module.Logger(ctx).Error("counting keys", "err", err)
+		return false, fmt.Errorf("counting keys: %w", err)
 	}
-	return n > 0
+	return n > 0, nil
 }
 
 // errKey is a problem with one key that retrying will not fix: Pleos
