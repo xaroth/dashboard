@@ -27,7 +27,6 @@ RUN mkdir /data && chown bun:bun /data
 USER bun
 VOLUME /data
 EXPOSE 8080 8081
-# Assumes the admin listener on port 8081.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
-  CMD ["bun", "-e", "const r = await fetch('http://127.0.0.1:8081/healthz'); process.exit(r.ok ? 0 : 1)"]
+# Assumes the admin listener on port 8081; pass its address to healthz otherwise.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD ["dashboard", "healthz"]
 ENTRYPOINT ["dashboard"]
