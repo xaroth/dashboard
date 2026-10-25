@@ -618,3 +618,13 @@ func TestNormalizeMAC(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkDisplay(b *testing.B) {
+	e := newEnv(b)
+	key := e.setup(b)
+	for b.Loop() {
+		if code, body := e.display(b, key, "timer"); code != http.StatusOK {
+			b.Fatalf("got HTTP %d %v, want 200", code, body)
+		}
+	}
+}

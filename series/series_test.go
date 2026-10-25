@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -385,6 +386,64 @@ func TestConcurrentAdd(t *testing.T) {
 	}
 }
 
+// TestConcurrentUse adds to both series from several goroutines while others
+// flush, prune and query.
+func TestConcurrentUse(t *testing.T) {
+	t.Parallel()
+	const writers, perWriter = 4, 60
+	c := &clock{at("2026-07-01 16:00:00")}
+	s := open(t, c)
+	start := at("2026-07-01 12:00:00")
+	end := start.Add(writers * perWriter * time.Minute)
+	var writing, background sync.WaitGroup
+	for w := range writers {
+		writing.Go(func() {
+			for i := range perWriter {
+				ts := start.Add(time.Duration(w*perWriter+i) * time.Minute)
+				for _, name := range []string{"power", "meter"} {
+					if err := s.Add(name, ts, float64(i)); err != nil {
+						t.Errorf("Add: %v", err)
+					}
+				}
+			}
+		})
+	}
+	done := make(chan struct{})
+	for _, op := range []func() error{
+		func() error { return s.Flush(t.Context()) },
+		func() error { return s.Prune(t.Context()) },
+		func() error { _, err := s.Query(t.Context(), "power", start, end, 5*time.Minute); return err },
+		func() error { _, err := s.Query(t.Context(), "meter", start, end, time.Minute); return err },
+	} {
+		background.Go(func() {
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				if err := op(); err != nil {
+					t.Errorf("concurrent op: %v", err)
+					return
+				}
+			}
+		})
+	}
+	writing.Wait()
+	close(done)
+	background.Wait()
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	for _, name := range []string{"power", "meter"} {
+		for _, p := range query(t, s, name, start, end, time.Minute) {
+			if p.V == nil {
+				t.Errorf("%s: no sample at %v", name, p.T)
+			}
+		}
+	}
+}
+
 // TestOldSample writes a sample past the raw retention: its 5-minute bucket
 // keeps the value it had.
 func TestOldSample(t *testing.T) {
@@ -468,6 +527,49 @@ func TestHistoryParams(t *testing.T) {
 			}
 			if diff := cmp.Diff(testCase.want, window{from, to, step}); diff != "" {
 				t.Errorf("range (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func BenchmarkAdd(b *testing.B) {
+	c := &clock{at("2026-07-01 12:00:00")}
+	s := open(b, c)
+	ts := c.t
+	n := 0
+	for b.Loop() {
+		if err := s.Add("power", ts, 1); err != nil {
+			b.Fatal(err)
+		}
+		ts = ts.Add(time.Second)
+		// Flush off the clock so the buffer stays bounded.
+		if n++; n%(1<<16) == 0 {
+			b.StopTimer()
+			if err := s.Flush(b.Context()); err != nil {
+				b.Fatal(err)
+			}
+			b.StartTimer()
+		}
+	}
+}
+
+// BenchmarkBuckets queries a day of minute samples at the steps pages use.
+func BenchmarkBuckets(b *testing.B) {
+	day := at("2026-07-01 00:00:00")
+	c := &clock{day.Add(24 * time.Hour)}
+	s := open(b, c)
+	for i := range 24 * 60 {
+		add(b, s, "power", day.Add(time.Duration(i)*time.Minute), float64(i))
+	}
+	if err := s.Flush(b.Context()); err != nil {
+		b.Fatal(err)
+	}
+	for _, step := range []time.Duration{time.Minute, 5 * time.Minute, time.Hour} {
+		b.Run(step.String(), func(b *testing.B) {
+			for b.Loop() {
+				if _, err := s.Query(b.Context(), "power", day, day.Add(24*time.Hour), step); err != nil {
+					b.Fatal(err)
+				}
 			}
 		})
 	}
