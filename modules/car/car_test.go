@@ -594,6 +594,28 @@ func TestDisabledWithoutKey(t *testing.T) {
 	})
 }
 
+// nextPoll waits for the next scheduled update and returns the delay it set.
+func nextPoll(t *testing.T, set *module.Set) time.Duration {
+	t.Helper()
+	before := status(t, set).FetchedAt
+	for {
+		// Jump to the scheduled run, or past the start jitter.
+		step := time.Second
+		if st := status(t, set); st.NextRun.After(time.Now()) {
+			step = st.NextRun.Sub(time.Now())
+		}
+		time.Sleep(step)
+		synctest.Wait()
+		st := status(t, set)
+		if st.Error != "" {
+			t.Fatalf("update failed: %s", st.Error)
+		}
+		if st.FetchedAt != nil && (before == nil || st.FetchedAt.After(*before)) {
+			return st.NextRun.Sub(*st.FetchedAt)
+		}
+	}
+}
+
 // TestPolling runs the schedule: 15 minutes while the car is in use, a
 // quarter of the idle time while it is parked, at most 12 hours.
 func TestPolling(t *testing.T) {
@@ -601,27 +623,7 @@ func TestPolling(t *testing.T) {
 	run(t, fake, func(t *testing.T, e env) {
 		e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 		set := e.set
-		// next waits for the next update and returns the delay it set.
-		next := func() time.Duration {
-			t.Helper()
-			before := status(t, set).FetchedAt
-			for {
-				// Jump to the scheduled run, or past the start jitter.
-				step := time.Second
-				if st := status(t, set); st.NextRun.After(time.Now()) {
-					step = st.NextRun.Sub(time.Now())
-				}
-				time.Sleep(step)
-				synctest.Wait()
-				st := status(t, set)
-				if st.Error != "" {
-					t.Fatalf("update failed: %s", st.Error)
-				}
-				if st.FetchedAt != nil && (before == nil || st.FetchedAt.After(*before)) {
-					return st.NextRun.Sub(*st.FetchedAt)
-				}
-			}
-		}
+		next := func() time.Duration { t.Helper(); return nextPoll(t, set) }
 		change := func(fn func(*car.FakeCar)) { fake.Car(car.FakeVIN, fn) }
 
 		if got := next(); got != 15*time.Minute {
@@ -671,6 +673,27 @@ func TestPolling(t *testing.T) {
 		synctest.Wait()
 		if got := next(); got != 12*time.Hour {
 			t.Errorf("parked for days: got next poll in %v, want 12h", got)
+		}
+	})
+}
+
+// A failing key does not hide that its car is in use while another is
+// parked.
+func TestPollingKeyFails(t *testing.T) {
+	fake := car.NewFake(t, car.ExpectKey_Kia)
+	run(t, fake, func(t *testing.T, e env) {
+		e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
+		e.addKey(t, "kia", car.FakeKiaClientID, car.FakeKiaClientSecret)
+		nextPoll(t, e.set)
+		time.Sleep(4 * time.Hour)
+		synctest.Wait()
+		fake.Car(car.FakeKiaVIN, func(c *car.FakeCar) { c.Latitude += 0.009 })
+		if got := nextPoll(t, e.set); got != 15*time.Minute {
+			t.Fatalf("kia driven: got next poll in %v, want 15m", got)
+		}
+		fake.FailVehicle(car.FakeKiaVIN, true)
+		if got := nextPoll(t, e.set); got != 15*time.Minute {
+			t.Errorf("kia key failing: got next poll in %v, want 15m", got)
 		}
 	})
 }

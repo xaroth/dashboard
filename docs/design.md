@@ -108,7 +108,7 @@ Query `p1.actual` takes no params and returns:
 - `flowKw`: power delivered minus power returned; positive is taken from the net, negative is returned to it.
 - `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter or when the gas counter went down; the meter reports gas every 5 minutes, DSMR 4 meters hourly, so gas lags `to`). A period is null when a day has no row, or when an electricity counter went down in it (meter replaced).
 
-Each update also writes [series](#time-series) at the meter's time: `p1.flow` (kW, rate, as `flowKw`), and the counters `p1.taken` and `p1.returned` (kWh, both tariffs) and `p1.gas` (m³, when reported).
+Each update also writes [series](#time-series) at the meter's time: `p1.flow` (kW, rate, as `flowKw`), and the counters `p1.taken` and `p1.returned` (kWh, both tariffs). `p1.gas` (m³, when reported) is written at the gas meter's time (`gas_delivered_timestamp`; the meter's time when the dongle does not send it), and a gas reading whose time has not advanced since the last update is skipped.
 
 Query `p1.flow` takes `hours` (default 24, 1 to 168) and `stepMinutes` (default 15, at most 1440) and returns the average flow in kW per step up to now, as series points.
 
