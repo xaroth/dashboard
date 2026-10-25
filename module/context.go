@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/xaroth/dashboard/series"
 )
 
 type ctxKey int
@@ -18,6 +21,7 @@ const (
 	keyHTTPClient
 	keyClock
 	keyState
+	keySeries
 )
 
 // Database is the module's connection: the writer in Initialize and Update,
@@ -81,4 +85,28 @@ func LoadSnapshot(ctx context.Context, v any) (ok bool, err error) {
 		return false, fmt.Errorf("decoding snapshot: %w", err)
 	}
 	return true, nil
+}
+
+// Series is the module's time series, declared with WithSeries.
+func Series(ctx context.Context) *SeriesStore { return value[*SeriesStore](ctx, keySeries) }
+
+// SeriesStore reads and writes one module's series by their short names.
+type SeriesStore struct {
+	store  *series.Store
+	module string
+	update bool
+}
+
+// Add buffers a sample; it is stored within a minute. Called from Update,
+// whatever its result.
+func (s *SeriesStore) Add(name string, t time.Time, v float64) error {
+	if !s.update {
+		return errors.New("series are written from Update")
+	}
+	return s.store.Add(s.module+"."+name, t, v)
+}
+
+// Query returns name in buckets of step from from to to; see series.Store.Query.
+func (s *SeriesStore) Query(ctx context.Context, name string, from, to time.Time, step time.Duration) ([]series.Point, error) {
+	return s.store.Query(ctx, s.module+"."+name, from, to, step)
 }

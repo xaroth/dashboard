@@ -20,7 +20,7 @@ modules:
 
 ### Implementation order
 
-1. Time series, below; `p1` and `solar` then also write series. S-Miles Cloud as a fallback source for `solar` if the DTU's Modbus proves unreliable.
+1. `p1` and `solar` write series, below. S-Miles Cloud as a fallback source for `solar` if the DTU's Modbus proves unreliable.
 
 Authentication errors from these sources (HTTP 401/403) are returned as `module.ErrAuth`.
 
@@ -30,54 +30,11 @@ Added to the module contract when a module needs them: active hours, backfill ho
 
 ## Time series
 
-For P1 and solar history graphs and device battery. Schema `series(name, ts, value)` with `ts` in integer Unix seconds to keep rows small, with rollup tables at 5 minutes, 1 hour and 1 day. Retention: raw 7 days, 5-minute 90 days, hourly and daily forever. Queries pick the coarsest resolution that still fills the graph.
-
-Modules write and read series through `module.Series(ctx)`: writes are buffered, reads are bucketed and pick the rollup. Series tables are owned by the service; modules do not access them directly.
-
-Each series declares a kind, which decides rollups and usage:
-
-| Kind | Example | Rollup | Usage over a period |
-| --- | --- | --- | --- |
-| `rate` | P1 power (W), solar power (W) | time-weighted average; gaps are not filled | average x covered time |
-| `counter` | P1 meter readings (kWh, m³), inverter total Wh | last value | difference; a drop is a reset (meter or inverter replaced): count from the new value |
-| `daily_counter` | S-Miles and DTU "today Wh" | last value | value at end of day; resets at local midnight |
-
-- Gaps (P1 reboots, Wi-Fi drops) stay gaps: a bucket without samples has no value and charts show a break. Counters bridge gaps naturally.
-- Buckets of an hour or longer align to local time (Europe/Amsterdam); a day has 23 or 25 hours on DST dates.
-
-### Write buffering
-
-Anything sampled every minute goes through the series buffer: modules write samples into memory, and the service flushes them in one transaction per minute on the writer connection. Losing up to a minute on a crash is accepted. The buffer is flushed on shutdown. Device health series are written with the same flush. Queries read SQLite only, so buffered samples show up within a minute.
+`p1` and `solar` write series (P1 flow and meter readings, solar power) and expose queries over them for charts on the energy page. Device health writes battery voltage as a series.
 
 Estimate: one flush per minute touching a handful of pages is roughly 100-200 KB per minute including WAL and checkpoint, about 50-100 GB per year. Consumer SSDs are rated for hundreds of TB written. The estimate is to be confirmed by measuring bytes written per day.
 
-### Storage jobs
-
-The scheduler runs the series flush (every minute), rollups and retention, on the writer connection.
-
-### Queries on series
-
-```go
-type powerParams struct {
-	Range time.Duration `json:"range"`
-	Step  time.Duration `json:"step"`
-}
-
-var Module = module.Define[p1, config](
-	"p1",
-	defaultConfig,
-	module.WithQuery("power", (*p1).power),
-)
-
-func (m *p1) power(ctx context.Context, p powerParams) (Series, error) {
-	// series are service-owned; the service picks the rollup and buckets
-	return module.Series(ctx).Query(ctx, "p1.power_import", p.Range, p.Step)
-}
-```
-
-### Data volume
-
-24 hours of one-minute samples is 1,440 points per series; P1 import, P1 export and solar together are ~4,300. The E1001 is 800 pixels wide, so more points than pixels add nothing. Series queries take a `step` and bucket in SQL (average for power, last value for meter readings): 5 minutes gives 288 points per series. Rollup tables serve longer ranges. Chart components bucket again when given more points than their pixel width.
+Usage over a period, for counters, is the difference between bucket values; a drop is a reset (meter or inverter replaced): count from the new value.
 
 ## Device health
 

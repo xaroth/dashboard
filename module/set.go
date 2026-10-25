@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/xaroth/dashboard/series"
 )
 
 //go:embed sql/migrations/*.sql
@@ -25,6 +27,9 @@ var stateMigrations embed.FS
 // Owner of the module_state migrations. Renaming it would orphan the
 // goose_storage version table of existing databases.
 const stateOwner = "storage"
+
+// Owner of the series migrations.
+const seriesOwner = "series"
 
 // Migrator applies an owner's goose migrations, the .sql files in dir of
 // fsys; *storage.DB in production.
@@ -51,6 +56,8 @@ type Options struct {
 	Log        *slog.Logger
 	HTTPClient *http.Client
 	Now        func() time.Time
+	// Location aligns series buckets of an hour or longer; nil is UTC.
+	Location *time.Location
 }
 
 // Set is the loaded modules.
@@ -61,6 +68,7 @@ type Set struct {
 	httpClient *http.Client
 	now        func() time.Time
 	instances  []*instance
+	series     *series.Store
 	shared     map[sharedDef]built
 	// sharedOrder is the shared values by name.
 	sharedOrder []sharedDef
@@ -111,6 +119,9 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	regs := slices.SortedFunc(slices.Values(o.Registrations), func(a, b Registration) int { return cmp.Compare(a.name, b.name) })
 	known := map[string]bool{}
 	for _, r := range regs {
+		if r.name == stateOwner || r.name == seriesOwner {
+			return nil, fmt.Errorf("module name %q is reserved", r.name)
+		}
 		known[r.name] = true
 	}
 	shared, err := sharedDefs(regs, known)
@@ -158,6 +169,26 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		})
 	}
 	if err := o.Migrator.Migrate(ctx, stateOwner, stateMigrations, "sql/migrations"); err != nil {
+		return nil, err
+	}
+	if err := o.Migrator.Migrate(ctx, seriesOwner, series.Migrations, "sql/migrations"); err != nil {
+		return nil, err
+	}
+	declared := map[string]series.Kind{}
+	for _, r := range regs {
+		for name, kind := range r.series {
+			declared[r.name+"."+name] = kind
+		}
+	}
+	s.series, err = series.Open(ctx, series.Options{
+		Writer:   o.Writer,
+		Reader:   o.Reader,
+		Location: cmp.Or(o.Location, time.UTC),
+		Now:      o.Now,
+		Log:      o.Log.With("component", "series"),
+		Series:   declared,
+	})
+	if err != nil {
 		return nil, err
 	}
 	for _, d := range shared {
@@ -339,6 +370,7 @@ func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB, update bo
 	state := &stateStore{q: New(db), module: inst.reg.name, update: update}
 	ctx = s.baseContext(ctx, inst.log)
 	ctx = context.WithValue(ctx, keyDatabase, db)
+	ctx = context.WithValue(ctx, keySeries, &SeriesStore{store: s.series, module: inst.reg.name, update: update})
 	for _, u := range inst.reg.shared {
 		ctx = context.WithValue(ctx, u.def, s.shared[u.def].value)
 	}
