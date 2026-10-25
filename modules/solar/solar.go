@@ -69,7 +69,7 @@ var Module = module.Define[solar, config](
 	module.WithSeries("total", series.Counter),
 )
 
-func (m *solar) Initialize(_ context.Context, cfg *config) error {
+func (m *solar) Initialize(_ context.Context, cfg *config, _ module.Env) error {
 	if cfg.Port < 1 || cfg.Port > 65535 {
 		return fmt.Errorf("port must be 1 to 65535, got %d", cfg.Port)
 	}
@@ -92,7 +92,7 @@ func (m *solar) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *solar) Enabled(context.Context) (bool, error) { return m.cfg.Host != "", nil }
+func (m *solar) Enabled(context.Context, module.Query) (bool, error) { return m.cfg.Host != "", nil }
 
 // Plant is the snapshot one update stores.
 type Plant struct {
@@ -119,10 +119,10 @@ type Input struct {
 	Link bool `json:"link"`
 }
 
-func (m *solar) Update(ctx context.Context) error {
+func (m *solar) Update(ctx context.Context, u *module.Update) error {
 	ctx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
-	p, err := m.read(ctx)
+	p, err := m.read(ctx, u.Dialer)
 	if err != nil {
 		return err
 	}
@@ -135,24 +135,24 @@ func (m *solar) Update(ctx context.Context) error {
 		total += in.TotalWh
 	}
 	// The DTU reports no measurement time.
-	now := module.Clock(ctx)()
-	if err := module.Series(ctx).Add("power", now, power); err != nil {
+	now := u.Now()
+	if err := u.AddSample("power", now, power); err != nil {
 		return err
 	}
-	if err := module.Series(ctx).Add("total", now, float64(total)); err != nil {
+	if err := u.AddSample("total", now, float64(total)); err != nil {
 		return err
 	}
 	if !producing {
-		if err := module.NextUpdate(ctx, m.cfg.NightInterval); err != nil {
+		if err := u.NextUpdate(m.cfg.NightInterval); err != nil {
 			return err
 		}
 	}
-	return module.SaveSnapshot(ctx, p)
+	return u.SaveSnapshot(p)
 }
 
-func (m *solar) read(ctx context.Context) (Plant, error) {
+func (m *solar) read(ctx context.Context, dialer module.ContextDialer) (Plant, error) {
 	addr := net.JoinHostPort(m.cfg.Host, strconv.Itoa(m.cfg.Port))
-	c, err := dialModbus(ctx, addr, unitID)
+	c, err := dialModbus(ctx, dialer, addr, unitID)
 	if err != nil {
 		return Plant{}, fmt.Errorf("connecting to DTU: %w", err)
 	}
@@ -223,9 +223,9 @@ type productionParams struct{}
 
 // production returns the total and per-panel power of the last update.
 // Totals count every input, whatever its link.
-func (*solar) production(ctx context.Context, _ productionParams) (*Production, error) {
+func (*solar) production(ctx context.Context, q module.Query, _ productionParams) (*Production, error) {
 	var p Plant
-	ok, err := module.LoadSnapshot(ctx, &p)
+	ok, err := q.LoadSnapshot(ctx, &p)
 	if err != nil || !ok {
 		return nil, err
 	}
@@ -239,10 +239,10 @@ func (*solar) production(ctx context.Context, _ productionParams) (*Production, 
 }
 
 // power returns the plant's average power in W per step over the last hours.
-func (*solar) power(ctx context.Context, p series.HistoryParams) ([]series.Point, error) {
-	from, to, step, err := p.Range(module.Clock(ctx)())
+func (*solar) power(ctx context.Context, q module.Query, p series.HistoryParams) ([]series.Point, error) {
+	from, to, step, err := p.Range(q.Now())
 	if err != nil {
 		return nil, err
 	}
-	return module.Series(ctx).Query(ctx, "power", from, to, step)
+	return q.QuerySeries(ctx, "power", from, to, step)
 }

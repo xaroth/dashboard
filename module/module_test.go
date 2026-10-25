@@ -24,8 +24,7 @@ import (
 type testConfig struct {
 	Key string `yaml:"key"`
 	// Fail makes Initialize ("init"), Enabled ("enabled", or "enabled_hang"
-	// until its context ends) or Update ("update", "auth") fail;
-	// "next_in_init" calls NextUpdate from Initialize.
+	// until its context ends) or Update ("update", "auth") fail.
 	Fail string `yaml:"fail"`
 	// FailAfter makes updates fail after this many successes.
 	FailAfter int `yaml:"fail_after"`
@@ -47,12 +46,9 @@ type testModule struct {
 
 var errBadInit = errors.New("bad init")
 
-func (m *testModule) Initialize(ctx context.Context, cfg *testConfig) error {
+func (m *testModule) Initialize(_ context.Context, cfg *testConfig, _ module.Env) error {
 	if cfg.Fail == "init" {
 		return errBadInit
-	}
-	if cfg.Fail == "next_in_init" {
-		return module.NextUpdate(ctx, time.Minute)
 	}
 	if cfg.Panic == "init" {
 		panic("boom")
@@ -61,7 +57,7 @@ func (m *testModule) Initialize(ctx context.Context, cfg *testConfig) error {
 	return nil
 }
 
-func (m *testModule) Enabled(ctx context.Context) (bool, error) {
+func (m *testModule) Enabled(ctx context.Context, _ module.Query) (bool, error) {
 	if m.cfg.Panic == "enabled" {
 		panic("boom")
 	}
@@ -82,7 +78,7 @@ type cancelKey struct{}
 // blockKey holds a channel that Update waits on before it starts.
 type blockKey struct{}
 
-func (m *testModule) Update(ctx context.Context) error {
+func (m *testModule) Update(ctx context.Context, u *module.Update) error {
 	if block, ok := ctx.Value(blockKey{}).(chan struct{}); ok {
 		<-block
 	}
@@ -94,12 +90,12 @@ func (m *testModule) Update(ctx context.Context) error {
 		panic("boom")
 	}
 	if !m.cfg.SkipSave || m.updates == 1 {
-		if err := module.SaveSnapshot(ctx, map[string]int{"updates": m.updates}); err != nil {
+		if err := u.SaveSnapshot(map[string]int{"updates": m.updates}); err != nil {
 			return err
 		}
 	}
 	if m.cfg.Next != 0 {
-		if err := module.NextUpdate(ctx, time.Duration(m.updates)*m.cfg.Next); err != nil {
+		if err := u.NextUpdate(time.Duration(m.updates) * m.cfg.Next); err != nil {
 			return err
 		}
 	}
@@ -516,10 +512,6 @@ func TestNextUpdateErrors(t *testing.T) {
 	set, _ := load(t.Context(), t, "test: {key: k, next: -1m}")
 	if err := set.Update(t.Context(), "test"); err == nil || !strings.Contains(err.Error(), "must be positive") {
 		t.Errorf("got %v, want an error for a negative delay", err)
-	}
-	set, _ = load(t.Context(), t, "test: {key: k, fail: next_in_init}")
-	if got := status(t, set); got.Phase != module.PhaseInitFail || !strings.Contains(got.Error, "set from Update") {
-		t.Errorf("from Initialize: got %+v, want initialize failed with the error", got)
 	}
 }
 

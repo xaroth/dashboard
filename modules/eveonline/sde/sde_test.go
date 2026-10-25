@@ -34,22 +34,22 @@ func newFake(tb testing.TB, build int64, opts ...sde.FakeOption) *sde.Fake {
 // reader looks up the SDE in its query.
 type reader struct{}
 
-func (*reader) Initialize(context.Context, *struct{}) error { return nil }
-func (*reader) Enabled(context.Context) (bool, error)       { return false, nil }
-func (*reader) Update(context.Context) error                { return nil }
+func (*reader) Initialize(context.Context, *struct{}, module.Env) error { return nil }
+func (*reader) Enabled(context.Context, module.Query) (bool, error)     { return false, nil }
+func (*reader) Update(context.Context, *module.Update) error            { return nil }
 
 type lookup struct {
 	Types   map[int64]sde.Type
 	Systems map[int64]sde.SolarSystem
 }
 
-func (*reader) lookup(ctx context.Context, _ struct{}) (lookup, error) {
-	s := sde.Shared.Get(ctx)
-	types, err := s.Types(ctx, []int64{587, 588, 999})
+func (*reader) lookup(ctx context.Context, q module.Query, _ struct{}) (lookup, error) {
+	s := sde.Shared.Get(q)
+	types, err := s.Types(ctx, q, []int64{587, 588, 999})
 	if err != nil {
 		return lookup{}, err
 	}
-	systems, err := s.SolarSystems(ctx, []int64{30000142})
+	systems, err := s.SolarSystems(ctx, q, []int64{30000142})
 	return lookup{types, systems}, err
 }
 

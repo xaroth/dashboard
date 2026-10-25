@@ -1,6 +1,6 @@
 # EVE Online static data
 
-`sde.Shared` (`modules/eveonline/sde`, shared value `eveonline_sde`) imports parts of the EVE Online [Static Data Export](https://developers.eveonline.com/docs/services/static-data/) (SDE) into typed SQLite tables and keeps them at the latest build. Modules read it through `sde.Shared.Get(ctx)`; the tables belong to `eveonline_sde`, so no other package queries them directly. Like every shared value, it is built and scheduled only when a registered module declares it.
+`sde.Shared` (`modules/eveonline/sde`, shared value `eveonline_sde`) imports parts of the EVE Online [Static Data Export](https://developers.eveonline.com/docs/services/static-data/) (SDE) into typed SQLite tables and keeps them at the latest build. Modules read it through `sde.Shared.Get(q)`; the tables belong to `eveonline_sde`, so no other package queries them directly. Like every shared value, it is built and scheduled only when a registered module declares it.
 
 ## Updates
 
@@ -14,8 +14,8 @@ Modules declare the datasets they need: `module.WithShared(sde.Shared, sde.Types
 
 | Dataset | Lookup | SDE files |
 | --- | --- | --- |
-| `sde.Types` | `Store.Types(ctx, ids)`: `map[int64]sde.Type` | `categories`, `groups`, `types` |
-| `sde.SolarSystems` | `Store.SolarSystems(ctx, ids)`: `map[int64]sde.SolarSystem` | `mapRegions`, `mapConstellations`, `mapSolarSystems` |
+| `sde.Types` | `Store.Types(ctx, q, ids)`: `map[int64]sde.Type` | `categories`, `groups`, `types` |
+| `sde.SolarSystems` | `Store.SolarSystems(ctx, q, ids)`: `map[int64]sde.SolarSystem` | `mapRegions`, `mapConstellations`, `mapSolarSystems` |
 
 Lookups leave out IDs the imported build does not have, and return nothing before the first import. The admin UI shows the imported build and its release date under Shared.
 

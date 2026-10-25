@@ -58,14 +58,14 @@ type actual struct {
 	GasTimestamp     *value[string]  `json:"gas_delivered_timestamp"`
 }
 
-func fetch(ctx context.Context, base string) (Reading, error) {
+func fetch(ctx context.Context, c *http.Client, base string) (Reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v2/sm/actual", nil)
 	if err != nil {
 		return Reading{}, err
 	}
-	resp, err := module.HTTPClient(ctx).Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return Reading{}, fmt.Errorf("requesting actual: %w", err)
 	}

@@ -243,7 +243,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	}
 	for i, d := range shared {
 		log := o.Log.With("shared", d.sharedName())
-		v, err := d.buildAny(s.baseContext(ctx, log), sharedConfigs[i], declarations(regs, d))
+		v, err := d.buildAny(ctx, sharedConfigs[i], declarations(regs, d), s.env(log))
 		if err != nil {
 			log.Error("build failed; modules using it off until restart", "err", err)
 			err = fmt.Errorf("%s: %w", d.sharedName(), err)
@@ -257,8 +257,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 			inst.phase = PhaseInitFail
 			continue
 		}
-		ictx, _ := s.context(ctx, inst, o.Writer, false)
-		if err := inst.reg.initialize(ictx, inst.module, configs[i]); err != nil {
+		if err := inst.reg.initialize(ctx, inst.module, configs[i], s.env(inst.log)); err != nil {
 			inst.log.Error("initialize failed; module off until restart", "err", err)
 			inst.initErr = err
 			inst.phase = PhaseInitFail
@@ -281,12 +280,12 @@ func (s *Set) sharedInstance(d sharedDef, sc *sharedSchedule, sched Schedule) *i
 		shared: true,
 		reg: Registration{
 			name:    d.sharedName(),
-			queries: map[string]query{},
+			queries: map[string]queryDef{},
 			shared:  []sharedUse{{def: d}},
-			enabled: func(context.Context, any) (bool, error) { return true, nil },
-			update: func(ctx context.Context, v any) (err error) {
+			enabled: func(context.Context, any, Query) (bool, error) { return true, nil },
+			update: func(ctx context.Context, v any, u *Update) (err error) {
 				defer recovered(&err)
-				return v.(Updater).Update(ctx)
+				return v.(Updater).Update(ctx, u)
 			},
 		},
 		module:     b.value,
@@ -368,63 +367,22 @@ func (s *Set) sharedErr(inst *instance) error {
 	return nil
 }
 
-// baseContext returns ctx carrying the dependencies that need no module.
-func (s *Set) baseContext(ctx context.Context, log *slog.Logger) context.Context {
-	ctx = context.WithValue(ctx, keyLogger, log)
-	ctx = context.WithValue(ctx, keyHTTPClient, s.httpClient)
-	ctx = context.WithValue(ctx, keyDialer, s.dialer)
-	return context.WithValue(ctx, keyClock, s.now)
+// env returns the Env with log.
+func (s *Set) env(log *slog.Logger) Env {
+	return Env{Log: log, HTTP: s.httpClient, Dialer: s.dialer, Now: s.now}
 }
 
-// context returns ctx carrying the module's dependencies, with db as its
-// connection. Only an update's context can save a snapshot.
-func (s *Set) context(ctx context.Context, inst *instance, db *sql.DB, update bool) (context.Context, *stateStore) {
-	state := &stateStore{q: New(db), module: inst.reg.name, update: update}
-	ctx = s.baseContext(ctx, inst.log)
-	ctx = context.WithValue(ctx, keyDatabase, db)
-	ctx = context.WithValue(ctx, keySeries, &SeriesStore{store: s.series, module: inst.reg.name, update: update})
+// query returns inst's Query on db, with the shared values inst declares.
+func (s *Set) query(inst *instance, db *sql.DB) Query {
+	shared := make(map[sharedDef]any, len(inst.reg.shared))
 	for _, u := range inst.reg.shared {
-		ctx = context.WithValue(ctx, u.def, s.shared[u.def].value)
+		shared[u.def] = s.shared[u.def].value
 	}
-	return context.WithValue(ctx, keyState, state), state
+	return Query{Env: s.env(inst.log), DB: db, name: inst.reg.name, series: s.series, shared: shared}
 }
 
-// stateStore keeps a module's snapshot: the one document a module like
-// weather produces per update. A saved one is held until the update
-// succeeds, then written with the success record in one statement.
-type stateStore struct {
-	q       *Queries
-	module  string
-	update  bool
-	pending *string
-	// next is the delay NextUpdate set; zero means the update interval.
-	next time.Duration
-}
-
-func (s *stateStore) save(data []byte) error {
-	if !s.update {
-		return errors.New("snapshots are saved from Update")
-	}
-	str := string(data)
-	s.pending = &str
-	return nil
-}
-
-func (s *stateStore) setNext(d time.Duration) error {
-	if !s.update {
-		return errors.New("the next update is set from Update")
-	}
-	s.next = d
-	return nil
-}
-
-func (s *stateStore) load(ctx context.Context) ([]byte, error) {
-	st, err := s.q.GetState(ctx, s.module)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && st.Data == nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading snapshot: %w", err)
-	}
-	return []byte(*st.Data), nil
+// sharedQuery returns the Query on db for shared value d's Version and
+// admin page.
+func (s *Set) sharedQuery(d sharedDef, db *sql.DB) Query {
+	return Query{Env: s.env(s.log.With("shared", d.sharedName())), DB: db, name: d.sharedName(), series: s.series}
 }

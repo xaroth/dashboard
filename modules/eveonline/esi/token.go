@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
@@ -25,8 +26,8 @@ type Character struct {
 
 // Characters returns the logged-in characters that granted every scope in
 // need, by name. A module is typically enabled when there is one.
-func (c *Client) Characters(ctx context.Context, need Scopes) ([]Character, error) {
-	rows, err := New(module.Database(ctx)).ListCharacters(ctx)
+func (c *Client) Characters(ctx context.Context, q module.Query, need Scopes) ([]Character, error) {
+	rows, err := New(q.DB).ListCharacters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing characters: %w", err)
 	}
@@ -41,18 +42,17 @@ func (c *Client) Characters(ctx context.Context, need Scopes) ([]Character, erro
 
 // Token returns the character's token, for authentication.WithToken. It
 // refreshes itself before a request when it is about to expire and stores
-// the result, so use it from Update, where Database is the writer. A
-// rejected refresh fails the request with module.ErrAuth.
-func (c *Client) Token(ctx context.Context, characterID int64) (*Token, error) {
-	db := module.Database(ctx)
-	row, err := New(db).GetCharacter(ctx, characterID)
+// the result, so it takes Update's writer. A rejected refresh fails the
+// request with module.ErrAuth.
+func (c *Client) Token(ctx context.Context, u *module.Update, characterID int64) (*Token, error) {
+	row, err := New(u.DB).GetCharacter(ctx, characterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("character %d is not logged in", characterID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading character %d: %w", characterID, err)
 	}
-	t := &Token{c: c, db: db, now: module.Clock(ctx), id: characterID}
+	t := &Token{c: c, db: u.DB, now: u.Now, log: u.Log, id: characterID}
 	t.set(row)
 	return t, nil
 }
@@ -63,6 +63,7 @@ type Token struct {
 	c   *Client
 	db  *sql.DB
 	now func() time.Time
+	log *slog.Logger
 	id  int64
 
 	mu      sync.Mutex
@@ -114,7 +115,7 @@ func (t *Token) RefreshIfNeeded(ctx context.Context) error {
 	if errors.Is(err, module.ErrAuth) {
 		msg := err.Error()
 		if serr := q.SaveAuthError(ctx, SaveAuthErrorParams{AuthError: &msg, CharacterID: t.id}); serr != nil {
-			module.Logger(ctx).Error("recording rejected refresh", "character", row.Name, "err", serr)
+			t.log.Error("recording rejected refresh", "character", row.Name, "err", serr)
 		}
 	}
 	if err != nil {

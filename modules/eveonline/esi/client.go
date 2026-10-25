@@ -47,9 +47,15 @@ type config struct {
 type Scopes []string
 
 // Shared is the ESI client, configured under modules.eveonline_esi. Modules
-// declare it with module.WithShared and read it with Shared.Get(ctx).
+// declare it with module.WithShared and read it with Shared.Get.
 var Shared = module.DefineShared("eveonline_esi", func() *config { return &config{} }, newClient,
 	module.SharedMigrations(migrations))
+
+// Load only detects these by type assertion.
+var (
+	_ module.Versioned    = (*Client)(nil)
+	_ module.AdminHandler = (*Client)(nil)
+)
 
 // Client sends ESI requests and holds the logged-in characters' tokens.
 type Client struct {
@@ -68,7 +74,7 @@ type Client struct {
 	refreshing map[int64]*sync.Mutex
 }
 
-func newClient(ctx context.Context, cfg *config, decls []Scopes) (*Client, error) {
+func newClient(_ context.Context, cfg *config, decls []Scopes, env module.Env) (*Client, error) {
 	if len(cfg.Contact) == 0 {
 		return nil, errors.New("contact is required")
 	}
@@ -80,7 +86,7 @@ func newClient(ctx context.Context, cfg *config, decls []Scopes) (*Client, error
 		scopes = append(scopes, d...)
 	}
 	slices.Sort(scopes)
-	base := module.HTTPClient(ctx)
+	base := env.HTTP
 	rt := transport.New("dashboard", version(), cfg.Contact, defaults.CompatibilityDate,
 		transport.WithTransport(cmp.Or(base.Transport, http.DefaultTransport)),
 		transport.WithMiddleware(ratelimiting.Middleware(memory.New())))
@@ -110,7 +116,7 @@ func checkSSO(cfg *config) error {
 
 // Version reports the ESI compatibility date requests are sent with: the
 // version of the routes the client was built against.
-func (c *Client) Version(context.Context) (string, error) {
+func (c *Client) Version(context.Context, module.Query) (string, error) {
 	return "compatibility date " + defaults.CompatibilityDate, nil
 }
 

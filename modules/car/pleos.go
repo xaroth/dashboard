@@ -49,6 +49,7 @@ func asAPIError(err error) (*apiError, bool) { return errors.AsType[*apiError](e
 // have no refresh token and an undocumented lifetime: one is issued on first
 // use and again when the API rejects it.
 type pleos struct {
+	http         *http.Client
 	url          string
 	brand        string
 	clientID     string
@@ -116,7 +117,7 @@ func (p *pleos) send(ctx context.Context, method, path string, body []byte, toke
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := module.HTTPClient(ctx).Do(req)
+	resp, err := p.http.Do(req)
 	if err != nil {
 		return err
 	}

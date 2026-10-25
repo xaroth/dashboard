@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"slices"
 	"time"
 
@@ -46,6 +47,9 @@ func defaultConfig() *config {
 	}
 }
 
+// Load only detects this by type assertion.
+var _ module.AdminHandler = (*car)(nil)
+
 type car struct {
 	cfg *config
 	// clients are the API clients by client ID. Update only: the admin page
@@ -68,7 +72,7 @@ var Module = module.Define[car, config](
 	module.WithQuery("vehicles", (*car).vehicles),
 )
 
-func (m *car) Initialize(_ context.Context, cfg *config) error {
+func (m *car) Initialize(_ context.Context, cfg *config, _ module.Env) error {
 	if cfg.ActiveInterval <= 0 || cfg.MaxInterval < cfg.ActiveInterval {
 		return fmt.Errorf("active_interval must be positive and at most max_interval, got %v and %v", cfg.ActiveInterval, cfg.MaxInterval)
 	}
@@ -79,8 +83,8 @@ func (m *car) Initialize(_ context.Context, cfg *config) error {
 }
 
 // Enabled reports whether a key was entered.
-func (m *car) Enabled(ctx context.Context) (bool, error) {
-	n, err := New(module.Database(ctx)).CountKeys(ctx)
+func (m *car) Enabled(ctx context.Context, q module.Query) (bool, error) {
+	n, err := New(q.DB).CountKeys(ctx)
 	if err != nil {
 		return false, fmt.Errorf("counting keys: %w", err)
 	}
@@ -98,9 +102,9 @@ func (e errKey) Unwrap() error { return e.err }
 // Update polls the vehicles of every key. Keys fail on their own: the
 // vehicles of a failed key keep their last data. The update fails only when
 // no key worked, with module.ErrAuth when every key was rejected.
-func (m *car) Update(ctx context.Context) error {
-	q := New(module.Database(ctx))
-	now := module.Clock(ctx)()
+func (m *car) Update(ctx context.Context, u *module.Update) error {
+	q := New(u.DB)
+	now := u.Now()
 	// Vehicles of a key deleted while an update listed them.
 	if err := q.DeleteOrphanVehicles(ctx); err != nil {
 		return fmt.Errorf("removing vehicles without a key: %w", err)
@@ -117,7 +121,7 @@ func (m *car) Update(ctx context.Context) error {
 		return fmt.Errorf("reading vehicles: %w", err)
 	}
 	var prev Snapshot
-	if _, err := module.LoadSnapshot(ctx, &prev); err != nil {
+	if _, err := u.LoadSnapshot(ctx, &prev); err != nil {
 		return err
 	}
 	snap := Snapshot{Vehicles: []Vehicle{}}
@@ -125,7 +129,7 @@ func (m *car) Update(ctx context.Context) error {
 	var failed []error
 	rejected := 0
 	for _, k := range keys {
-		vs, active, err := m.updateKey(ctx, q, k, now)
+		vs, active, err := m.updateKey(ctx, u.HTTP, q, k, now)
 		if err != nil {
 			err = fmt.Errorf("%s key %s: %w", k.Brand, k.ClientID, err)
 			failed = append(failed, err)
@@ -173,28 +177,28 @@ func (m *car) Update(ctx context.Context) error {
 	// Logged only here: the scheduler logs a failed update's error.
 	for _, err := range failed {
 		if _, ok := errors.AsType[errKey](err); !ok {
-			module.Logger(ctx).Warn("key failed; its vehicles keep their last data", "err", err)
+			u.Log.Warn("key failed; its vehicles keep their last data", "err", err)
 		}
 	}
 	next := pollInterval(now.Sub(lastActive), m.cfg.ActiveInterval, m.cfg.MaxInterval)
-	if err := module.NextUpdate(ctx, next); err != nil {
+	if err := u.NextUpdate(next); err != nil {
 		return err
 	}
-	return module.SaveSnapshot(ctx, snap)
+	return u.SaveSnapshot(snap)
 }
 
 // updateKey polls the vehicles of key k, listing them first if this process
 // did not yet: a key's vehicles are fixed when it is issued. It returns them
 // and when the most recently active one was last active. A key that expired
 // after it was rejected is not tried again.
-func (m *car) updateKey(ctx context.Context, q *Queries, k CarKey, now time.Time) ([]Vehicle, time.Time, error) {
+func (m *car) updateKey(ctx context.Context, hc *http.Client, q *Queries, k CarKey, now time.Time) ([]Vehicle, time.Time, error) {
 	if k.AuthError != nil && now.After(keyExpiry(k)) {
 		// The recorded rejection as it is; the page shows the expiry.
 		return nil, time.Time{}, errKey{errors.New(*k.AuthError)}
 	}
 	c := m.clients[k.ClientID]
 	if c == nil || c.clientSecret != k.ClientSecret || c.brand != k.Brand {
-		c = &pleos{url: m.cfg.APIURL, brand: k.Brand, clientID: k.ClientID, clientSecret: k.ClientSecret}
+		c = &pleos{http: hc, url: m.cfg.APIURL, brand: k.Brand, clientID: k.ClientID, clientSecret: k.ClientSecret}
 		m.clients[k.ClientID] = c
 		m.listed[k.ClientID] = false
 	}

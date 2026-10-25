@@ -119,10 +119,9 @@ func (s *Set) scheduledUpdate(ctx context.Context, inst *instance) (on bool, nex
 	if skip {
 		return true, next, nil
 	}
-	ectx, _ := s.context(ctx, inst, s.writer, false)
-	ectx, cancel := context.WithTimeout(ectx, enabledTimeout)
+	ectx, cancel := context.WithTimeout(ctx, enabledTimeout)
 	defer cancel()
-	on, err = inst.reg.enabled(ectx, inst.module)
+	on, err = inst.reg.enabled(ectx, inst.module, s.query(inst, s.reader))
 	if err != nil {
 		err = fmt.Errorf("enabled: %w", err)
 		s.recordFailure(ctx, inst, err)
@@ -181,11 +180,11 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 		}
 		span.End()
 	}()
-	uctx, state := s.context(ctx, inst, s.writer, true)
-	uctx, cancel := context.WithTimeout(uctx, cmp.Or(inst.timeout, updateTimeout))
+	u := &Update{Query: s.query(inst, s.writer)}
+	uctx, cancel := context.WithTimeout(ctx, cmp.Or(inst.timeout, updateTimeout))
 	defer cancel()
 	start := time.Now()
-	err = inst.reg.update(uctx, inst.module)
+	err = inst.reg.update(uctx, inst.module, u)
 	if err != nil && ctx.Err() != nil {
 		return 0, ctx.Err()
 	}
@@ -207,10 +206,10 @@ func (s *Set) runUpdate(ctx context.Context, inst *instance) (next time.Duration
 	at := s.now()
 	s.metrics.lastSuccess.WithLabelValues(inst.reg.name).Set(float64(at.Unix()))
 	// The update itself worked; a failed write here is not a source failure to back off from.
-	if err := New(s.writer).RecordSuccess(rctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: state.pending}); err != nil {
+	if err := New(s.writer).RecordSuccess(rctx, RecordSuccessParams{Module: inst.reg.name, At: &at, Data: u.snapshot}); err != nil {
 		inst.log.Error("recording update", "err", err)
 	}
-	next = cmp.Or(state.next, inst.interval)
+	next = cmp.Or(u.next, inst.interval)
 	inst.mu.Lock()
 	inst.next = next
 	inst.successes++

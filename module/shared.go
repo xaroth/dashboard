@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"net/http"
 	"reflect"
 	"time"
 )
@@ -16,7 +15,7 @@ import (
 type Shared[T any, D any] struct {
 	name       string
 	newConfig  func() any
-	build      func(ctx context.Context, cfg any, decls []D) (T, error)
+	build      func(ctx context.Context, cfg any, decls []D, env Env) (T, error)
 	migrations fs.FS
 	sched      *sharedSchedule
 }
@@ -25,14 +24,13 @@ type Shared[T any, D any] struct {
 type Updater interface {
 	// Update fetches from the source and writes to storage, as a module's
 	// Update does.
-	Update(ctx context.Context) error
+	Update(ctx context.Context, u *Update) error
 }
 
 // Versioned is a shared value that reports the version of the source it
-// serves, for the admin UI. ctx has Database (the read-only pool), Logger,
-// HTTPClient and Clock.
+// serves, for the admin UI. q is on the read-only pool.
 type Versioned interface {
-	Version(ctx context.Context) (string, error)
+	Version(ctx context.Context, q Query) (string, error)
 }
 
 // SharedOption configures a shared value.
@@ -67,16 +65,14 @@ func SharedUpdateTimeout(d time.Duration) SharedOption {
 	return func(o *sharedOptions) { o.timeout = d }
 }
 
-// DefineShared defines a shared value. build gets the decoded config, the
-// declarations of every module that declared the value, in module name
-// order, and a context with Logger, HTTPClient and Clock; like Initialize,
-// it does no network I/O. It runs only when a loaded module declares the
-// value.
+// DefineShared defines a shared value. build gets the decoded config and
+// the declarations of every module that declared the value, in module name
+// order; like Initialize, it does no network I/O. It runs only when a loaded
+// module declares the value.
 //
-// A value that is an http.Handler is served on the admin listener under
-// /<name>/, with Database (the writer), Logger, HTTPClient and Clock on the
-// request context.
-func DefineShared[T any, C any, D any](name string, defaults func() *C, build func(ctx context.Context, cfg *C, decls []D) (T, error), opts ...SharedOption) *Shared[T, D] {
+// A value that is an AdminHandler is served on the admin listener under
+// /<name>/, with a Query on the writer.
+func DefineShared[T any, C any, D any](name string, defaults func() *C, build func(ctx context.Context, cfg *C, decls []D, env Env) (T, error), opts ...SharedOption) *Shared[T, D] {
 	if !validName.MatchString(name) {
 		panic(fmt.Sprintf("module: invalid shared name %q", name))
 	}
@@ -101,18 +97,19 @@ func DefineShared[T any, C any, D any](name string, defaults func() *C, build fu
 		newConfig:  func() any { return defaults() },
 		migrations: o.migrations,
 		sched:      o.sched,
-		build: func(ctx context.Context, cfg any, decls []D) (v T, err error) {
+		build: func(ctx context.Context, cfg any, decls []D, env Env) (v T, err error) {
 			defer recovered(&err)
-			return build(ctx, cfg.(*C), decls)
+			return build(ctx, cfg.(*C), decls, env)
 		},
 	}
 }
 
-// Get returns the value in a context of a module that declared it.
-func (s *Shared[T, D]) Get(ctx context.Context) T {
-	v, ok := ctx.Value(s).(T)
+// Get returns the value for a module that declared it; from Update, pass
+// u.Query.
+func (s *Shared[T, D]) Get(q Query) T {
+	v, ok := q.shared[s].(T)
 	if !ok {
-		panic(fmt.Sprintf("module: context has no shared %s; declare it with WithShared", s.name))
+		panic(fmt.Sprintf("module: %s did not declare shared %s; declare it with WithShared", q.name, s.name))
 	}
 	return v
 }
@@ -135,7 +132,7 @@ type sharedDef interface {
 	config() any
 	sharedMigrations() fs.FS
 	schedule() *sharedSchedule
-	buildAny(ctx context.Context, cfg any, decls []any) (any, error)
+	buildAny(ctx context.Context, cfg any, decls []any, env Env) (any, error)
 }
 
 // sharedUse is a module's declaration of a shared value.
@@ -149,12 +146,12 @@ func (s *Shared[T, D]) config() any               { return s.newConfig() }
 func (s *Shared[T, D]) sharedMigrations() fs.FS   { return s.migrations }
 func (s *Shared[T, D]) schedule() *sharedSchedule { return s.sched }
 
-func (s *Shared[T, D]) buildAny(ctx context.Context, cfg any, decls []any) (any, error) {
+func (s *Shared[T, D]) buildAny(ctx context.Context, cfg any, decls []any, env Env) (any, error) {
 	typed := make([]D, len(decls))
 	for i, d := range decls {
 		typed[i] = d.(D)
 	}
-	return s.build(ctx, cfg, typed)
+	return s.build(ctx, cfg, typed, env)
 }
 
 // built is a shared value, or the error that kept it from being built.
@@ -184,9 +181,8 @@ func (s *Set) Shared(ctx context.Context) []SharedStatus {
 		if b.err != nil {
 			st.Error = b.err.Error()
 		} else if v, ok := b.value.(Versioned); ok {
-			vctx := context.WithValue(s.baseContext(ctx, s.log.With("shared", st.Name)), keyDatabase, s.reader)
 			var err error
-			if st.Version, err = versionOf(vctx, v); err != nil {
+			if st.Version, err = versionOf(ctx, v, s.sharedQuery(d, s.reader)); err != nil {
 				st.Error = err.Error()
 			}
 		}
@@ -195,16 +191,16 @@ func (s *Set) Shared(ctx context.Context) []SharedStatus {
 	return out
 }
 
-func versionOf(ctx context.Context, v Versioned) (version string, err error) {
+func versionOf(ctx context.Context, v Versioned, q Query) (version string, err error) {
 	defer recovered(&err)
-	return v.Version(ctx)
+	return v.Version(ctx, q)
 }
 
-func (s *Set) sharedHandler(d sharedDef) (http.Handler, bool) {
+func (s *Set) sharedHandler(d sharedDef) (AdminHandler, bool) {
 	b := s.shared[d]
 	if b.err != nil {
 		return nil, false
 	}
-	h, ok := b.value.(http.Handler)
+	h, ok := b.value.(AdminHandler)
 	return h, ok
 }

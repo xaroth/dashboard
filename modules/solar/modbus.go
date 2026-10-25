@@ -19,8 +19,8 @@ type modbus struct {
 	tid  uint16
 }
 
-func dialModbus(ctx context.Context, addr string, unit byte) (*modbus, error) {
-	conn, err := module.Dialer(ctx).DialContext(ctx, "tcp", addr)
+func dialModbus(ctx context.Context, d module.ContextDialer, addr string, unit byte) (*modbus, error) {
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}

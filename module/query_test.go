@@ -24,9 +24,9 @@ type countResult struct {
 }
 
 // count reads the snapshot on the query connection.
-func (m *testModule) count(ctx context.Context, p countParams) (countResult, error) {
+func (m *testModule) count(ctx context.Context, q module.Query, p countParams) (countResult, error) {
 	var snap map[string]int
-	if _, err := module.LoadSnapshot(ctx, &snap); err != nil {
+	if _, err := q.LoadSnapshot(ctx, &snap); err != nil {
 		return countResult{}, err
 	}
 	if p.Limit < 0 {
@@ -36,11 +36,11 @@ func (m *testModule) count(ctx context.Context, p countParams) (countResult, err
 }
 
 // boom panics.
-func (m *testModule) boom(context.Context, struct{}) (int, error) { panic("kaboom") }
+func (m *testModule) boom(context.Context, module.Query, struct{}) (int, error) { panic("kaboom") }
 
 // write tries to write through the query connection.
-func (m *testModule) write(ctx context.Context, _ struct{}) (int, error) {
-	_, err := module.Database(ctx).ExecContext(ctx, "INSERT INTO test_items (id) VALUES (1)")
+func (m *testModule) write(ctx context.Context, q module.Query, _ struct{}) (int, error) {
+	_, err := q.DB.ExecContext(ctx, "INSERT INTO test_items (id) VALUES (1)")
 	return 0, err
 }
 
@@ -164,7 +164,7 @@ func TestResolveErrors(t *testing.T) {
 
 type otherModule struct{ testModule }
 
-func (m *otherModule) count(context.Context, struct{}) (int, error) { return 0, nil }
+func (m *otherModule) count(context.Context, module.Query, struct{}) (int, error) { return 0, nil }
 
 func TestDefineRejectsForeignQuery(t *testing.T) {
 	t.Parallel()
