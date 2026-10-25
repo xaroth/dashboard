@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { bundlePages, type Page } from "./bundle";
 import { encodeFrame, FrameReader } from "./frame";
 import { renderPage } from "./render";
+import { isRequest } from "./request";
 
 // stdout carries frames only; frames go through Bun.stdout, which these do not touch.
 console.log = console.info = console.debug = console.error;
@@ -43,9 +44,14 @@ if (args.watch) {
       }
     }
   };
-  watch(args.pages!, { recursive: true }, () => {
+  const watcher = watch(args.pages!, { recursive: true }, () => {
     clearTimeout(timer);
     timer = setTimeout(rebuild, 100);
+  });
+  // Without a listener a watch error is uncaught and ends the process; keep serving the current bundle.
+  watcher.on("error", (e) => {
+    console.error(`renderer: watching ${args.pages} failed, no more rebuilds: ${e}`);
+    watcher.close();
   });
 }
 
@@ -55,7 +61,9 @@ function write(header: Record<string, unknown>, body?: Uint8Array) {
   out.flush();
 }
 
-async function handle(req: Record<string, any>): Promise<void> {
+async function handle(header: Record<string, unknown>): Promise<void> {
+  if (!isRequest(header)) return write({ id: header.id, error: `invalid ${String(header.op)} request` });
+  const req = header;
   const id = req.id;
   switch (req.op) {
     case "describe":
@@ -66,11 +74,13 @@ async function handle(req: Record<string, any>): Promise<void> {
     case "render": {
       const page = pages.get(req.page);
       if (!page) return write({ id, error: `unknown page ${req.page}` });
-      const png = await renderPage(renderer, page, req.props);
-      return write({ id }, png);
+      try {
+        return write({ id }, await renderPage(renderer, page, req.props));
+      } catch (e) {
+        console.error(`renderer: rendering ${page.name} failed:`, e instanceof Error ? e.stack : e);
+        throw e;
+      }
     }
-    default:
-      return write({ id, error: `unknown op ${req.op}` });
   }
 }
 

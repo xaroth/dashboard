@@ -18,6 +18,19 @@ func main() {
 	configPath := flag.String("config", "/config/dashboard.yaml", "path to the YAML config")
 	flag.Parse()
 
+	// dashboard healthz [addr]: exits non-zero unless the admin listener is healthy.
+	if flag.Arg(0) == "healthz" {
+		addr := "127.0.0.1:8081"
+		if flag.NArg() > 1 {
+			addr = flag.Arg(1)
+		}
+		if err := healthz(context.Background(), addr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(*configPath, log); err != nil {
 		log.Error("dashboard stopped", "err", err)

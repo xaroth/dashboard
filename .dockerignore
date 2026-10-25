@@ -9,3 +9,4 @@ docs
 tools
 **/*_test.go
 **/*.test.ts
+renderer/testdata
