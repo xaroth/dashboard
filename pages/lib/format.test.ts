@@ -8,6 +8,7 @@ import {
   formatMillimeters,
   formatTemperature,
   formatTime,
+  localClock,
 } from "./format";
 
 test("Dutch date in the configured timezone", () => {
@@ -40,4 +41,9 @@ test("durations in the two largest units", () => {
 
 test("day and time", () => {
   expect(formatDayTime("2026-10-16T05:30:00Z", "Europe/Amsterdam")).toBe("vr 16 07:30");
+});
+
+test("local clock in the configured timezone", () => {
+  expect(localClock(Date.parse("2026-10-15T22:45:00Z"), "Europe/Amsterdam")).toEqual({ hour: 0, minute: 45 });
+  expect(localClock(Date.parse("2026-10-16T13:05:00Z"), "Asia/Kolkata")).toEqual({ hour: 18, minute: 35 });
 });
