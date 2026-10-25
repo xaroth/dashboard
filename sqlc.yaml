@@ -71,3 +71,11 @@ sql:
         <<: *go
         package: p1
         out: modules/p1
+  - <<: *owner
+    schema: series/sql/migrations
+    queries: series/sql/queries.sql
+    gen:
+      go:
+        <<: *go
+        package: series
+        out: series

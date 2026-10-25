@@ -95,6 +95,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Log:           log,
 		HTTPClient:    &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		Now:           time.Now,
+		Location:      loc,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("loading modules: %w", err)

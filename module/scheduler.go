@@ -22,8 +22,20 @@ const (
 	maxBackoff    = 6 * time.Hour
 )
 
-// Run runs every module's schedule until ctx is cancelled.
+// Run runs every module's schedule and the series store until ctx is
+// cancelled.
 func (s *Set) Run(ctx context.Context) {
+	// The series loop stops after the updates, so its final flush has
+	// their samples.
+	sctx, stopSeries := context.WithCancel(context.WithoutCancel(ctx))
+	var series sync.WaitGroup
+	if s.series.Declared() {
+		series.Go(func() { s.series.Run(sctx) })
+	}
+	defer func() {
+		stopSeries()
+		series.Wait()
+	}()
 	var wg sync.WaitGroup
 	for _, inst := range s.instances {
 		if inst.initErr != nil {
@@ -97,6 +109,10 @@ func (s *Set) schedule(ctx context.Context, inst *instance) {
 		inst.log.Warn("update failed", "err", err, "retry_in", delay)
 	}
 }
+
+// FlushSeries stores the buffered series samples now, as Run does every
+// minute.
+func (s *Set) FlushSeries(ctx context.Context) error { return s.series.Flush(ctx) }
 
 // Update runs one update of the named module now and records the result,
 // as the schedule does. It does not ask Enabled. On success the schedule

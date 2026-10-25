@@ -1,6 +1,6 @@
 # Design: dashboard service
 
-This document describes the service as built. Planned parts (more modules, time series, device health, more components, page tests, deployment) are specified in [plan.md](plan.md). Background and data source research: [research.md](research.md).
+This document describes the service as built. Planned parts (more modules, device health, more components, page tests, deployment) are specified in [plan.md](plan.md). Background and data source research: [research.md](research.md).
 
 ## Overview
 
@@ -28,6 +28,8 @@ module/                    registration API, module contract, scheduler, query d
 module/sql/                module state migrations and queries
 device/                    TRMNL protocol, API keys, page selection, screen schedule,
                            in-memory image store
+series/                    time series: write buffer, rollups, retention, bucketed queries
+series/sql/                series migrations and queries
 device/sql/                API key migrations and queries
 render/                    page pipeline, renderer process, gray reduction, PNG
 modules/modules.go         modules.All: the list of every module
@@ -48,6 +50,7 @@ Packages are one level deep and named for what they do. They do not import each 
 
 ```
 cmd/dashboard  -> storage, module, modules, device, render
+module         -> series
 cmd/gentypes   -> module, modules
 modules        -> module, modules/<name>
 modules/<name> -> module
@@ -417,6 +420,22 @@ Backups: ZFS snapshots of the `/data` dataset. WAL mode keeps the file crash-con
 The service keeps, per module, the latest status in `module_state`: `fetched_at`, `attempted_at`, `error`, plus a JSON document (`data`) for modules whose data is one snapshot (weather). A snapshot saved during `Update` is written together with `fetched_at` when `Update` returns nil, and dropped when it fails. Queries return data with its freshness (age above `stale_after` marks it stale).
 
 Modules that need more (caches, tokens, history) define their own tables in their [SQL files](#sql-files).
+
+### Time series
+
+Samples taken every minute or so (power, meter readings) go to the service-owned series tables rather than module tables. A module declares each series with `module.WithSeries(name, kind)`, stored as `<module>.<name>`, writes with `module.Series(ctx).Add(name, t, v)` from `Update` and reads with `module.Series(ctx).Query(ctx, name, from, to, step)` in its queries. A module may not be named `series` or `storage`: those own the service's migrations.
+
+| Table | Rows |
+| --- | --- |
+| `series_names` | id per declared name |
+| `series_raw` | `(series, ts, value)`, `ts` in Unix seconds, one row per sample second |
+| `series_rollup` | `(series, res, ts, value, n)` for buckets of 5 minutes, 1 hour and 1 day; `n` is the number of samples |
+
+- **Kinds**: `series.Rate` buckets hold the average of their samples, weighted by count when combining buckets (power); `series.Counter` buckets hold the last sample (meter readings).
+- **Buffer**: `Add` keeps samples in memory. Every minute the store writes them in one transaction on the writer, then recomputes the buckets of each level from the one holding the earliest new sample. A failed write keeps the samples for the next minute; at shutdown the store flushes once more after the last update; a crash loses at most a minute. 5-minute buckets past the raw retention are not rebuilt. At startup the last 24 hours are rolled up again. The loop runs only when a module declares a series.
+- **Alignment**: buckets under an hour align to Unix time; hours and days align to local time (`timezone`), so a day is a local midnight to midnight, 23 or 25 hours on DST dates, and the repeated hour of a fall back is a bucket of its own. Steps between an hour and a day align to the local wall clock, so a 6-hour bucket spanning a DST change is 5 or 7 hours.
+- **Retention**: raw samples 7 days, 5-minute buckets 90 days, hours and days forever. Pruned hourly.
+- **Queries**: `step` is at least a minute and divides a day, or is a whole number of days; at most 2000 points. The query reads the coarsest level no coarser than `step` that still holds `from` (raw, 5 minutes, 1 hour, 1 day), falling back to the finest that does, and groups it into steps; so 1-minute steps older than 7 days have a value every fifth minute. It returns every bucket from the one holding `from` up to `to`, as `{t, v}` with `v` null for a bucket without samples, so charts show gaps.
 
 ## Scheduler
 
