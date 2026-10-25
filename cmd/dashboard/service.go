@@ -80,7 +80,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	}
 	defer func() {
 		if err != nil {
-			s.close()
+			err = errors.Join(err, s.close())
 		}
 	}()
 	if s.db, err = storage.Open(ctx, cfg.DataDir); err != nil {
@@ -110,7 +110,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 
 	pipeline := render.NewPipeline(s.renderer, resolver{set: s.modules, loc: loc}, loc, time.Now)
 	if err := s.checkPages(ctx, pipeline); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("checking pages: %w", err)
 	}
 
 	s.admin.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +135,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	}
 	devices, err := device.Load(ctx, deviceOpts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading devices: %w", err)
 	}
 	devices.Register(s.device)
 
@@ -147,7 +147,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	deviceOpts.Simulated = true
 	simulated, err := device.Load(ctx, deviceOpts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("loading simulator devices: %w", err)
 	}
 	simulator := http.NewServeMux()
 	simulated.Register(simulator)
@@ -175,7 +175,6 @@ func (s *Service) Admin() http.Handler { return s.admin }
 // Run serves both listeners until ctx is cancelled or one of them fails, then
 // stops the renderer and closes storage.
 func (s *Service) Run(ctx context.Context) error {
-	defer s.close()
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		s.modules.Run(ctx)
@@ -183,7 +182,7 @@ func (s *Service) Run(ctx context.Context) error {
 	})
 	s.serve(ctx, g, "device", s.cfg.Listen.Device, instrument("device", s.device))
 	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, instrument("admin", s.admin))
-	return g.Wait()
+	return errors.Join(g.Wait(), s.close())
 }
 
 // checkPages validates what pages and devices ask for: pages exist, every
@@ -255,13 +254,15 @@ func (r resolver) StaleModules(ctx context.Context) ([]string, error) {
 	return r.set.StaleModules(ctx)
 }
 
-func (s *Service) close() {
+func (s *Service) close() error {
+	var errs []error
 	if s.renderer != nil {
-		s.renderer.Close()
+		errs = append(errs, s.renderer.Close())
 	}
 	if s.db != nil {
-		s.db.Close()
+		errs = append(errs, s.db.Close())
 	}
+	return errors.Join(errs...)
 }
 
 // serve runs a listener until ctx ends, then drains it for up to

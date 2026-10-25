@@ -25,6 +25,12 @@ type Pipeline interface {
 	Render(ctx context.Context, t render.Target, page string) (render.Image, error)
 }
 
+type Devices interface {
+	Statuses() []device.Status
+	Pending() []device.Pending
+	Target(name string) (render.Target, bool)
+}
+
 type Modules interface {
 	Statuses(ctx context.Context) ([]module.Status, error)
 	Update(ctx context.Context, name string) error
@@ -34,7 +40,7 @@ type Modules interface {
 // adminHandler serves the admin UI: status and previews of what devices get.
 type adminHandler struct {
 	Pipeline Pipeline
-	Devices  *device.Devices
+	Devices  Devices
 	Modules  Modules
 	// Simulator serves the device protocol for simulated wakes, in-process,
 	// on devices of its own; never the device listener's.
