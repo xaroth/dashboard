@@ -1,6 +1,7 @@
 package device_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +60,19 @@ func newEnvSchedule(tb testing.TB, schedule device.Schedule, opts ...func(*devic
 // the options before the load.
 func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule, opts ...func(*device.Options)) *env {
 	tb.Helper()
+	e, o := envOptions(tb, db, schedule, opts...)
+	devices, err := device.Load(tb.Context(), o)
+	if err != nil {
+		tb.Fatalf("Load: %v", err)
+	}
+	e.devices = devices
+	devices.Register(e.mux)
+	return e
+}
+
+// envOptions returns an env without devices and the options to load them with.
+func envOptions(tb testing.TB, db *storage.DB, schedule device.Schedule, opts ...func(*device.Options)) (*env, device.Options) {
+	tb.Helper()
 	fake := render.NewFakeRenderer(tb, render.ExpectPages(render.PageInfo{Name: "main"}, render.PageInfo{Name: "detail"}))
 	clock := &atomic.Int64{}
 	clock.Store(time.Unix(1792087200, 0).UnixNano())
@@ -78,13 +92,35 @@ func loadEnv(tb testing.TB, db *storage.DB, schedule device.Schedule, opts ...fu
 	for _, opt := range opts {
 		opt(&o)
 	}
-	devices, err := device.Load(tb.Context(), o)
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
+	return &env{mux: http.NewServeMux(), store: store, fake: fake, clock: clock, db: db}, o
+}
+
+func TestLoadRejectsInvalidOptions(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name   string
+		adjust func(*device.Options)
+	}{
+		{"zero battery interval", func(o *device.Options) { o.Schedule.Battery = 0 }},
+		{"zero usb interval", func(o *device.Options) { o.Schedule.USB = 0 }},
+		{"negative detail", func(o *device.Options) { o.Schedule.Detail = -time.Minute }},
+		{"no pages", func(o *device.Options) { o.Devices[0].Pages = nil }},
+		{"unknown power", func(o *device.Options) { o.Devices[0].Power = "solar" }},
 	}
-	mux := http.NewServeMux()
-	devices.Register(mux)
-	return &env{mux: mux, devices: devices, store: store, fake: fake, clock: clock, db: db}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			db, err := storage.Open(t.Context(), t.TempDir())
+			if err != nil {
+				t.Fatalf("storage: %v", err)
+			}
+			t.Cleanup(func() { db.Close() })
+			_, o := envOptions(t, db, hourly(time.UTC), testCase.adjust)
+			if _, err := device.Load(t.Context(), o); err == nil {
+				t.Error("got no error, want one")
+			}
+		})
+	}
 }
 
 func (e *env) do(tb testing.TB, method, path string, headers map[string]string) (int, map[string]any) {
@@ -265,13 +301,13 @@ func TestDisplayRefresh(t *testing.T) {
 		{"night sleep on DST end", hourly(amsterdam), "2026-10-25 00:00:00", "timer", 8 * 3600},
 		{"night sleep on DST start", hourly(amsterdam), "2027-03-28 00:00:00", "timer", 6 * 3600},
 		{"exactly a minute before the hour", hourly(amsterdam), "2026-10-15 17:59:00", "timer", 3660},
-		{"window past midnight", device.Schedule{First: 7 * time.Hour, Last: 2 * time.Hour, Battery: time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-16 01:00:00", "timer", 3600},
-		{"once a day", device.Schedule{First: 7 * time.Hour, Last: 7 * time.Hour, Battery: 24 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 07:00:00", "timer", 24 * 3600},
+		{"window past midnight", device.Schedule{First: 7 * time.Hour, Last: 2 * time.Hour, Battery: time.Hour, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-16 01:00:00", "timer", 3600},
+		{"once a day", device.Schedule{First: 7 * time.Hour, Last: 7 * time.Hour, Battery: 24 * time.Hour, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 07:00:00", "timer", 24 * 3600},
 		{"detail rounds up", hourly(amsterdam), "2026-10-15 18:59:59.6", "button", 1},
 		{"detail", hourly(amsterdam), "2026-10-15 18:30:00", "button", 300},
 		{"detail cut short by wake", hourly(amsterdam), "2026-10-15 18:58:00", "button", 120},
-		{"half-hourly", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Battery: 30 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 18:00:00", "timer", 1800},
-		{"two-hourly skips past last", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Battery: 2 * time.Hour, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 21:00:00", "timer", 10 * 3600},
+		{"half-hourly", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Battery: 30 * time.Minute, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 18:00:00", "timer", 1800},
+		{"two-hourly skips past last", device.Schedule{First: 7 * time.Hour, Last: 22 * time.Hour, Battery: 2 * time.Hour, USB: 5 * time.Minute, Detail: 5 * time.Minute, Location: amsterdam}, "2026-10-15 21:00:00", "timer", 10 * 3600},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -287,6 +323,34 @@ func TestDisplayRefresh(t *testing.T) {
 				t.Errorf("got refresh_rate %v, want %v", body["refresh_rate"], testCase.want)
 			}
 		})
+	}
+}
+
+// slowPipeline advances the clock by took on every render.
+type slowPipeline struct {
+	device.Pipeline
+	clock *atomic.Int64
+	took  time.Duration
+}
+
+func (p *slowPipeline) Render(ctx context.Context, t render.Target, page string) (render.Image, error) {
+	p.clock.Add(int64(p.took))
+	return p.Pipeline.Render(ctx, t, page)
+}
+
+func TestDisplayRefreshAfterRender(t *testing.T) {
+	t.Parallel()
+	slow := &slowPipeline{took: 40 * time.Second}
+	e := newEnv(t, func(o *device.Options) {
+		slow.Pipeline = o.Pipeline
+		o.Pipeline = slow
+	})
+	slow.clock = e.clock
+	key := e.setup(t)
+	e.clock.Store(time.Date(2026, 10, 15, 17, 59, 30, 0, time.UTC).UnixNano())
+	// Rendered at 18:00:10: the next wake past a minute is 19:00.
+	if _, body := e.display(t, key, "timer"); body["refresh_rate"] != float64(3590) {
+		t.Errorf("got refresh_rate %v, want 3590", body["refresh_rate"])
 	}
 }
 
@@ -417,6 +481,23 @@ func TestKeySurvivesRestart(t *testing.T) {
 	}
 	if code, _ := restarted.display(t, "other", "timer"); code != http.StatusUnauthorized {
 		t.Errorf("got %d for another token, want 401", code)
+	}
+}
+
+func TestKeyCached(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+	key := e.setup(t)
+	// Wakes after setup do not touch the database.
+	e.db.Writer.Close()
+	if code, body := e.display(t, key, "timer"); code != http.StatusOK {
+		t.Errorf("display: got %d %v, want 200", code, body)
+	}
+	if code, _ := e.do(t, http.MethodPost, "/api/log", map[string]string{"ID": mac, "Access-Token": key}); code != http.StatusNoContent {
+		t.Errorf("log: got %d, want 204", code)
+	}
+	if code, _ := e.display(t, "other", "timer"); code != http.StatusUnauthorized {
+		t.Errorf("display with another token: got %d, want 401", code)
 	}
 }
 

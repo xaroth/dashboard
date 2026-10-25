@@ -391,7 +391,7 @@ modules/p1/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
-- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each shared value's, then each module's, before any `Initialize`. `device.Load` runs the API key migrations (owner `device`). A failing migration stops startup.
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each shared value's, then each module's, before any `Initialize`. `device.Load` validates its options (positive intervals, pages per device, a known power) and runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
 - **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `module.SaveSnapshot` and `module.LoadSnapshot`.
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
@@ -411,7 +411,7 @@ var Module = module.Define[weather, config]("weather", defaultConfig,
 ### Connections
 
 - **Page size**: on a new file, a bootstrap connection runs `page_size=16384` and then `journal_mode=WAL`; the WAL switch writes the header with that page size, and after that it cannot change. The driver applies DSN pragmas in alphabetical order, so it cannot share a DSN with `journal_mode`. A test checks the page size.
-- **Writer**: one connection (`MaxOpenConns(1)`), used by `Initialize`, `Update`, module state, device API keys and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
+- **Writer**: one connection (`MaxOpenConns(1)`), used by `Initialize`, `Update`, module state, device API keys (read once per device, then cached in memory: keys never change) and migrations. Code holding a writer transaction must not ask for the writer again: with one connection that deadlocks.
 - **Reader**: a pool of 4 opened with `query_only(1)`, used by query functions and status reads. `module.Database(ctx)` returns the writer in `Initialize` and `Update` and the reader in queries, so a query cannot write.
 - DSN pragmas apply to every new pooled connection: `busy_timeout=5000`, `foreign_keys=ON`, `cache_size=-32768` (32 MB per connection, so up to 160 MB), `mmap_size=268435456` (256 MB, shared); the writer also sets `journal_mode=WAL` and `synchronous=NORMAL`. Driver options on both: `_time_format=sqlite` and `_timezone=UTC`, so every time is converted to UTC before it is written.
 
@@ -483,9 +483,9 @@ Global, under `schedule`: a wake every `interval_battery` or `interval_usb`, by 
 | `interval_usb` | `5m` | Interval on USB power; whole minutes, from 1m to 24h |
 | `detail_timeout` | `5m` | How long a page shown after a button press stays up |
 
-`refresh_rate` is computed from the server clock on every request:
+`refresh_rate` is computed from the server clock on every request, after rendering, since the firmware starts its sleep timer once it has drawn:
 
-- **Main page**: seconds until the next wake time. If that is 60 s or less (a device that woke just before a wake time), use the wake after it: it already shows the current data. This absorbs the firmware starting its sleep timer only after drawing, and clock drift.
+- **Main page**: seconds until the next wake time. If that is 60 s or less (a device that woke just before a wake time), use the wake after it: it already shows the current data. This absorbs the download and draw time, and clock drift.
 - **Detail page** (after a button press): `detail_timeout`, or until the next wake time if that is sooner. The following timer wake shows the main page.
 
 DST is handled by computing wake times in local time; the night sleep is 6 or 8 hours on transition nights. A wake in a skipped hour moves an hour later (merging with a wake already there); a wake in a repeated hour happens once, on the second pass.
