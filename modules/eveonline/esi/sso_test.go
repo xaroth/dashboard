@@ -99,7 +99,7 @@ func TestLoginRedirect(t *testing.T) {
 	}
 	q := loc.Query()
 	if q.Get("state") == "" {
-		t.Errorf("got no state")
+		t.Errorf("state: got none, want one")
 	}
 	q.Del("state")
 	want := url.Values{
@@ -111,8 +111,9 @@ func TestLoginRedirect(t *testing.T) {
 	if diff := cmp.Diff(want, q); diff != "" {
 		t.Errorf("authorize query (-want +got):\n%s", diff)
 	}
-	if got := loc.Scheme + "://" + loc.Host + loc.Path; got != "https://login.eveonline.com/v2/oauth/authorize" {
-		t.Errorf("got authorize URL %s", got)
+	const wantURL = "https://login.eveonline.com/v2/oauth/authorize"
+	if got := loc.Scheme + "://" + loc.Host + loc.Path; got != wantURL {
+		t.Errorf("authorize URL: got %s, want %s", got, wantURL)
 	}
 }
 

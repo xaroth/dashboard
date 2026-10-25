@@ -76,7 +76,7 @@ func TestInstrumentTraces(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	if rec := serve(device, http.MethodGet, "/api/display", map[string]string{"ID": "AA:BB:CC:DD:EE:FF", "Access-Token": registered.APIKey}); rec.Code != http.StatusOK {
-		t.Fatalf("display: got %d %s", rec.Code, rec.Body)
+		t.Fatalf("display: got %d %s, want 200", rec.Code, rec.Body)
 	}
 	serve(admin, http.MethodGet, "/healthz", nil)
 	serve(admin, http.MethodGet, "/metrics", nil)

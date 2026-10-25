@@ -123,21 +123,23 @@ var fired = func() <-chan time.Time {
 
 // newFake returns a Process running the fake renderer in mode. A response
 // timeout goes off when its channel in timeouts does, and never when absent;
-// restart backoff passes at once.
-func newFake(tb testing.TB, mode string, timeouts map[time.Duration]<-chan time.Time) (*render.Process, logSignal) {
+// restart backoff passes at once. opts apply last.
+func newFake(tb testing.TB, mode string, timeouts map[time.Duration]<-chan time.Time, opts ...render.ProcessOption) (*render.Process, logSignal) {
 	tb.Helper()
 	logs := make(logSignal, 16)
-	p := render.NewProcess([]string{os.Args[0], "fake-renderer", mode}, "", slog.New(logs))
-	render.SetTimeouts(p, renderTimeout, describeTimeout)
-	render.SetClock(p, time.Now, func(d time.Duration) <-chan time.Time {
-		if c, ok := timeouts[d]; ok {
-			return c
-		}
-		if d == renderTimeout || d == describeTimeout {
-			return nil
-		}
-		return fired
-	})
+	opts = append([]render.ProcessOption{
+		render.WithTimeouts(renderTimeout, describeTimeout),
+		render.WithClock(time.Now, func(d time.Duration) <-chan time.Time {
+			if c, ok := timeouts[d]; ok {
+				return c
+			}
+			if d == renderTimeout || d == describeTimeout {
+				return nil
+			}
+			return fired
+		}),
+	}, opts...)
+	p := render.NewProcess([]string{os.Args[0], "fake-renderer", mode}, "", slog.New(logs), opts...)
 	tb.Cleanup(func() { p.Close() })
 	return p, logs
 }
@@ -302,17 +304,16 @@ func TestProcessCallerLeavingHungRenderRestarts(t *testing.T) {
 
 func TestProcessCrashBacksOff(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "crash", nil)
 	// A frozen clock: each restart waits its full backoff.
 	now := time.Unix(1792087200, 0)
 	var waits []time.Duration
-	render.SetClock(p, func() time.Time { return now }, func(d time.Duration) <-chan time.Time {
+	p, _ := newFake(t, "crash", nil, render.WithClock(func() time.Time { return now }, func(d time.Duration) <-chan time.Time {
 		if d == renderTimeout || d == describeTimeout {
 			return nil
 		}
 		waits = append(waits, d)
 		return fired
-	})
+	}))
 	for range 9 {
 		if _, err := p.Describe(t.Context()); err == nil {
 			t.Fatal("got nil error from a crashing renderer, want one")
@@ -329,17 +330,16 @@ func TestProcessCrashBacksOff(t *testing.T) {
 
 func TestProcessRestartWaitHonorsContext(t *testing.T) {
 	t.Parallel()
-	p, _ := newFake(t, "crash", nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	now := time.Unix(1792087200, 0)
-	render.SetClock(p, func() time.Time { return now }, func(d time.Duration) <-chan time.Time {
+	p, _ := newFake(t, "crash", nil, render.WithClock(func() time.Time { return now }, func(d time.Duration) <-chan time.Time {
 		if d == renderTimeout || d == describeTimeout {
 			return nil
 		}
 		// The caller leaves while the restart waits.
 		cancel()
 		return nil
-	})
+	}))
 	if _, err := p.Describe(t.Context()); err == nil {
 		t.Fatal("got nil error from a crashing renderer, want one")
 	}

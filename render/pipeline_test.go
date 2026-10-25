@@ -36,6 +36,7 @@ func mustPipeline(tb testing.TB, o render.PipelineOptions) *render.Pipeline {
 }
 
 func newPipeline(tb testing.TB) (*render.Pipeline, *render.FakeRenderer) {
+	tb.Helper()
 	p, fake, _ := newPipelineWithResolver(tb)
 	return p, fake
 }
