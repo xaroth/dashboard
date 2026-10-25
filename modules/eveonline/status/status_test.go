@@ -2,9 +2,7 @@ package status_test
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -13,10 +11,8 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
-	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/eveonline/status"
 	"github.com/xaroth/dashboard/series"
-	"github.com/xaroth/dashboard/storage"
 )
 
 func load(tb testing.TB, handler http.Handler) *module.Set {
@@ -26,29 +22,10 @@ func load(tb testing.TB, handler http.Handler) *module.Set {
 
 func loadClient(tb testing.TB, client *http.Client) *module.Set {
 	tb.Helper()
-	db, err := storage.Open(tb.Context(), tb.TempDir())
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	configs, err := yamlconfig.Parse([]byte("eveonline_esi: {contact: [mailto:me@example.com]}"))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(tb.Context(), module.Options{
+	return moduletest.Load(tb, nil, "eveonline_esi: {contact: [mailto:me@example.com]}", module.Options{
 		Registrations: []module.Registration{status.Module},
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    client,
-		Now:           time.Now,
 	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
-	return set
 }
 
 func TestServer(t *testing.T) {
@@ -145,40 +122,18 @@ func TestServerBeforeFirstUpdate(t *testing.T) {
 	}
 }
 
-// fakeStatus answers /status with whatever was set last.
-type fakeStatus struct {
-	mu      sync.Mutex
-	players int64 // 0 is offline: 503
-}
-
-func (f *fakeStatus) set(players int64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.players = players
-}
-
-func (f *fakeStatus) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.players == 0 {
-		http.Error(w, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-	fmt.Fprintf(w, `{"players":%d,"server_version":"1","start_time":"2000-01-01T00:00:00Z"}`, f.players)
-}
-
 func TestHistory(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		// The bubble starts at 2000-01-01 00:00 UTC.
-		fake := &fakeStatus{}
+		fake := status.NewFake(t)
 		set := load(t, fake)
 		// 00:00 100, 00:05 200, 00:10 offline, 00:15 not polled, 00:20 301.
 		for _, step := range []struct {
 			players int64
 			wait    time.Duration
 		}{{100, 5 * time.Minute}, {200, 5 * time.Minute}, {0, 10 * time.Minute}, {301, 0}} {
-			fake.set(step.players)
+			fake.Set(t, status.ExpectPlayers(step.players))
 			if err := set.Update(t.Context(), "eveonline_status"); err != nil {
 				t.Fatalf("Update: %v", err)
 			}

@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 //go:embed testdata/*.json
@@ -57,9 +55,9 @@ type fakeKey struct {
 	rejected bool
 }
 
-// FakePleos serves the Pleos Vehicle Data API in-process. It checks the
-// Brand header, tokens and which key a VIN belongs to as the API does.
-// Unlike httptest.Server it works inside a synctest bubble.
+// FakePleos serves the Pleos Vehicle Data API, for moduletest.HTTPClient.
+// It checks the Brand header, tokens and which key a VIN belongs to as the
+// API does.
 type FakePleos struct {
 	mu   sync.Mutex
 	keys map[string]*fakeKey
@@ -118,11 +116,6 @@ func ExpectLocation_NoData(_ testing.TB, f *FakePleos) {
 // KONA Electric does for outside temperature, tires and sunroof.
 func ExpectStatus_Unreported(_ testing.TB, f *FakePleos) {
 	f.cars[FakeVIN].StatusUnreported = true
-}
-
-// Client returns a service HTTP client whose requests f serves.
-func (f *FakePleos) Client() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second, Transport: fakeTransport{f}}
 }
 
 // Car changes the car with vin.
@@ -196,17 +189,6 @@ func (f *FakePleos) Tokens() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.issued
-}
-
-type fakeTransport struct{ h http.Handler }
-
-func (t fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	rec := httptest.NewRecorder()
-	t.h.ServeHTTP(rec, req)
-	if err := req.Context().Err(); err != nil {
-		return nil, err
-	}
-	return rec.Result(), nil
 }
 
 func fakeError(w http.ResponseWriter, status int, code string) {

@@ -2,7 +2,6 @@ package solar_test
 
 import (
 	"context"
-	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -13,39 +12,17 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
-	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/solar"
 	"github.com/xaroth/dashboard/series"
-	"github.com/xaroth/dashboard/storage"
 )
 
 // load runs solar against fake, with extra config keys after the host.
 func load(tb testing.TB, fake *solar.FakeDTU, extra string) *module.Set {
 	tb.Helper()
-	db, err := storage.Open(tb.Context(), tb.TempDir())
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	configs, err := yamlconfig.Parse([]byte("solar: {host: " + solar.FakeHost + extra + "}"))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(tb.Context(), module.Options{
+	return moduletest.Load(tb, nil, "solar: {host: "+solar.FakeHost+extra+"}", module.Options{
 		Registrations: []module.Registration{solar.Module},
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    moduletest.HTTPClient(nil),
 		Dialer:        fake,
-		Now:           time.Now,
 	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
-	return set
 }
 
 func production(tb testing.TB, set *module.Set) *solar.Production {

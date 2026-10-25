@@ -1,11 +1,8 @@
 package skills_test
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,54 +16,40 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
-	"github.com/xaroth/dashboard/module/yamlconfig"
+	"github.com/xaroth/dashboard/modules/eveonline/esi"
 	"github.com/xaroth/dashboard/modules/eveonline/sde"
 	"github.com/xaroth/dashboard/modules/eveonline/skills"
-	"github.com/xaroth/dashboard/storage"
 )
 
 var scopes = []string{"esi-skills.read_skillqueue.v1", "esi-skills.read_skills.v1"}
 
-// fakeEVE is EVE SSO, ESI and the SDE downloads. Login code "<id>:<name>" logs in that
-// character; its refresh token is "refresh-<id>". queues are the
-// skillqueue bodies by character ID; a missing one is a 500. skills are the
-// skills bodies; a missing one is no skills. revoked characters' refreshes
-// are rejected. denied characters' skillqueue requests get that status.
+// fakeEVE is EVE SSO, ESI and the SDE downloads. Login codes "alice",
+// "bob" and "carol" log in characters 1 to 3. queues are the skillqueue
+// bodies by character ID; a missing one is a 500. skills are the skills
+// bodies; a missing one is no skills. denied characters' skillqueue
+// requests get that status.
 type fakeEVE struct {
-	mu      sync.Mutex
-	sde     *sde.Fake
-	revoked map[string]bool
-	denied  map[string]int
-	queues  map[string]string
-	skills  map[string]string
+	mu     sync.Mutex
+	sde    *sde.Fake
+	sso    *esi.FakeSSO
+	denied map[string]int
+	queues map[string]string
+	skills map[string]string
 }
 
 func (f *fakeEVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Host == "developers.eveonline.com" {
+	switch r.URL.Host {
+	case "developers.eveonline.com":
 		f.sde.ServeHTTP(w, r)
+		return
+	case "login.eveonline.com":
+		f.sso.ServeHTTP(w, r)
 		return
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := r.URL.Host + r.URL.Path
 	switch {
-	case path == "login.eveonline.com/v2/oauth/token":
-		r.ParseForm()
-		id, name, _ := strings.Cut(r.PostForm.Get("code"), ":")
-		if rt := r.PostForm.Get("refresh_token"); rt != "" {
-			id, name = strings.TrimPrefix(rt, "refresh-"), "Refreshed"
-			if f.revoked[id] {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, `{"error":"invalid_grant","error_description":"Invalid refresh token."}`)
-				return
-			}
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"access_token":  jwt(map[string]any{"sub": "CHARACTER:EVE:" + id, "name": name, "scp": scopes}),
-			"expires_in":    1199,
-			"token_type":    "Bearer",
-			"refresh_token": "refresh-" + id,
-		})
 	case strings.HasPrefix(path, "esi.evetech.net/characters/") && strings.HasSuffix(path, "/skillqueue"):
 		id := strings.Split(r.URL.Path, "/")[2]
 		if r.Header.Get("Authorization") == "" {
@@ -104,64 +87,37 @@ func (f *fakeEVE) setQueue(id, body string) {
 	f.queues[id] = body
 }
 
-func (f *fakeEVE) set(fn func(f *fakeEVE)) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	fn(f)
-}
-
 // skillTypes is a types.jsonl with "Skill <id>" for each ID.
 func skillTypes(ids ...int) sde.FakeOption {
 	var lines []string
 	for _, id := range ids {
 		lines = append(lines, fmt.Sprintf(`{"_key": %d, "groupID": 255, "name": {"en": "Skill %d"}, "published": true}`, id, id))
 	}
-	return sde.WithFile("types.jsonl", strings.Join(lines, "\n"))
-}
-
-func jwt(claims map[string]any) string {
-	b, _ := json.Marshal(claims)
-	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(`{"alg":"RS256"}`)) + "." + enc(b) + "." + enc([]byte("sig"))
+	return sde.ExpectFile("types.jsonl", strings.Join(lines, "\n"))
 }
 
 // load loads the module with the SDE imported: skills 100 to 102.
 func load(tb testing.TB, fake *fakeEVE) *module.Set {
 	tb.Helper()
 	fake.sde = sde.NewFake(tb,
-		sde.WithFile("categories.jsonl", `{"_key": 16, "name": {"en": "Skill"}, "published": true}`),
-		sde.WithFile("groups.jsonl", `{"_key": 255, "categoryID": 16, "name": {"en": "Gunnery"}, "published": true}`),
+		sde.ExpectFile("categories.jsonl", `{"_key": 16, "name": {"en": "Skill"}, "published": true}`),
+		sde.ExpectFile("groups.jsonl", `{"_key": 255, "categoryID": 16, "name": {"en": "Gunnery"}, "published": true}`),
 		skillTypes(100, 101, 102))
-	db, err := storage.Open(tb.Context(), tb.TempDir())
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	cfg := `eveonline_esi: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline_esi/callback"}`
-	configs, err := yamlconfig.Parse([]byte(cfg))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(tb.Context(), module.Options{
+	fake.sso = esi.NewFake(tb,
+		esi.ExpectCharacter("alice", esi.Character{ID: 1, Name: "Alice"}, scopes...),
+		esi.ExpectCharacter("bob", esi.Character{ID: 2, Name: "Bob"}, scopes...),
+		esi.ExpectCharacter("carol", esi.Character{ID: 3, Name: "Carol"}, scopes...))
+	set := moduletest.Load(tb, nil, esi.FakeSSOConfig, module.Options{
 		Registrations: []module.Registration{skills.Module},
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    moduletest.HTTPClient(fake),
-		Now:           time.Now,
 	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
 	if err := set.Update(tb.Context(), "eveonline_sde"); err != nil {
 		tb.Fatalf("SDE Update: %v", err)
 	}
 	return set
 }
 
-// login runs the SSO flow with code, "<id>:<name>".
+// login runs the SSO flow with code.
 func login(tb testing.TB, set *module.Set, code string) {
 	tb.Helper()
 	mux := http.NewServeMux()
@@ -221,9 +177,9 @@ func TestQueue(t *testing.T) {
 			"1": `{"skills":[{"skill_id":100,"skillpoints_in_skill":450000,"trained_skill_level":4,"active_skill_level":4}],"total_sp":5000000,"unallocated_sp":1234}`,
 		}}
 		set := load(t, fake)
-		login(t, set, "1:Alice")
-		login(t, set, "2:Bob")
-		login(t, set, "3:Carol")
+		login(t, set, "alice")
+		login(t, set, "bob")
+		login(t, set, "carol")
 		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -263,8 +219,8 @@ func TestQueueErrors(t *testing.T) {
 			"2": "[]",
 		}}
 		set := load(t, fake)
-		login(t, set, "1:Alice")
-		login(t, set, "2:Bob")
+		login(t, set, "alice")
+		login(t, set, "bob")
 		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -298,7 +254,7 @@ func TestQueueNames(t *testing.T) {
 		now := time.Now()
 		fake := &fakeEVE{queues: map[string]string{"1": "[" + entry(0, 103, 1, at(now, 0), at(now, time.Hour)) + "]"}}
 		set := load(t, fake)
-		login(t, set, "1:Alice")
+		login(t, set, "alice")
 		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
@@ -306,7 +262,7 @@ func TestQueueNames(t *testing.T) {
 			t.Errorf("got %+v, want the skill without a name: the SDE does not have it", got)
 		}
 		// A new SDE build names it without a skills update.
-		fake.sde.Set(t, sde.WithBuild(2), skillTypes(100, 101, 102, 103))
+		fake.sde.Set(t, sde.ExpectBuild(2), skillTypes(100, 101, 102, 103))
 		if err := set.Update(t.Context(), "eveonline_sde"); err != nil {
 			t.Fatalf("SDE Update: %v", err)
 		}
@@ -319,10 +275,11 @@ func TestQueueNames(t *testing.T) {
 func TestQueueAuth(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEVE{revoked: map[string]bool{"1": true}, queues: map[string]string{}}
+		fake := &fakeEVE{queues: map[string]string{}}
 		set := load(t, fake)
-		login(t, set, "1:Alice")
-		login(t, set, "2:Bob")
+		login(t, set, "alice")
+		login(t, set, "bob")
+		fake.sso.Set(t, esi.ExpectToken_Revoked(1))
 		// Past expiry, so Alice's token is refreshed and rejected.
 		time.Sleep(30 * time.Minute)
 
@@ -331,7 +288,7 @@ func TestQueueAuth(t *testing.T) {
 		if err == nil || errors.Is(err, module.ErrAuth) {
 			t.Errorf("got Update error %v, want one that is not ErrAuth", err)
 		}
-		fake.set(func(f *fakeEVE) { f.revoked["2"] = true })
+		fake.sso.Set(t, esi.ExpectToken_Revoked(2))
 		time.Sleep(30 * time.Minute)
 		if err := set.Update(t.Context(), "eveonline_skills"); !errors.Is(err, module.ErrAuth) {
 			t.Errorf("got Update error %v, want ErrAuth: every character must log in again", err)
@@ -354,7 +311,7 @@ func TestQueueDenied(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				fake := &fakeEVE{denied: map[string]int{"1": testCase.code}, queues: map[string]string{}}
 				set := load(t, fake)
-				login(t, set, "1:Alice")
+				login(t, set, "alice")
 				if err := set.Update(t.Context(), "eveonline_skills"); !errors.Is(err, module.ErrAuth) {
 					t.Errorf("got Update error %v, want ErrAuth", err)
 				}

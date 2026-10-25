@@ -3,7 +3,6 @@ package sde_test
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -21,14 +20,14 @@ import (
 func newFake(tb testing.TB, build int64, opts ...sde.FakeOption) *sde.Fake {
 	tb.Helper()
 	return sde.NewFake(tb, append([]sde.FakeOption{
-		sde.WithBuild(build),
-		sde.WithFile("categories.jsonl", `{"_key": 6, "name": {"de": "Schiff", "en": "Ship"}, "published": true}`),
-		sde.WithFile("groups.jsonl", `{"_key": 25, "anchorable": false, "categoryID": 6, "name": {"en": "Frigate"}, "published": true}`),
-		sde.WithFile("types.jsonl", `{"_key": 587, "groupID": 25, "mass": 1067000.0, "name": {"en": "Rifter"}, "portionSize": 1, "published": true, "description": {"en": "x"}}
+		sde.ExpectBuild(build),
+		sde.ExpectFile("categories.jsonl", `{"_key": 6, "name": {"de": "Schiff", "en": "Ship"}, "published": true}`),
+		sde.ExpectFile("groups.jsonl", `{"_key": 25, "anchorable": false, "categoryID": 6, "name": {"en": "Frigate"}, "published": true}`),
+		sde.ExpectFile("types.jsonl", `{"_key": 587, "groupID": 25, "mass": 1067000.0, "name": {"en": "Rifter"}, "portionSize": 1, "published": true, "description": {"en": "x"}}
 {"_key": 588, "groupID": 25, "name": {"en": "Reaper"}, "portionSize": 1, "published": false}`),
-		sde.WithFile("mapRegions.jsonl", `{"_key": 10000002, "constellationIDs": [20000020], "name": {"en": "The Forge"}, "nebulaID": 1}`),
-		sde.WithFile("mapConstellations.jsonl", `{"_key": 20000020, "regionID": 10000002, "name": {"en": "Kimotoro"}, "solarSystemIDs": [30000142]}`),
-		sde.WithFile("mapSolarSystems.jsonl", `{"_key": 30000142, "constellationID": 20000020, "regionID": 10000002, "name": {"en": "Jita"}, "securityStatus": 0.945913, "securityClass": "B", "position": {"x": 1, "y": 2, "z": 3}}`),
+		sde.ExpectFile("mapRegions.jsonl", `{"_key": 10000002, "constellationIDs": [20000020], "name": {"en": "The Forge"}, "nebulaID": 1}`),
+		sde.ExpectFile("mapConstellations.jsonl", `{"_key": 20000020, "regionID": 10000002, "name": {"en": "Kimotoro"}, "solarSystemIDs": [30000142]}`),
+		sde.ExpectFile("mapSolarSystems.jsonl", `{"_key": 30000142, "constellationID": 20000020, "regionID": 10000002, "name": {"en": "Jita"}, "securityStatus": 0.945913, "securityClass": "B", "position": {"x": 1, "y": 2, "z": 3}}`),
 	}, opts...)...)
 }
 
@@ -54,35 +53,17 @@ func (*reader) lookup(ctx context.Context, _ struct{}) (lookup, error) {
 	return lookup{types, systems}, err
 }
 
-func open(tb testing.TB) *storage.DB {
-	tb.Helper()
-	db, err := storage.Open(tb.Context(), tb.TempDir())
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	return db
-}
-
 // load loads the reader module, declaring datasets, on db; loading again on
 // the same db is a restart.
 func load(tb testing.TB, db *storage.DB, handler http.Handler, datasets ...sde.Dataset) *module.Set {
 	tb.Helper()
 	reg := module.Define[reader, struct{}]("reader", func() *struct{} { return &struct{}{} },
 		module.WithShared(sde.Shared, datasets...), module.WithQuery("lookup", (*reader).lookup))
-	set, err := module.Load(tb.Context(), module.Options{
+	return moduletest.Load(tb, db, "", module.Options{
 		Registrations: []module.Registration{reg},
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    moduletest.HTTPClient(handler),
 		Now:           func() time.Time { return time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC) },
 	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
-	return set
 }
 
 func update(tb testing.TB, set *module.Set) {
@@ -118,7 +99,7 @@ func version(tb testing.TB, set *module.Set) string {
 func TestUpdate(t *testing.T) {
 	t.Parallel()
 	fake := newFake(t, 100)
-	set := load(t, open(t), fake, sde.Types, sde.SolarSystems)
+	set := load(t, moduletest.DB(t, t.TempDir()), fake, sde.Types, sde.SolarSystems)
 
 	if got := resolve(t, set); len(got.Types) != 0 || len(got.Systems) != 0 {
 		t.Errorf("got %+v before the first import, want nothing", got)
@@ -152,7 +133,7 @@ func TestUpdate(t *testing.T) {
 		t.Errorf("got %d downloads, want 1: the build did not change", got)
 	}
 
-	fake.Set(t, sde.WithBuild(101), sde.WithFile("types.jsonl", `{"_key": 587, "groupID": 25, "name": {"en": "Rifter II"}, "published": true}`))
+	fake.Set(t, sde.ExpectBuild(101), sde.ExpectFile("types.jsonl", `{"_key": 587, "groupID": 25, "name": {"en": "Rifter II"}, "published": true}`))
 	update(t, set)
 	want.Types = map[int64]sde.Type{
 		587: {TypeID: 587, Name: "Rifter II", Published: true, GroupID: 25, GroupName: "Frigate", CategoryID: 6, CategoryName: "Ship"},
@@ -187,30 +168,30 @@ func TestUpdateErrors(t *testing.T) {
 		},
 		{
 			name:    "archive of another build",
-			opts:    []sde.FakeOption{sde.WithFile("_sde.jsonl", `{"_key": "sde", "buildNumber": 100, "releaseDate": "2026-10-12T11:08:38Z"}`)},
+			opts:    []sde.FakeOption{sde.ExpectFile("_sde.jsonl", `{"_key": "sde", "buildNumber": 100, "releaseDate": "2026-10-12T11:08:38Z"}`)},
 			wantErr: "importing build 101: archive has build 100",
 		},
 		{
 			name:    "missing file",
-			opts:    []sde.FakeOption{sde.WithoutFile("mapSolarSystems.jsonl")},
+			opts:    []sde.FakeOption{sde.ExpectFile_Missing("mapSolarSystems.jsonl")},
 			wantErr: "importing build 101: open mapSolarSystems.jsonl: file does not exist",
 		},
 		{
 			name:    "bad record",
-			opts:    []sde.FakeOption{sde.WithFile("groups.jsonl", `{"_key": "x"}`)},
+			opts:    []sde.FakeOption{sde.ExpectFile("groups.jsonl", `{"_key": "x"}`)},
 			wantErr: "importing build 101: groups.jsonl: json: cannot unmarshal string into Go struct field group._key of type int64",
 		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			db := open(t)
+			db := moduletest.DB(t, t.TempDir())
 			fake := newFake(t, 100)
 			update(t, load(t, db, fake, sde.Types, sde.SolarSystems))
 
 			var handler http.Handler = testCase.handler
 			if testCase.handler == nil {
-				fake.Set(t, append([]sde.FakeOption{sde.WithBuild(101)}, testCase.opts...)...)
+				fake.Set(t, append([]sde.FakeOption{sde.ExpectBuild(101)}, testCase.opts...)...)
 				handler = fake
 			}
 			set := load(t, db, handler, sde.Types, sde.SolarSystems)
@@ -230,7 +211,7 @@ func TestUpdateErrors(t *testing.T) {
 func TestDatasets(t *testing.T) {
 	t.Parallel()
 	fake := newFake(t, 100)
-	db := open(t)
+	db := moduletest.DB(t, t.TempDir())
 
 	set := load(t, db, fake, sde.Types)
 	update(t, set)
@@ -254,7 +235,7 @@ func TestDatasets(t *testing.T) {
 	}
 
 	// A dataset no longer declared is emptied by the next import.
-	fake.Set(t, sde.WithBuild(101))
+	fake.Set(t, sde.ExpectBuild(101))
 	update(t, load(t, db, fake, sde.SolarSystems))
 	if got := resolve(t, load(t, db, fake, sde.SolarSystems, sde.Types)); len(got.Types) != 0 || len(got.Systems) != 1 {
 		t.Errorf("got %+v, want solar systems only", got)
@@ -274,7 +255,7 @@ func TestBuildErrors(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			set := load(t, open(t), http.NotFoundHandler(), testCase.datasets...)
+			set := load(t, moduletest.DB(t, t.TempDir()), http.NotFoundHandler(), testCase.datasets...)
 			st, err := set.Statuses(t.Context())
 			if err != nil {
 				t.Fatalf("Statuses: %v", err)
