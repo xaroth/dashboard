@@ -45,6 +45,9 @@ const (
 	// Rolled up again at startup: samples flushed before a crash may have
 	// missed their rollup.
 	startupRollup = 24 * time.Hour
+	// Caps the buffer per declared series during a database outage: a day
+	// of one sample a minute.
+	maxPendingPerSeries = 24 * 60
 )
 
 type level struct {
@@ -170,7 +173,8 @@ func (s *Store) Run(ctx context.Context) {
 }
 
 // Flush writes the buffered samples in one transaction and rolls up the
-// buckets they fall in. Samples of a failed write stay buffered.
+// buckets they fall in. Samples of a failed write stay buffered, up to a
+// day's worth per series; the oldest are dropped beyond that.
 func (s *Store) Flush(ctx context.Context) error {
 	s.mu.Lock()
 	batch := s.pending
@@ -180,6 +184,10 @@ func (s *Store) Flush(ctx context.Context) error {
 		if err := s.write(ctx, batch); err != nil {
 			s.mu.Lock()
 			s.pending = append(batch, s.pending...)
+			if over := len(s.pending) - maxPendingPerSeries*len(s.series); over > 0 {
+				s.pending = s.pending[over:]
+				s.log.Warn("series buffer full, dropping oldest samples", "dropped", over)
+			}
 			s.mu.Unlock()
 			return err
 		}
@@ -335,8 +343,8 @@ func (s *Store) Prune(ctx context.Context) error {
 }
 
 // Query returns name in buckets of step from the bucket holding from up to
-// to, reading the coarsest stored level that is no coarser than step and
-// still holds from. step is at least a minute and divides a day, or is a
+// to, reading the coarsest stored level that divides step and still holds
+// from, or else the finest that holds from. step is at least a minute and divides a day, or is a
 // whole number of days; steps of an hour or more align to local time.
 func (s *Store) Query(ctx context.Context, name string, from, to time.Time, step time.Duration) ([]Point, error) {
 	d, ok := s.series[name]
@@ -393,7 +401,9 @@ func (s *Store) source(start time.Time, step time.Duration) time.Duration {
 	}
 	for _, lv := range levels {
 		holds := lv.keep == 0 || age <= lv.keep
-		if holds && (lv.res <= step || src < 0) {
+		// A level that does not divide step would put whole buckets in the
+		// wrong step.
+		if holds && ((lv.res <= step && step%lv.res == 0) || src < 0) {
 			src = lv.res
 		}
 	}
