@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
@@ -109,6 +110,11 @@ func TestBuckets(t *testing.T) {
 	if diff := cmp.Diff([]float64{109, -1, -1}, values(got)); diff != "" {
 		t.Errorf("counter in 10m (-want +got):\n%s", diff)
 	}
+	// Raw, not 5m buckets: 12:05 holds samples of both the 12:00 and 12:06 steps.
+	got = query(t, s, "power", start, start.Add(30*time.Minute), 6*time.Minute)
+	if diff := cmp.Diff([]float64{2.5, 7.5, -1, 50, -1}, values(got)); diff != "" {
+		t.Errorf("rate in 6m (-want +got):\n%s", diff)
+	}
 	got = query(t, s, "power", start.Add(8*time.Minute), start.Add(11*time.Minute), time.Minute)
 	if diff := cmp.Diff([]float64{8, 9, -1}, values(got)); diff != "" {
 		t.Errorf("raw in 1m (-want +got):\n%s", diff)
@@ -117,6 +123,20 @@ func TestBuckets(t *testing.T) {
 	got = query(t, s, "power", start, start.Add(time.Hour), time.Hour)
 	if diff := cmp.Diff([]float64{95.0 / 11}, values(got)); diff != "" {
 		t.Errorf("rate in 1h (-want +got):\n%s", diff)
+	}
+
+	// 5m buckets, not hours: the 01:00 hour spans both 90m steps.
+	day := at("2026-07-01 00:00:00")
+	for i := range 120 {
+		add(t, s, "power", day.Add(time.Duration(i)*time.Minute), float64(1+2*(i/60)))
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	c.t = c.t.AddDate(0, 0, 39)
+	got = query(t, s, "power", day, day.Add(3*time.Hour), 90*time.Minute)
+	if diff := cmp.Diff([]float64{5.0 / 3, 3}, values(got), cmpopts.EquateApprox(0, 1e-9)); diff != "" {
+		t.Errorf("rate in 90m after 39 days (-want +got):\n%s", diff)
 	}
 }
 
@@ -225,6 +245,37 @@ func TestFlushFailureKeepsSamples(t *testing.T) {
 	}
 	if got := values(query(t, s, "power", start, start.Add(time.Minute), time.Minute)); got[0] != 7 {
 		t.Errorf("got %v, want the sample kept and written", got)
+	}
+}
+
+// TestFlushFailureCapsBuffer keeps a day of samples per series through a
+// failed write and drops the oldest.
+func TestFlushFailureCapsBuffer(t *testing.T) {
+	t.Parallel()
+	start := at("2026-07-01 00:00:00")
+	c := &clock{start.Add(72 * time.Hour)}
+	s := open(t, c)
+	// Two declared series: room for 2*1440 samples.
+	const n = 2*24*60 + 10
+	for i := range n {
+		add(t, s, "power", start.Add(time.Duration(i)*time.Minute), 1)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := s.Flush(ctx); err == nil {
+		t.Fatal("Flush with a cancelled context succeeded")
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	got := values(query(t, s, "power", start, start.Add(20*time.Minute), time.Minute))
+	want := []float64{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("oldest samples (-want +got):\n%s", diff)
+	}
+	last := start.Add((n - 1) * time.Minute)
+	if got := values(query(t, s, "power", last, last.Add(time.Minute), time.Minute)); got[0] != 1 {
+		t.Errorf("got %v, want the newest sample kept", got)
 	}
 }
 
