@@ -244,7 +244,13 @@ func (s *Store) rollup(ctx context.Context) error {
 }
 
 func (s *Store) rollupSeries(ctx context.Context, d *def, from int64) error {
-	end := s.now().Unix() + 1
+	// No upper bound: samples stamped ahead of the clock roll up too.
+	const end = math.MaxInt64
+	// 5-minute buckets older than the raw retention would be rebuilt from
+	// what is left of their samples.
+	if cutoff := s.bucketStart(s.now().Add(-rawRetention), levels[0].res).Add(levels[0].res).Unix(); from < cutoff {
+		from = cutoff
+	}
 	tx, err := s.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -395,34 +401,54 @@ func (s *Store) source(start time.Time, step time.Duration) time.Duration {
 }
 
 // bucketStart is the start of the bucket of size d holding t: Unix time
-// multiples under an hour, local hours from an hour, local midnights from
-// a day.
+// multiples under an hour, local hours at an hour, local wall-clock
+// multiples above it and local midnights from a day.
 func (s *Store) bucketStart(t time.Time, d time.Duration) time.Time {
-	if d >= 24*time.Hour {
-		y, m, day := t.In(s.loc).Date()
+	size := int64(d / time.Second)
+	l := t.In(s.loc)
+	y, m, day := l.Date()
+	switch {
+	case d >= 24*time.Hour:
 		days := time.Date(y, m, day, 0, 0, 0, 0, time.UTC).Unix() / 86400
 		days -= mod(days, int64(d/(24*time.Hour)))
 		y, m, day = time.Unix(days*86400, 0).UTC().Date()
 		return time.Date(y, m, day, 0, 0, 0, 0, s.loc)
-	}
-	u, size := t.Unix(), int64(d/time.Second)
-	if d >= time.Hour {
-		_, off := t.In(s.loc).Zone()
+	case d > time.Hour:
+		// Wall clock, so a bucket spanning a DST change keeps one start.
+		sec := int64(l.Hour()*3600 + l.Minute()*60 + l.Second())
+		return s.earliest(time.Date(y, m, day, 0, 0, int(sec-mod(sec, size)), 0, s.loc))
+	case d == time.Hour:
+		// By instant: both hours of a DST fall back are buckets.
+		_, off := l.Zone()
+		u := t.Unix()
 		return time.Unix(u-mod(u+int64(off), size), 0).In(s.loc)
 	}
+	u := t.Unix()
 	return time.Unix(u-mod(u, size), 0).In(s.loc)
 }
 
 func (s *Store) nextBucket(t time.Time, d time.Duration) time.Time {
-	if d >= 24*time.Hour {
-		y, m, day := t.In(s.loc).Date()
+	l := t.In(s.loc)
+	y, m, day := l.Date()
+	switch {
+	case d >= 24*time.Hour:
 		return time.Date(y, m, day+int(d/(24*time.Hour)), 0, 0, 0, 0, s.loc)
-	}
-	// Past a DST change a local bucket may start an hour off t+d.
-	if next := s.bucketStart(t.Add(d), d); next.After(t) {
-		return next
+	case d > time.Hour:
+		wall := time.Date(y, m, day, l.Hour(), l.Minute(), l.Second()+int(d/time.Second), 0, s.loc)
+		if next := s.bucketStart(wall, d); next.After(t) {
+			return next
+		}
 	}
 	return t.Add(d)
+}
+
+// earliest is t, or the instant an hour before when that reads the same on
+// the wall clock: the first of a repeated hour at a DST fall back.
+func (s *Store) earliest(t time.Time) time.Time {
+	if prev := t.Add(-time.Hour); prev.In(s.loc).Format(time.DateTime) == t.In(s.loc).Format(time.DateTime) {
+		return prev
+	}
+	return t
 }
 
 func mod(a, b int64) int64 {

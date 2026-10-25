@@ -109,3 +109,45 @@ func TestReservedName(t *testing.T) {
 		t.Errorf("got %v, want the name rejected", err)
 	}
 }
+
+// TestSeriesShutdown checks that Run flushes the samples of the last update
+// when it stops.
+func TestSeriesShutdown(t *testing.T) {
+	t.Parallel()
+	db, err := storage.Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Date(2026, 7, 1, 12, 0, 30, 0, time.UTC)
+	set, err := module.Load(t.Context(), module.Options{
+		Registrations: []module.Registration{module.Define[meter, meterConfig]("meter", func() *meterConfig { return &meterConfig{} },
+			module.WithSeries("power", series.Rate),
+			module.WithQuery("power", (*meter).power),
+			module.WithUpdateInterval(time.Hour),
+		)},
+		Migrator: db,
+		Writer:   db.Writer,
+		Reader:   db.Reader,
+		Log:      slog.New(slog.DiscardHandler),
+		Now:      func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		set.Run(ctx)
+		close(done)
+	}()
+	if err := set.Update(t.Context(), "meter"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	cancel()
+	<-done
+	res := set.Resolve(t.Context(), "meter", "power", nil)
+	if pts, _ := res.Value.([]series.Point); res.Error != "" || len(pts) == 0 || pts[2].V == nil {
+		t.Errorf("got %v %s, want the sample at 12:00", res.Value, res.Error)
+	}
+}

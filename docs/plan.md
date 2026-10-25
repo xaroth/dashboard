@@ -32,7 +32,7 @@ Added to the module contract when a module needs them: active hours, backfill ho
 
 `p1` and `solar` write series (P1 flow and meter readings, solar power) and expose queries over them for charts on the energy page. Device health writes battery voltage as a series.
 
-Estimate: one flush per minute touching a handful of pages is roughly 100-200 KB per minute including WAL and checkpoint, about 50-100 GB per year. Consumer SSDs are rated for hundreds of TB written. The estimate is to be confirmed by measuring bytes written per day.
+Write load estimate for the series flush: one flush per minute touching a handful of pages is roughly 100-200 KB per minute including WAL and checkpoint, about 50-100 GB per year. Consumer SSDs are rated for hundreds of TB written. The estimate is to be confirmed by measuring bytes written per day.
 
 Usage over a period, for counters, is the difference between bucket values; a drop is a reset (meter or inverter replaced): count from the new value.
 

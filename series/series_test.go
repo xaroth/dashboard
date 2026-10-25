@@ -258,3 +258,105 @@ func nan() float64 {
 }
 
 func second[T any](_ T, err error) error { return err }
+
+// TestDSTSteps checks steps between an hour and a day across both DST
+// changes: every bucket starts on the local wall clock and holds the samples
+// up to the next one.
+func TestDSTSteps(t *testing.T) {
+	t.Parallel()
+	for _, day := range []string{"2026-03-29", "2026-10-25"} {
+		from := at(day + " 00:00:00")
+		to := from.AddDate(0, 0, 1)
+		c := &clock{to.Add(time.Hour)}
+		s := open(t, c)
+		var samples []time.Time
+		for ts := from; ts.Before(to); ts = ts.Add(10 * time.Minute) {
+			add(t, s, "meter", ts, float64(ts.Unix()))
+			samples = append(samples, ts)
+		}
+		if err := s.Flush(t.Context()); err != nil {
+			t.Fatalf("Flush: %v", err)
+		}
+		for _, step := range []time.Duration{2 * time.Hour, 3 * time.Hour, 6 * time.Hour, 12 * time.Hour} {
+			got := query(t, s, "meter", from, to, step)
+			if want := int(24 * time.Hour / step); len(got) != want {
+				t.Errorf("%s step %v: got %d buckets, want %d", day, step, len(got), want)
+				continue
+			}
+			for i, p := range got {
+				if l := p.T.In(amsterdam); l.Minute() != 0 || l.Hour()%int(step/time.Hour) != 0 {
+					// 02:00 does not exist on 2026-03-29; it starts at 03:00.
+					if !(day == "2026-03-29" && l.Hour() == 3 && step == 2*time.Hour) {
+						t.Errorf("%s step %v: bucket %d starts at %v", day, step, i, l)
+					}
+				}
+				end := to
+				if i+1 < len(got) {
+					end = got[i+1].T
+				}
+				var last time.Time
+				for _, ts := range samples {
+					if ts.Before(end) {
+						last = ts
+					}
+				}
+				if p.V == nil || *p.V != float64(last.Unix()) {
+					t.Errorf("%s step %v: bucket %v holds %v, want the sample at %v", day, step, p.T, p.V, last)
+				}
+			}
+		}
+	}
+}
+
+func TestConcurrentAdd(t *testing.T) {
+	t.Parallel()
+	c := &clock{at("2026-07-01 13:00:00")}
+	s := open(t, c)
+	start := at("2026-07-01 12:00:00")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 60 {
+			add(t, s, "power", start.Add(time.Duration(i)*time.Minute), 1)
+		}
+	}()
+	for range 5 {
+		if err := s.Flush(t.Context()); err != nil {
+			t.Errorf("Flush: %v", err)
+		}
+	}
+	<-done
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	for _, p := range query(t, s, "power", start, start.Add(time.Hour), time.Minute) {
+		if p.V == nil {
+			t.Errorf("no sample at %v", p.T)
+		}
+	}
+}
+
+// TestOldSample writes a sample past the raw retention: its 5-minute bucket
+// keeps the value it had.
+func TestOldSample(t *testing.T) {
+	t.Parallel()
+	c := &clock{at("2026-07-01 12:10:00")}
+	s := open(t, c)
+	start := at("2026-07-01 12:00:00")
+	add(t, s, "power", start, 10)
+	add(t, s, "power", start.Add(time.Minute), 20)
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	c.t = start.Add(8 * 24 * time.Hour)
+	if err := s.Prune(t.Context()); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	add(t, s, "power", start.Add(2*time.Minute), 90)
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := values(query(t, s, "power", start, start.Add(5*time.Minute), 5*time.Minute)); got[0] != 15 {
+		t.Errorf("got %v, want the bucket kept at 15", got)
+	}
+}

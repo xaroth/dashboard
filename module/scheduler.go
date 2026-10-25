@@ -25,10 +25,18 @@ const (
 // Run runs every module's schedule and the series store until ctx is
 // cancelled.
 func (s *Set) Run(ctx context.Context) {
-	var wg sync.WaitGroup
+	// The series loop stops after the updates, so its final flush has
+	// their samples.
+	sctx, stopSeries := context.WithCancel(context.WithoutCancel(ctx))
+	var series sync.WaitGroup
 	if s.series.Declared() {
-		wg.Go(func() { s.series.Run(ctx) })
+		series.Go(func() { s.series.Run(sctx) })
 	}
+	defer func() {
+		stopSeries()
+		series.Wait()
+	}()
+	var wg sync.WaitGroup
 	for _, inst := range s.instances {
 		if inst.initErr != nil {
 			continue
