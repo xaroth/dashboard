@@ -3,7 +3,6 @@ package esi_test
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"testing"
 	"testing/synctest"
@@ -17,9 +16,7 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
-	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules/eveonline/esi"
-	"github.com/xaroth/dashboard/storage"
 )
 
 // probe sends ESI requests: one without a token when it needs no scopes,
@@ -82,29 +79,7 @@ func load(tb testing.TB, src string, handler http.Handler, regs ...module.Regist
 	if len(regs) == 0 {
 		regs = []module.Registration{probeModule}
 	}
-	db, err := storage.Open(tb.Context(), tb.TempDir())
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	configs, err := yamlconfig.Parse([]byte(src))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(tb.Context(), module.Options{
-		Registrations: regs,
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    moduletest.HTTPClient(handler),
-		Now:           time.Now,
-	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
-	return set
+	return moduletest.Load(tb, nil, src, module.Options{Registrations: regs, HTTPClient: moduletest.HTTPClient(handler)})
 }
 
 func TestESIRequest(t *testing.T) {

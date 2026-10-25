@@ -650,8 +650,7 @@ Each step has its own test with no network:
 
 | What | Tool | How |
 | --- | --- | --- |
-| Module `Update` and queries | `go test` | `httptest` fake of Open-Meteo with fixtures in `modules/weather/testdata`, storage in a temp dir, assertions on the query results |
-| EVE Online shared values and modules | `go test` | `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble); `sde.NewFake` serves SDE builds |
+| Module `Update` and queries | `go test` | `moduletest.Load` loads modules on a temp database; `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble). Fakes live in `<name>_fake.go` with `NewFake(tb, opts...)` and `Expect<Thing>` options: `weather.NewFake` (Open-Meteo, fixtures in `modules/weather/testdata`), `p1.NewFake`, `car.NewFake`, `solar.NewFake`, `esi.NewFake` (SSO), `status.NewFake`, `sde.NewFake`. Assertions on the query results |
 | Module loading, scheduler | `go test` | fake modules: config errors, panics, backoff, auth pause, manual updates, snapshots |
 | Storage | `go test` | pragmas and page size, reader cannot write, per-owner migrations |
 | Device protocol | `go test` | setup, keys surviving a restart, auth, page selection, refresh rate (including DST), render failure, image store |

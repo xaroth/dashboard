@@ -2,122 +2,49 @@ package weather_test
 
 import (
 	"encoding/json"
-	"fmt"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/module/yamlconfig"
+	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/weather"
-	"github.com/xaroth/dashboard/storage"
 )
 
 // The fixtures were recorded at this moment: 2026-10-16 00:45 in Amsterdam.
 var fixtureNow = time.Unix(1792104300, 0)
 
-// fakeOpenMeteo serves the recorded responses and records the requests.
-type fakeOpenMeteo struct {
-	*httptest.Server
-	mu           sync.Mutex
-	geocodes     int
-	forecast     url.Values
-	fail         bool
-	forecastBody []byte
-}
-
-func (f *fakeOpenMeteo) geocodeCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.geocodes
-}
-
-func (f *fakeOpenMeteo) forecastParams() url.Values {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.forecast
-}
-
-// serve replaces the forecast response.
-func (f *fakeOpenMeteo) serve(body []byte) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.forecastBody = body
-}
-
-func newFake(tb testing.TB) *fakeOpenMeteo {
-	tb.Helper()
-	geocode, err := os.ReadFile("testdata/geocode.json")
-	if err != nil {
-		tb.Fatal(err)
-	}
-	forecast, err := os.ReadFile("testdata/forecast.json")
-	if err != nil {
-		tb.Fatal(err)
-	}
-	f := &fakeOpenMeteo{forecastBody: forecast}
-	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if f.fail {
-			http.Error(w, "upstream down", http.StatusBadGateway)
-			return
-		}
-		switch r.URL.Path {
-		case "/geocode":
-			f.geocodes++
-			w.Write(geocode)
-		case "/forecast":
-			f.forecast = r.URL.Query()
-			w.Write(f.forecastBody)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	tb.Cleanup(f.Close)
-	return f
-}
-
 // load loads the weather module against the fake, with the given extra config keys.
-func load(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string) *module.Set {
+func load(tb testing.TB, dir string, fake *weather.FakeOpenMeteo, extra string) *module.Set {
 	tb.Helper()
 	return loadAt(tb, dir, fake, extra, fixtureNow)
 }
 
-func loadAt(tb testing.TB, dir string, fake *fakeOpenMeteo, extra string, now time.Time) *module.Set {
+func loadAt(tb testing.TB, dir string, fake *weather.FakeOpenMeteo, extra string, now time.Time) *module.Set {
 	tb.Helper()
-	db, err := storage.Open(tb.Context(), dir)
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	src := fmt.Sprintf("weather: {geocoding_url: %q, forecast_url: %q, %s}", fake.URL+"/geocode", fake.URL+"/forecast", extra)
-	configs, err := yamlconfig.Parse([]byte(src))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(tb.Context(), module.Options{
+	return moduletest.Load(tb, moduletest.DB(tb, dir), "weather: {"+extra+"}", module.Options{
 		Registrations: []module.Registration{weather.Module},
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    fake.Client(),
+		HTTPClient:    moduletest.HTTPClient(fake),
 		Now:           func() time.Time { return now },
 	})
+}
+
+// fixture is the recorded forecast response, decoded.
+func fixture(tb testing.TB) map[string]any {
+	tb.Helper()
+	b, err := os.ReadFile("testdata/forecast.json")
 	if err != nil {
-		tb.Fatalf("Load: %v", err)
+		tb.Fatal(err)
 	}
-	return set
+	var body map[string]any
+	if err := json.Unmarshal(b, &body); err != nil {
+		tb.Fatalf("decoding fixture: %v", err)
+	}
+	return body
 }
 
 func forecast(tb testing.TB, set *module.Set, params map[string]any) (*weather.Forecast, module.Result) {
@@ -132,7 +59,7 @@ func forecast(tb testing.TB, set *module.Set, params map[string]any) (*weather.F
 
 func TestUpdateAndForecast(t *testing.T) {
 	t.Parallel()
-	fake := newFake(t)
+	fake := weather.NewFake(t)
 	set := load(t, t.TempDir(), fake, "forecast_days: 3")
 
 	if err := set.Update(t.Context(), "weather"); err != nil {
@@ -143,7 +70,7 @@ func TestUpdateAndForecast(t *testing.T) {
 		"timeformat": {"unixtime"}, "forecast_days": {"3"}, "wind_speed_unit": {"kmh"},
 	}
 	for k, v := range want {
-		if diff := cmp.Diff(v, fake.forecastParams()[k]); diff != "" {
+		if diff := cmp.Diff(v, fake.ForecastParams()[k]); diff != "" {
 			t.Errorf("forecast param %s (-want +got):\n%s", k, diff)
 		}
 	}
@@ -187,7 +114,7 @@ func TestUpdateAndForecast(t *testing.T) {
 
 func TestForecastDefaults(t *testing.T) {
 	t.Parallel()
-	set := load(t, t.TempDir(), newFake(t), "forecast_days: 3")
+	set := load(t, t.TempDir(), weather.NewFake(t), "forecast_days: 3")
 	if f, res := forecast(t, set, nil); f != nil || !res.Stale {
 		t.Errorf("before any update: got %v, %+v, want no value, stale", f, res)
 	}
@@ -202,7 +129,7 @@ func TestForecastDefaults(t *testing.T) {
 
 func TestGeocodeCached(t *testing.T) {
 	t.Parallel()
-	fake := newFake(t)
+	fake := weather.NewFake(t)
 	dir := t.TempDir()
 	set := load(t, dir, fake, "")
 	for range 2 {
@@ -215,16 +142,16 @@ func TestGeocodeCached(t *testing.T) {
 	if err := set.Update(t.Context(), "weather"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if fake.geocodeCalls() != 1 {
-		t.Errorf("got %d geocode calls, want 1", fake.geocodeCalls())
+	if fake.GeocodeCalls() != 1 {
+		t.Errorf("got %d geocode calls, want 1", fake.GeocodeCalls())
 	}
 	// A different location is looked up again.
 	set = load(t, dir, fake, `location: "Uithoorn"`)
 	if err := set.Update(t.Context(), "weather"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if fake.geocodeCalls() != 2 {
-		t.Errorf("got %d geocode calls after changing the location, want 2", fake.geocodeCalls())
+	if fake.GeocodeCalls() != 2 {
+		t.Errorf("got %d geocode calls after changing the location, want 2", fake.GeocodeCalls())
 	}
 }
 
@@ -233,23 +160,19 @@ func TestUpdateErrors(t *testing.T) {
 	testCases := []struct {
 		name  string
 		extra string
-		setup func(*fakeOpenMeteo)
+		opts  []weather.FakeOption
 		want  string
 	}{
 		{"country mismatch", `location: "Uithoorn, Belgium"`, nil, "no match"},
-		{"upstream error", "", func(f *fakeOpenMeteo) { f.fail = true }, "502"},
-		{"uneven series", "", func(f *fakeOpenMeteo) {
-			f.serve([]byte(`{"current":{},"hourly":{"time":[1,2],"temperature_2m":[1]},"daily":{}}`))
+		{"upstream error", "", []weather.FakeOption{weather.ExpectUnavailable}, "502"},
+		{"uneven series", "", []weather.FakeOption{
+			weather.ExpectForecast([]byte(`{"current":{},"hourly":{"time":[1,2],"temperature_2m":[1]},"daily":{}}`)),
 		}, "different lengths"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			fake := newFake(t)
-			if testCase.setup != nil {
-				testCase.setup(fake)
-			}
-			set := load(t, t.TempDir(), fake, testCase.extra)
+			set := load(t, t.TempDir(), weather.NewFake(t, testCase.opts...), testCase.extra)
 			err := set.Update(t.Context(), "weather")
 			if err == nil || !strings.Contains(err.Error(), testCase.want) {
 				t.Errorf("got %v, want error containing %q", err, testCase.want)
@@ -259,6 +182,21 @@ func TestUpdateErrors(t *testing.T) {
 				t.Errorf("got status %+v, want the failure recorded", st[0])
 			}
 		})
+	}
+}
+
+func TestCustomURLs(t *testing.T) {
+	t.Parallel()
+	fake := weather.NewFake(t, weather.ExpectURLs("http://geo.test/search", "http://forecast.test/v1/forecast"))
+	set := load(t, t.TempDir(), fake, `geocoding_url: "http://geo.test/search", forecast_url: "http://forecast.test/v1/forecast"`)
+	if err := set.Update(t.Context(), "weather"); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := fake.GeocodeCalls(); got != 1 {
+		t.Errorf("got %d geocode calls, want 1", got)
+	}
+	if fake.ForecastParams() == nil {
+		t.Errorf("got no forecast request at the custom URL")
 	}
 }
 
@@ -275,7 +213,7 @@ func TestConfig(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			set := load(t, t.TempDir(), newFake(t), testCase.extra)
+			set := load(t, t.TempDir(), weather.NewFake(t), testCase.extra)
 			st, err := set.Statuses(t.Context())
 			if err != nil || st[0].Phase != testCase.want {
 				t.Errorf("got %+v, %v, want phase %s", st, err, testCase.want)
@@ -286,16 +224,11 @@ func TestConfig(t *testing.T) {
 
 func TestForecastNullProbabilities(t *testing.T) {
 	t.Parallel()
-	fake := newFake(t)
-	var body map[string]any
-	if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
-		t.Fatalf("decoding fixture: %v", err)
-	}
+	body := fixture(t)
 	body["hourly"].(map[string]any)["precipitation_probability"].([]any)[1] = nil
 	body["daily"].(map[string]any)["precipitation_probability_max"].([]any)[1] = nil
 	b, _ := json.Marshal(body)
-	fake.serve(b)
-	set := load(t, t.TempDir(), fake, "forecast_days: 3")
+	set := load(t, t.TempDir(), weather.NewFake(t, weather.ExpectForecast(b)), "forecast_days: 3")
 	if err := set.Update(t.Context(), "weather"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -336,11 +269,7 @@ func TestForecastModel(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			fake := newFake(t)
-			var body map[string]any
-			if err := json.Unmarshal(fake.forecastBody, &body); err != nil {
-				t.Fatalf("decoding fixture: %v", err)
-			}
+			body := fixture(t)
 			nullTail := func(series map[string]any, nulls map[string]int) int {
 				n := len(series["time"].([]any))
 				for key, k := range nulls {
@@ -354,13 +283,13 @@ func TestForecastModel(t *testing.T) {
 			hours := nullTail(body["hourly"].(map[string]any), testCase.nullHourly)
 			days := nullTail(body["daily"].(map[string]any), testCase.nullDaily)
 			b, _ := json.Marshal(body)
-			fake.serve(b)
+			fake := weather.NewFake(t, weather.ExpectForecast(b))
 			// Before the first entry, so the query windows start at the beginning.
 			set := loadAt(t, t.TempDir(), fake, testCase.extra, time.Unix(0, 0))
 			if err := set.Update(t.Context(), "weather"); err != nil {
 				t.Fatalf("Update: %v", err)
 			}
-			if got := fake.forecastParams().Get("models"); got != testCase.wantModel {
+			if got := fake.ForecastParams().Get("models"); got != testCase.wantModel {
 				t.Errorf("got models %q, want %q", got, testCase.wantModel)
 			}
 			f, _ := forecast(t, set, map[string]any{"hours": 1000, "days": 16})
@@ -396,11 +325,11 @@ func TestForecastWindows(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			fake := newFake(t)
+			var opts []weather.FakeOption
 			if testCase.body != nil {
-				fake.serve(testCase.body)
+				opts = append(opts, weather.ExpectForecast(testCase.body))
 			}
-			set := loadAt(t, t.TempDir(), fake, "forecast_days: 3", testCase.now)
+			set := loadAt(t, t.TempDir(), weather.NewFake(t, opts...), "forecast_days: 3", testCase.now)
 			if err := set.Update(t.Context(), "weather"); err != nil {
 				t.Fatalf("Update: %v", err)
 			}
@@ -417,7 +346,7 @@ func TestForecastWindows(t *testing.T) {
 
 func TestForecastRejectsNegative(t *testing.T) {
 	t.Parallel()
-	set := load(t, t.TempDir(), newFake(t), "")
+	set := load(t, t.TempDir(), weather.NewFake(t), "")
 	res := set.Resolve(t.Context(), "weather", "forecast", map[string]any{"hours": -1})
 	if res.Error == "" {
 		t.Error("got no error for negative hours, want one")

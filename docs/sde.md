@@ -45,7 +45,7 @@ Every column is `NOT NULL`. IDs are `INTEGER` primary keys, `published` is `BOOL
 
 ## Tests
 
-`sde.NewFake(tb, opts...)` serves `latest.jsonl` and the archive of its build, for tests of modules using the SDE: route requests to `developers.eveonline.com` to it. `WithBuild`, `WithFile` and `WithoutFile` set the build and its JSON Lines files; `Set` changes them while serving, e.g. to publish a new build; `Downloads` counts archive downloads.
+`sde.NewFake(tb, opts...)` serves `latest.jsonl` and the archive of its build, for tests of modules using the SDE: route requests to `developers.eveonline.com` to it. `ExpectBuild`, `ExpectFile` and `ExpectFile_Missing` set the build and its JSON Lines files; `Set` changes them while serving, e.g. to publish a new build; `Downloads` counts archive downloads.
 
 ## Adding a dataset or field
 

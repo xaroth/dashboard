@@ -3,7 +3,6 @@ package car_test
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,9 +14,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/module"
-	"github.com/xaroth/dashboard/module/yamlconfig"
+	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/car"
-	"github.com/xaroth/dashboard/storage"
 )
 
 // testNow is half past midnight in Amsterdam, when it is still the day
@@ -33,37 +31,20 @@ type env struct {
 }
 
 // load loads the module against fake with the given config keys, at testNow.
-func load(ctx context.Context, tb testing.TB, fake *car.FakePleos, keys string) env {
+func load(tb testing.TB, fake *car.FakePleos, keys string) env {
 	tb.Helper()
-	return open(ctx, tb, fake, tb.TempDir(), keys, func() time.Time { return testNow })
+	return open(tb, fake, tb.TempDir(), keys, func() time.Time { return testNow })
 }
 
 // open loads the module on the database in dir, as after a restart when
 // it was loaded there before.
-func open(ctx context.Context, tb testing.TB, fake *car.FakePleos, dir, keys string, now func() time.Time) env {
+func open(tb testing.TB, fake *car.FakePleos, dir, keys string, now func() time.Time) env {
 	tb.Helper()
-	db, err := storage.Open(ctx, dir)
-	if err != nil {
-		tb.Fatalf("storage: %v", err)
-	}
-	tb.Cleanup(func() { db.Close() })
-	configs, err := yamlconfig.Parse([]byte("car: {api_url: http://pleos.test, " + keys + "}"))
-	if err != nil {
-		tb.Fatalf("config: %v", err)
-	}
-	set, err := module.Load(ctx, module.Options{
+	set := moduletest.Load(tb, moduletest.DB(tb, dir), "car: {api_url: http://pleos.test, "+keys+"}", module.Options{
 		Registrations: []module.Registration{car.Module},
-		Configs:       configs,
-		Migrator:      db,
-		Writer:        db.Writer,
-		Reader:        db.Reader,
-		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    fake.Client(),
+		HTTPClient:    moduletest.HTTPClient(fake),
 		Now:           now,
 	})
-	if err != nil {
-		tb.Fatalf("Load: %v", err)
-	}
 	mux := http.NewServeMux()
 	set.RegisterAdmin(mux)
 	return env{set: set, mux: mux, fake: fake, now: now}
@@ -136,7 +117,7 @@ var testExpiry = time.Date(2027, 1, 15, 0, 0, 0, 0, testNow.Location())
 
 func TestUpdate(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t), "")
+	e := load(t, car.NewFake(t), "")
 	if v, _ := e.vehicle(t, ""); v != nil {
 		t.Errorf("before any update: got %+v, want null", v)
 	}
@@ -177,7 +158,7 @@ func TestUpdate(t *testing.T) {
 
 func TestTwoKeys(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t, car.ExpectKey_Kia), "")
+	e := load(t, car.NewFake(t, car.ExpectKey_Kia), "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.addKey(t, "kia", car.FakeKiaClientID, car.FakeKiaClientSecret)
 	e.update(t)
@@ -230,7 +211,7 @@ func TestTwoKeys(t *testing.T) {
 
 func TestKeyRejected(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t, car.ExpectKey_Kia), "")
+	e := load(t, car.NewFake(t, car.ExpectKey_Kia), "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.addKey(t, "kia", car.FakeKiaClientID, car.FakeKiaClientSecret)
 	e.update(t)
@@ -273,7 +254,7 @@ func TestUpdateErrors(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			e := load(t.Context(), t, car.NewFake(t, testCase.opts...), "")
+			e := load(t, car.NewFake(t, testCase.opts...), "")
 			e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 			if testCase.after != nil {
 				testCase.after(e.fake)
@@ -296,7 +277,7 @@ func TestUpdateErrors(t *testing.T) {
 
 func TestUnknownVehicleRelisted(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t, car.ExpectVehicle_Unknown), "")
+	e := load(t, car.NewFake(t, car.ExpectVehicle_Unknown), "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	if err := e.set.Update(t.Context(), "car"); err == nil {
 		t.Fatal("got success, want the unknown vehicle to fail the update")
@@ -314,7 +295,7 @@ func TestUnknownVehicleRelisted(t *testing.T) {
 
 func TestKeyFailsTransiently(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t, car.ExpectKey_Kia), "")
+	e := load(t, car.NewFake(t, car.ExpectKey_Kia), "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.addKey(t, "kia", car.FakeKiaClientID, car.FakeKiaClientSecret)
 	e.update(t)
@@ -343,12 +324,12 @@ func TestKeyListsNoVehicles(t *testing.T) {
 	dir := t.TempDir()
 	now := func() time.Time { return testNow }
 	fake := car.NewFake(t)
-	e := open(t.Context(), t, fake, dir, "", now)
+	e := open(t, fake, dir, "", now)
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.update(t)
 	// After a restart the key is listed again, and lists nothing.
 	fake.List(car.FakeClientID)
-	e = open(t.Context(), t, fake, dir, "", now)
+	e = open(t, fake, dir, "", now)
 	err := e.set.Update(t.Context(), "car")
 	if !errors.Is(err, module.ErrAuth) || !strings.Contains(err.Error(), "no vehicles are shared") {
 		t.Errorf("got %v, want ErrAuth for a key without vehicles", err)
@@ -357,7 +338,7 @@ func TestKeyListsNoVehicles(t *testing.T) {
 
 func TestKeyReissued(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t), "")
+	e := load(t, car.NewFake(t), "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.update(t)
 	e.fake.Reissue(car.FakeClientID, "new-secret")
@@ -377,7 +358,7 @@ func TestKeyReissued(t *testing.T) {
 
 func TestExpiredKeyNotRetried(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t), "")
+	e := load(t, car.NewFake(t), "")
 	rec := e.serve(t, http.MethodPost, "/car/keys", url.Values{
 		"brand": {"hyundai"}, "client_id": {car.FakeClientID}, "client_secret": {car.FakeClientSecret},
 		"issued": {testNow.AddDate(0, 0, -91).Format(time.DateOnly)},
@@ -409,7 +390,7 @@ func TestExpiredKeyNotRetried(t *testing.T) {
 
 func TestImperialUnits(t *testing.T) {
 	t.Parallel()
-	e := load(t.Context(), t, car.NewFake(t, car.ExpectUnits_Imperial), "")
+	e := load(t, car.NewFake(t, car.ExpectUnits_Imperial), "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.update(t)
 	got, _ := e.vehicle(t, "")
@@ -429,7 +410,7 @@ func TestImperialUnits(t *testing.T) {
 func TestUpdateMissingData(t *testing.T) {
 	t.Parallel()
 	fake := car.NewFake(t, car.ExpectVehicle_Combustion, car.ExpectLocation_NoData, car.ExpectStatus_Unreported)
-	e := load(t.Context(), t, fake, "")
+	e := load(t, fake, "")
 	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 	e.update(t)
 	got, _ := e.vehicle(t, "")
@@ -475,7 +456,7 @@ func TestAdminPage(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			e := load(t.Context(), t, car.NewFake(t), "")
+			e := load(t, car.NewFake(t), "")
 			if testCase.setup != nil {
 				testCase.setup(e.fake)
 			}
@@ -503,7 +484,7 @@ func TestAdminPage(t *testing.T) {
 		for _, testCase := range testCases {
 			t.Run(testCase.name, func(t *testing.T) {
 				t.Parallel()
-				e := load(t.Context(), t, car.NewFake(t), "")
+				e := load(t, car.NewFake(t), "")
 				form := key(func(v url.Values) { v.Set("issued", testCase.issued.Format(time.DateOnly)) })
 				if rec := e.serve(t, http.MethodPost, "/car/keys", form); rec.Code != http.StatusSeeOther {
 					t.Fatalf("saving key: got %d %s", rec.Code, rec.Body)
@@ -517,7 +498,7 @@ func TestAdminPage(t *testing.T) {
 
 	t.Run("names and delete", func(t *testing.T) {
 		t.Parallel()
-		e := load(t.Context(), t, car.NewFake(t, car.ExpectKey_Kia), "")
+		e := load(t, car.NewFake(t, car.ExpectKey_Kia), "")
 		e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
 		e.addKey(t, "kia", car.FakeKiaClientID, car.FakeKiaClientSecret)
 		e.name(t, car.FakeVIN, "kona")
@@ -559,7 +540,7 @@ func TestConfig(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if got := status(t, load(t.Context(), t, car.NewFake(t), testCase.keys).set).Phase; got != testCase.want {
+			if got := status(t, load(t, car.NewFake(t), testCase.keys).set).Phase; got != testCase.want {
 				t.Errorf("got phase %s, want %s", got, testCase.want)
 			}
 		})
@@ -572,7 +553,7 @@ func run(t *testing.T, fake *car.FakePleos, check func(t *testing.T, e env)) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		e := open(ctx, t, fake, t.TempDir(), "", time.Now)
+		e := open(t, fake, t.TempDir(), "", time.Now)
 		done := make(chan struct{})
 		go func() {
 			e.set.Run(ctx)
