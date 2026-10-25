@@ -20,8 +20,7 @@ modules:
 
 ### Implementation order
 
-1. A page with `p1.actual` and `solar.production`.
-2. Time series, below; `p1` and `solar` then also write series. S-Miles Cloud as a fallback source for `solar` if the DTU's Modbus proves unreliable.
+1. Time series, below; `p1` and `solar` then also write series. S-Miles Cloud as a fallback source for `solar` if the DTU's Modbus proves unreliable.
 
 Authentication errors from these sources (HTTP 401/403) are returned as `module.ErrAuth`.
 
