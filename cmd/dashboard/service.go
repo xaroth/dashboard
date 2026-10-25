@@ -94,6 +94,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Reader:        s.db.Reader,
 		Log:           log,
 		HTTPClient:    &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		Dialer:        &net.Dialer{},
 		Now:           time.Now,
 		Location:      loc,
 	})

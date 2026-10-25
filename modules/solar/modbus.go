@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/xaroth/dashboard/module"
 )
 
 // modbus is a Modbus TCP client for function code 3 (read holding
@@ -17,11 +19,8 @@ type modbus struct {
 	tid  uint16
 }
 
-// dial connects to the DTU; tests replace it.
-var dial = (&net.Dialer{}).DialContext
-
 func dialModbus(ctx context.Context, addr string, unit byte) (*modbus, error) {
-	conn, err := dial(ctx, "tcp", addr)
+	conn, err := module.Dialer(ctx).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
 	}

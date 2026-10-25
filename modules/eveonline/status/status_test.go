@@ -15,6 +15,7 @@ import (
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/eveonline/status"
+	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -183,30 +184,33 @@ func TestHistory(t *testing.T) {
 			}
 			time.Sleep(step.wait)
 		}
+		if err := set.FlushSeries(t.Context()); err != nil {
+			t.Fatalf("FlushSeries: %v", err)
+		}
 
 		at := func(hh, mm int) time.Time { return time.Date(2000, 1, 1, hh, mm, 0, 0, time.UTC) }
 		day0 := func(mm int) time.Time { return time.Date(1999, 12, 31, 23, mm, 0, 0, time.UTC) }
-		p := func(n int64) *int64 { return &n }
+		p := func(v float64) *float64 { return &v }
 		testCases := []struct {
 			name   string
 			params map[string]any
-			want   []status.Point
+			want   []series.Point
 		}{
 			{
 				name:   "5 minute steps",
-				params: map[string]any{"hours": 1},
-				want: []status.Point{
-					{Time: day0(25)}, {Time: day0(30)}, {Time: day0(35)}, {Time: day0(40)}, {Time: day0(45)}, {Time: day0(50)}, {Time: day0(55)},
-					{Time: at(0, 0), Players: p(100)}, {Time: at(0, 5), Players: p(200)}, {Time: at(0, 10)}, {Time: at(0, 15)},
-					{Time: at(0, 20), Players: p(301)},
+				params: map[string]any{"hours": 1, "stepMinutes": 5},
+				want: []series.Point{
+					{T: day0(20)}, {T: day0(25)}, {T: day0(30)}, {T: day0(35)}, {T: day0(40)}, {T: day0(45)}, {T: day0(50)}, {T: day0(55)},
+					{T: at(0, 0), V: p(100)}, {T: at(0, 5), V: p(200)}, {T: at(0, 10)}, {T: at(0, 15)},
+					{T: at(0, 20), V: p(301)},
 				},
 			},
 			{
 				name:   "10 minute steps average",
 				params: map[string]any{"hours": 1, "stepMinutes": 10},
-				want: []status.Point{
-					{Time: day0(30)}, {Time: day0(40)}, {Time: day0(50)},
-					{Time: at(0, 0), Players: p(150)}, {Time: at(0, 10)}, {Time: at(0, 20), Players: p(301)},
+				want: []series.Point{
+					{T: day0(20)}, {T: day0(30)}, {T: day0(40)}, {T: day0(50)},
+					{T: at(0, 0), V: p(150)}, {T: at(0, 10)}, {T: at(0, 20), V: p(301)},
 				},
 			},
 		}
@@ -220,27 +224,4 @@ func TestHistory(t *testing.T) {
 			}
 		}
 	})
-}
-
-func TestHistoryParams(t *testing.T) {
-	t.Parallel()
-	set := load(t, http.NotFoundHandler())
-	testCases := []struct {
-		name   string
-		params map[string]any
-		want   string
-	}{
-		{"negative", map[string]any{"hours": -1}, "hours and stepMinutes must not be negative"},
-		{"too long", map[string]any{"hours": 2161}, "hours must be at most 2160, got 2161"},
-		{"too many points", map[string]any{"hours": 2160, "stepMinutes": 1}, "hours and stepMinutes give 129600 points, want 1 to 2000"},
-		{"step longer than range", map[string]any{"hours": 1, "stepMinutes": 120}, "hours and stepMinutes give 0 points, want 1 to 2000"},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if res := set.Resolve(t.Context(), "eveonline_status", "history", testCase.params); res.Error != testCase.want {
-				t.Errorf("got error %q, want %q", res.Error, testCase.want)
-			}
-		})
-	}
 }

@@ -439,7 +439,7 @@ func TestFlow(t *testing.T) {
 	if diff := cmp.Diff([]float64{1.5, -2}, got); diff != "" {
 		t.Errorf("flow (-want +got):\n%s", diff)
 	}
-	if res := set.Resolve(t.Context(), "p1", "flow", map[string]any{"hours": 200}); res.Error != "hours must be 1 to 168, got 200" {
-		t.Errorf("got error %q for 200 hours", res.Error)
+	if res := set.Resolve(t.Context(), "p1", "flow", map[string]any{"stepMinutes": 7}); res.Error != "stepMinutes must divide 1440, got 7" {
+		t.Errorf("got error %q for 7 minute steps", res.Error)
 	}
 }

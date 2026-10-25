@@ -409,3 +409,66 @@ func TestOldSample(t *testing.T) {
 		t.Errorf("got %v, want the bucket kept at 15", got)
 	}
 }
+
+// TestHistoryLastBucket queries in the last second of a step: the bucket
+// holding now is the last one and has the sample.
+func TestHistoryLastBucket(t *testing.T) {
+	t.Parallel()
+	for _, frac := range []time.Duration{0, 500 * time.Millisecond} {
+		now := at("2026-10-25 12:00:59").Add(frac)
+		s := open(t, &clock{now})
+		add(t, s, "power", now, 7)
+		if err := s.Flush(t.Context()); err != nil {
+			t.Fatalf("Flush: %v", err)
+		}
+		from, to, step, err := series.HistoryParams{Hours: 1, StepMinutes: 1}.Range(now)
+		if err != nil {
+			t.Fatalf("Range: %v", err)
+		}
+		pts := query(t, s, "power", from, to, step)
+		if last := pts[len(pts)-1]; !last.T.Equal(at("2026-10-25 12:00:00")) || last.V == nil || *last.V != 7 {
+			t.Errorf("now %s: got last point at %v with %v, want 12:00 with 7", now.Format(time.StampMilli), last.T, values(pts[len(pts)-1:]))
+		}
+	}
+}
+
+func TestHistoryParams(t *testing.T) {
+	t.Parallel()
+	now := at("2026-10-25 12:00:00")
+	type window struct {
+		From, To time.Time
+		Step     time.Duration
+	}
+	testCases := []struct {
+		name    string
+		params  series.HistoryParams
+		want    window
+		wantErr string
+	}{
+		{name: "defaults", want: window{now.Add(-24 * time.Hour), now.Add(time.Second), 15 * time.Minute}},
+		{name: "90 days in days", params: series.HistoryParams{Hours: 2160, StepMinutes: 1440}, want: window{now.Add(-2160 * time.Hour), now.Add(time.Second), 24 * time.Hour}},
+		{name: "negative hours", params: series.HistoryParams{Hours: -1}, wantErr: "hours must be 1 to 2160, got -1"},
+		{name: "too long", params: series.HistoryParams{Hours: 2161}, wantErr: "hours must be 1 to 2160, got 2161"},
+		{name: "negative step", params: series.HistoryParams{StepMinutes: -5}, wantErr: "stepMinutes must divide 1440, got -5"},
+		{name: "step not dividing a day", params: series.HistoryParams{StepMinutes: 7}, wantErr: "stepMinutes must divide 1440, got 7"},
+		{name: "step over a day", params: series.HistoryParams{StepMinutes: 2880}, wantErr: "stepMinutes must divide 1440, got 2880"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			from, to, step, err := testCase.params.Range(now)
+			if testCase.wantErr != "" {
+				if err == nil || err.Error() != testCase.wantErr {
+					t.Errorf("got error %v, want %q", err, testCase.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Range: %v", err)
+			}
+			if diff := cmp.Diff(testCase.want, window{from, to, step}); diff != "" {
+				t.Errorf("range (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
