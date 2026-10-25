@@ -91,6 +91,28 @@ export interface EveonlineStatusStatus {
   vip: boolean;
 }
 
+export interface P1Actual {
+  measuredAt: string;
+  voltage: P1Phases;
+  flowKw: number;
+  today: P1Usage | null;
+  yesterday: P1Usage | null;
+}
+
+export interface P1Phases {
+  l1: number | null;
+  l2: number | null;
+  l3: number | null;
+}
+
+export interface P1Usage {
+  from: string;
+  to: string;
+  takenKwh: number;
+  returnedKwh: number;
+  gasM3: number | null;
+}
+
 export interface WeatherCurrent {
   time: string;
   temperature: number;
@@ -148,5 +170,6 @@ export interface Queries {
   "eveonline_skills.queue": { params: EveonlineSkillsQueueParams; result: EveonlineSkillsCharacter[] };
   "eveonline_status.history": { params: EveonlineStatusHistoryParams; result: EveonlineStatusPoint[] };
   "eveonline_status.server": { params: Record<string, never>; result: EveonlineStatusStatus | null };
+  "p1.actual": { params: Record<string, never>; result: P1Actual | null };
   "weather.forecast": { params: WeatherForecastParams; result: WeatherForecast | null };
 }

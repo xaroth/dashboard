@@ -63,6 +63,7 @@ device         -> render
 | --- | --- | --- |
 | `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills` (logged-in characters); SDE types for skill names | snapshot (each character's queue, trained skills and skill points) in module state |
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; one sample per update in `eveonline_status_samples` |
+| `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days` |
 | `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
@@ -81,6 +82,26 @@ Config keys under `modules.weather`:
 | `forecast_url` | `https://api.open-meteo.com/v1/forecast` | Forecast endpoint |
 
 `Update` runs every 15 minutes; data is stale after 2 hours. The location is geocoded on the first update and cached per `location` string, so a changed value is looked up again. Query `weather.forecast` takes `hours` (hourly entries from the current hour, default 24) and `days` (daily entries from today, default 3).
+
+### P1
+
+Reads the smart meter through a Smartstuff P1 dongle with DSMR-API firmware. Config keys under `modules.p1`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `url` | empty | The dongle's base URL, e.g. `http://192.168.5.180`. Empty disables the module. |
+
+`Update` runs every minute; data is stale after 10 minutes. Each update reads `/api/v2/sm/actual` with a 10 s timeout (the dongle's Wi-Fi is weak), stores the reading as the snapshot, and inserts it into `p1_days` when the meter's day has no row yet. HTTP 401 or 403 (Basic Auth set in the dongle) is `module.ErrAuth`. A response without a timestamp, meter readings or power, which the dongle sends before it has read a telegram, fails the update.
+
+- The day is the date of the meter's timestamp (`YYMMDDhhmmss` plus `W` or `S`, CET or CEST), so the module needs no time zone. Times in the result are converted from it.
+- `p1_days` holds one row per day: the first reading that day. Day totals come from these rows, not from the dongle's history, and need one write a day. When the dongle is offline at midnight, the first reading after it starts the day, and usage in the gap counts for the new day.
+
+Query `p1.actual` takes no params and returns:
+
+- `measuredAt`: the meter's time of the reading.
+- `voltage`: `l1`, `l2`, `l3` in V; null for phases the meter does not have.
+- `flowKw`: power delivered minus power returned; positive is taken from the net, negative is returned to it.
+- `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter; the meter reports gas every 5 minutes). A period is null when a day has no row, or when a counter went down in it (meter replaced).
 
 ### Car
 
@@ -331,6 +352,8 @@ modules/eveonline/esi/sql/migrations/00001_characters.sql
 modules/eveonline/esi/sql/queries.sql
 modules/eveonline/sde/sql/migrations/00001_sde.sql
 modules/eveonline/sde/sql/queries.sql
+modules/p1/sql/migrations/00001_days.sql
+modules/p1/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
