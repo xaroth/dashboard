@@ -9,6 +9,7 @@ export interface DemoModExtra {
   paged: DemoModPageInt;
   "with-hyphen": number;
   "-": number;
+  point: SeriesPoint;
 }
 
 export interface DemoModItem {
@@ -37,6 +38,11 @@ export interface DemoModPageInt {
 
 export interface DemoModShared {
   v: number;
+}
+
+export interface SeriesPoint {
+  t: string;
+  v: number | null;
 }
 
 /** Every query: "module.query" to its params and result. */
