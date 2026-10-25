@@ -64,7 +64,7 @@ func TestNewErrors(t *testing.T) {
 	}{
 		{"unknown page", func(_ testing.TB, cfg *Config) {
 			cfg.Devices["hallway"] = Device{MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello", "nope"}}
-		}, `page "nope" does not exist`},
+		}, `checking pages: devices.hallway: page "nope" does not exist`},
 		{"unusable data dir", func(tb testing.TB, cfg *Config) {
 			// A file where the data directory should be.
 			cfg.DataDir = filepath.Join(tb.TempDir(), "file")
@@ -75,6 +75,9 @@ func TestNewErrors(t *testing.T) {
 		{"unknown module", func(_ testing.TB, cfg *Config) {
 			cfg.Modules = map[string]yaml.Node{"nope": {}}
 		}, "no such module"},
+		{"invalid device schedule", func(_ testing.TB, cfg *Config) {
+			cfg.Schedule.IntervalUSB = 0
+		}, "loading devices: schedule"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -184,6 +187,28 @@ func TestRunStopsOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+type failingCloseRenderer struct{ *render.FakeRenderer }
+
+func (f failingCloseRenderer) Close() error {
+	return errors.Join(f.FakeRenderer.Close(), errCloseRenderer)
+}
+
+var errCloseRenderer = errors.New("renderer close failed")
+
+func TestRunReturnsCloseError(t *testing.T) {
+	t.Parallel()
+	stub := failingCloseRenderer{render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "e1001/hello"}))}
+	s, err := New(t.Context(), testConfig(t, freeAddr(t), freeAddr(t)), slog.New(slog.DiscardHandler), WithRenderer(stub))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := s.Run(ctx); !errors.Is(err, errCloseRenderer) {
+		t.Errorf("got %v, want the renderer close error", err)
 	}
 }
 
