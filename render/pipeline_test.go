@@ -187,3 +187,13 @@ func TestPipelineParamOverrides(t *testing.T) {
 		t.Errorf("params without override (-want +got):\n%s", diff)
 	}
 }
+
+func BenchmarkPipelineRender(b *testing.B) {
+	p, _ := newPipeline(b)
+	target := screen.Target{Name: "x", Model: "reterminal_e1003"}
+	for b.Loop() {
+		if _, err := p.Render(b.Context(), target, "overview"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
