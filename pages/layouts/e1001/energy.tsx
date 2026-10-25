@@ -56,7 +56,7 @@ export default function Energy({ data, viewport, timezone }: PageProps<Data>) {
         <div className={styles.block}>
           <div className={styles.big}>{m ? formatFlow(m.flowKw) : "-"}</div>
           <div className={styles.label}>
-            {!m ? `Geen meterstand${data.meter.error ? `: ${data.meter.error}` : ""}` : m.flowKw < 0 ? "Teruglevering" : "Afname"}
+            {!m ? `Geen meterstand${data.meter.error ? `: ${data.meter.error}` : ""}` : Math.round(m.flowKw * 100) < 0 ? "Teruglevering" : "Afname"}
           </div>
         </div>
         <div className={styles.block}>
@@ -81,21 +81,26 @@ export default function Energy({ data, viewport, timezone }: PageProps<Data>) {
         <UsageRow name="Vandaag" usage={m?.today ?? null} timezone={timezone} />
         <UsageRow name="Gisteren" usage={m?.yesterday ?? null} timezone={timezone} />
       </div>
-      <div
-        className={styles.panels}
-        // Two rows in portrait: 17 panels do not fit across 480 px.
-        style={{ gridTemplateColumns: `repeat(${viewport.portrait ? Math.ceil(panels.length / 2) : panels.length}, 1fr)` }}
-      >
-        {panels.map((p) => (
-          <div key={`${p.inverter}:${p.port}`} className={styles.panel}>
-            <div className={styles.barTrack}>
-              <span className={styles.panelValue}>{Math.round(p.powerW)}</span>
-              <div className={styles.bar} style={{ height: `${Math.round((100 * Math.max(0, p.powerW)) / maxPanel)}%` }} />
+      {panels.length === 0 ? (
+        <div className={styles.missing}>Geen panelen</div>
+      ) : (
+        <div
+          className={styles.panels}
+          // Two rows in portrait: 17 panels do not fit across 480 px.
+          style={{ gridTemplateColumns: `repeat(${viewport.portrait ? Math.ceil(panels.length / 2) : panels.length}, 1fr)` }}
+        >
+          {panels.map((p) => (
+            <div key={`${p.inverter}:${p.port}`} className={styles.panel}>
+              <div className={styles.barTrack}>
+                <span className={styles.panelValue}>{Math.round(p.powerW)}</span>
+                {/* 85% leaves room for the value above the bar. */}
+                <div className={styles.bar} style={{ height: `${Math.round((85 * Math.max(0, p.powerW)) / maxPanel)}%` }} />
+              </div>
+              <span className={styles.panelLabel}>{panelLabel(p.inverter, p.port)}</span>
             </div>
-            <span className={styles.panelLabel}>{panelLabel(p.inverter, p.port)}</span>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
