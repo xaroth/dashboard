@@ -6,7 +6,6 @@ Specification of the parts of the service that are designed but not built. The b
 
 | Module | Source | Data |
 | --- | --- | --- |
-| `p1` | Smartstuff P1 dongle, local HTTP | state + series (import/export power, energy, gas) |
 | `solar` | Hoymiles: DTU Modbus TCP, S-Miles Cloud as fallback | state + series (production per inverter, alarms) |
 | `calendar` | Google Calendar secret iCal URL | snapshot (upcoming events) |
 
@@ -16,13 +15,28 @@ Configuration:
 
 ```yaml
 modules:
-  p1:
-    url: http://192.168.1.20
-    schedule:
-      update_interval: 1m
+  solar:
+    host: 192.168.1.21
+    unused: ["100000000687:1"]
   calendar:
     ical_url: ${CALENDAR_ICAL_URL}
 ```
+
+### Solar
+
+Reads the DTU over Modbus TCP (FC03, unit ID 1, port 502) every minute, and every 10 minutes while every input reads 0 W. Register map: [research.md](research.md#solar-hoymiles-micro-inverters). The client is part of the module: it only needs FC03 and must accept the wrong byte counts some DTUs send.
+
+- The snapshot holds every inverter input: serial, port, PV voltage, current and power, today's and total energy, temperature, status, alarm and link.
+- Inputs listed in `unused` (`serial:port`) are left out. One panel per input.
+- Totals are sums over every input, whatever its `link`.
+
+Query `solar.production`: total power (W) and power per panel.
+
+### Implementation order
+
+1. `solar` module with the Modbus client and its query.
+2. A page with `p1.actual` and `solar.production`.
+3. Time series, below; `p1` then also writes series.
 
 Authentication errors from these sources (HTTP 401/403) are returned as `module.ErrAuth`.
 
@@ -46,7 +60,6 @@ Each series declares a kind, which decides rollups and usage:
 
 - Gaps (P1 reboots, Wi-Fi drops) stay gaps: a bucket without samples has no value and charts show a break. Counters bridge gaps naturally.
 - Buckets of an hour or longer align to local time (Europe/Amsterdam); a day has 23 or 25 hours on DST dates.
-- Backfill: the P1 dongle's own hour/day/month history can seed the counters on first start.
 
 ### Write buffering
 

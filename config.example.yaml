@@ -35,3 +35,5 @@ modules:
   car:   # Pleos Vehicle Data API; enter keys on /car/ on the admin listener
     # active_interval: 15m   # while a car is on, charging or moving
     # max_interval: 12h      # a parked car is polled every quarter of its idle time, up to this
+  p1:   # Smartstuff P1 dongle, DSMR-API firmware
+    # url: http://192.168.1.20   # empty disables the module
