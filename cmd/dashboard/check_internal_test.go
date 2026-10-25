@@ -16,7 +16,7 @@ type clockConfig struct{}
 type clockModule struct{}
 
 func (*clockModule) Initialize(context.Context, *clockConfig) error { return nil }
-func (*clockModule) Enabled(context.Context) bool                   { return false }
+func (*clockModule) Enabled(context.Context) (bool, error)          { return false, nil }
 func (*clockModule) Update(context.Context) error                   { return nil }
 
 type ticksParams struct {

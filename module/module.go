@@ -20,8 +20,9 @@ import (
 type Module[C any] interface {
 	// Initialize receives the config. Migrations have run; no network I/O.
 	Initialize(ctx context.Context, cfg *C) error
-	// Enabled reports whether the scheduler should run Update.
-	Enabled(ctx context.Context) bool
+	// Enabled reports whether the scheduler should run Update. An error
+	// marks the module failed and backs off, as a failed Update does.
+	Enabled(ctx context.Context) (bool, error)
 	// Update fetches from the source and writes to storage.
 	Update(ctx context.Context) error
 }
@@ -121,7 +122,7 @@ func Define[M any, C any, PM interface {
 		},
 		enabled: func(ctx context.Context, m any) (on bool, err error) {
 			defer recovered(&err)
-			return m.(PM).Enabled(ctx), nil
+			return m.(PM).Enabled(ctx)
 		},
 		update: func(ctx context.Context, m any) (err error) {
 			defer recovered(&err)

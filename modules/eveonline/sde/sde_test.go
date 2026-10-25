@@ -36,7 +36,7 @@ func newFake(tb testing.TB, build int64, opts ...sde.FakeOption) *sde.Fake {
 type reader struct{}
 
 func (*reader) Initialize(context.Context, *struct{}) error { return nil }
-func (*reader) Enabled(context.Context) bool                { return false }
+func (*reader) Enabled(context.Context) (bool, error)       { return false, nil }
 func (*reader) Update(context.Context) error                { return nil }
 
 type lookup struct {

@@ -58,7 +58,7 @@ func (m *weather) Initialize(_ context.Context, cfg *config) error {
 	return nil
 }
 
-func (m *weather) Enabled(context.Context) bool { return m.cfg.Location != "" }
+func (m *weather) Enabled(context.Context) (bool, error) { return m.cfg.Location != "", nil }
 
 func (m *weather) Update(ctx context.Context) error {
 	loc, err := m.location(ctx)

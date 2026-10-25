@@ -48,7 +48,7 @@ var Module = module.Define[status, config](
 
 func (*status) Initialize(context.Context, *config) error { return nil }
 
-func (*status) Enabled(context.Context) bool { return true }
+func (*status) Enabled(context.Context) (bool, error) { return true, nil }
 
 func (*status) Update(ctx context.Context) error {
 	st, err := fetch(ctx)
