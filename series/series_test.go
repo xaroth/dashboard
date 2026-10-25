@@ -34,10 +34,8 @@ func open(tb testing.TB, c *clock) *series.Store {
 		tb.Fatalf("storage: %v", err)
 	}
 	tb.Cleanup(func() { db.Close() })
-	if err := db.Migrate(tb.Context(), "series", series.Migrations, "sql/migrations"); err != nil {
-		tb.Fatalf("migrate: %v", err)
-	}
 	s, err := series.Open(tb.Context(), series.Options{
+		Migrator: db,
 		Writer:   db.Writer,
 		Reader:   db.Reader,
 		Location: amsterdam,

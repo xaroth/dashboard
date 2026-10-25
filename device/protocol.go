@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/screen"
 )
 
 const maxLogBody = 64 << 10
@@ -71,7 +71,7 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 	button := source == "button" || source == "EXT0"
 
 	d.mu.Lock()
-	if model := r.Header.Get("Model"); render.Panels[model] != (render.Panel{}) {
+	if model := r.Header.Get("Model"); d.pipeline.KnownModel(model) {
 		s.model = model
 	}
 	s.wake = wakeFrom(r, d.now(), s.cfg.Power)
@@ -89,7 +89,7 @@ func (d *Devices) display(w http.ResponseWriter, r *http.Request) {
 
 	img, err := d.pipeline.Render(r.Context(), target, page)
 	// After rendering: the firmware starts its sleep once it has drawn.
-	refresh := d.schedule.refresh(d.now(), button, usb)
+	refresh := d.schedule.refresh(d.now(), button, d.schedule.interval(usb))
 	if err != nil {
 		d.log.Error("rendering for device", "device", target.Name, "page", page, "err", err)
 		if prev == "" {
@@ -219,8 +219,8 @@ func (d *Devices) authenticate(w http.ResponseWriter, r *http.Request) (*state, 
 	return s, true
 }
 
-func wakeFrom(r *http.Request, now time.Time, power Power) *render.Wake {
-	wake := &render.Wake{
+func wakeFrom(r *http.Request, now time.Time, power Power) *screen.Wake {
+	wake := &screen.Wake{
 		Source:   r.Header.Get("Update-Source"),
 		Firmware: r.Header.Get("FW-Version"),
 		At:       now,
@@ -233,13 +233,13 @@ func wakeFrom(r *http.Request, now time.Time, power Power) *render.Wake {
 	}
 	switch power {
 	case PowerUSB, PowerBattery:
-		wake.USB, wake.PowerSource = power == PowerUSB, "config"
+		wake.USB, wake.PowerSource = power == PowerUSB, screen.PowerSourceConfig
 	default:
 		// Only boards with a readable charger send the header; the reTerminals do not.
 		if v, err := strconv.ParseBool(r.Header.Get("USB-Connected")); err == nil {
-			wake.USB, wake.PowerSource = v, "header"
+			wake.USB, wake.PowerSource = v, screen.PowerSourceHeader
 		} else {
-			wake.PowerSource = "default"
+			wake.PowerSource = screen.PowerSourceDefault
 		}
 	}
 	return wake

@@ -8,6 +8,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math"
 	"slices"
@@ -15,10 +16,14 @@ import (
 	"time"
 )
 
-// Migrations are the series tables, in sql/migrations.
-//
 //go:embed sql/migrations/*.sql
-var Migrations embed.FS
+var migrations embed.FS
+
+// Migrator applies an owner's goose migrations, the .sql files in dir of
+// fsys; *storage.DB in production.
+type Migrator interface {
+	Migrate(ctx context.Context, owner string, fsys fs.FS, dir string) error
+}
 
 // Kind decides how samples combine into a bucket.
 type Kind int
@@ -64,8 +69,10 @@ var levels = []level{
 
 // Options are what Open needs.
 type Options struct {
-	Writer *sql.DB
-	Reader *sql.DB
+	// Migrator creates the series tables on Writer.
+	Migrator Migrator
+	Writer   *sql.DB
+	Reader   *sql.DB
 	// Location aligns buckets of an hour or longer.
 	Location *time.Location
 	Now      func() time.Time
@@ -101,8 +108,11 @@ type sample struct {
 	value float64
 }
 
-// Open registers the series names. Migrations have run.
+// Open runs the series migrations and registers the series names.
 func Open(ctx context.Context, o Options) (*Store, error) {
+	if err := o.Migrator.Migrate(ctx, "series", migrations, "sql/migrations"); err != nil {
+		return nil, fmt.Errorf("series migrations: %w", err)
+	}
 	s := &Store{writer: o.Writer, reader: o.Reader, loc: o.Location, now: o.Now, log: o.Log, series: map[string]*def{}, dirty: map[*def]int64{}}
 	q := New(o.Writer)
 	since := o.Now().Add(-startupRollup).Unix()

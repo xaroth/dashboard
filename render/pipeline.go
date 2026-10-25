@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/xaroth/dashboard/screen"
 )
 
 // Renderer is the part of Process the pipeline uses.
@@ -20,31 +22,8 @@ type Renderer interface {
 	Render(ctx context.Context, page string, props Props) ([]byte, error)
 }
 
-// Target is who a page is rendered for: a device, or a panel in a preview.
-type Target struct {
-	Name     string
-	Model    string
-	Rotation int
-	Wake     *Wake
-	// Params overrides query params by "page.key", merged over the page's own.
-	Params map[string]map[string]any
-}
-
-// Wake is what the device reported on its latest request.
-type Wake struct {
-	Source   string    `json:"source,omitempty"`
-	Battery  *float64  `json:"battery,omitempty"`
-	RSSI     *int      `json:"rssi,omitempty"`
-	Firmware string    `json:"firmware,omitempty"`
-	At       time.Time `json:"at"`
-	// USB is whether the device counts as on USB power, by PowerSource:
-	// "header" (USB-Connected), "config" (the device's power setting) or
-	// "default" (no header: battery).
-	USB         bool   `json:"usb"`
-	PowerSource string `json:"powerSource"`
-}
-
-// Props are what a page component receives; the shape of PageProps in pages/lib/page.ts.
+// Props are what a page component receives; gentypes writes their TypeScript
+// types to pages/generated/props.ts.
 type Props struct {
 	Data     map[string]Result `json:"data"`
 	Device   DeviceProps       `json:"device"`
@@ -55,10 +34,10 @@ type Props struct {
 }
 
 type DeviceProps struct {
-	Name     string `json:"name"`
-	Model    string `json:"model"`
-	Rotation int    `json:"rotation"`
-	Wake     *Wake  `json:"wake,omitempty"`
+	Name     string       `json:"name"`
+	Model    string       `json:"model"`
+	Rotation int          `json:"rotation"`
+	Wake     *screen.Wake `json:"wake,omitempty"`
 }
 
 type SystemProps struct {
@@ -71,12 +50,6 @@ type Result struct {
 	FetchedAt *string `json:"fetchedAt"`
 	Stale     bool    `json:"stale"`
 	Error     *string `json:"error"`
-}
-
-// Image is a finished render.
-type Image struct {
-	PNG      []byte
-	Filename string
 }
 
 var (
@@ -105,6 +78,12 @@ func NewPipeline(r Renderer, res Resolver, loc *time.Location, now func() time.T
 	return &Pipeline{renderer: r, resolver: res, location: loc, now: now}
 }
 
+// KnownModel reports whether pages can be rendered for model.
+func (p *Pipeline) KnownModel(model string) bool {
+	_, ok := PanelFor(model)
+	return ok
+}
+
 // Pages returns the page names, sorted.
 func (p *Pipeline) Pages(ctx context.Context) ([]string, error) {
 	pages, err := p.PageInfo(ctx)
@@ -115,7 +94,7 @@ func (p *Pipeline) Pages(ctx context.Context) ([]string, error) {
 }
 
 // Props resolves what page would receive for t.
-func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, error) {
+func (p *Pipeline) Props(ctx context.Context, t screen.Target, page string) (Props, error) {
 	pages, err := p.PageInfo(ctx)
 	if err != nil {
 		return Props{}, err
@@ -124,7 +103,7 @@ func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, err
 	if !ok {
 		return Props{}, fmt.Errorf("%w %q", ErrUnknownPage, page)
 	}
-	panel, ok := Panels[t.Model]
+	panel, ok := PanelFor(t.Model)
 	if !ok {
 		return Props{}, fmt.Errorf("%w %q", ErrUnknownModel, t.Model)
 	}
@@ -146,7 +125,7 @@ func (p *Pipeline) Props(ctx context.Context, t Target, page string) (Props, err
 
 // resolve runs the page's queries concurrently, with the target's param
 // overrides merged in.
-func (p *Pipeline) resolve(ctx context.Context, t Target, page string, info PageInfo) map[string]Result {
+func (p *Pipeline) resolve(ctx context.Context, t screen.Target, page string, info PageInfo) map[string]Result {
 	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
 	defer cancel()
 	var mu sync.Mutex
@@ -176,7 +155,7 @@ func MergeParams(base, override map[string]any) map[string]any {
 }
 
 // Render resolves props, renders and finishes the image for t.
-func (p *Pipeline) Render(ctx context.Context, t Target, page string) (img Image, err error) {
+func (p *Pipeline) Render(ctx context.Context, t screen.Target, page string) (img screen.Image, err error) {
 	ctx, span := tracer.Start(ctx, "render "+page, trace.WithAttributes(
 		attribute.String("page", page), attribute.String("target", t.Name), attribute.String("model", t.Model)))
 	start := time.Now()
@@ -196,17 +175,17 @@ func (p *Pipeline) Render(ctx context.Context, t Target, page string) (img Image
 	}()
 	props, err := p.Props(ctx, t, page)
 	if err != nil {
-		return Image{}, err
+		return screen.Image{}, err
 	}
 	raw, err := p.renderer.Render(ctx, page, props)
 	if err != nil {
-		return Image{}, err
+		return screen.Image{}, err
 	}
 	png, err := Finish(raw, t.Rotation)
 	if err != nil {
-		return Image{}, err
+		return screen.Image{}, err
 	}
-	return Image{PNG: png, Filename: Filename(png, p.now())}, nil
+	return screen.Image{PNG: png, Filename: Filename(png, p.now())}, nil
 }
 
 // PageInfo returns every page with its declared data, by name. It asks the
