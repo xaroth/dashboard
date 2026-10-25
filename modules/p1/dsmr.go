@@ -26,6 +26,8 @@ type Reading struct {
 	ReturnedTariff1  float64  `json:"returnedTariff1"`
 	ReturnedTariff2  float64  `json:"returnedTariff2"`
 	Gas              *float64 `json:"gas"` // m³, null without a gas meter
+	// GasAt is when the gas meter read Gas; DSMR 4 gas meters report hourly.
+	GasAt *time.Time `json:"gasAt"`
 }
 
 // Phases holds a value per phase; null for phases the meter does not have.
@@ -53,6 +55,7 @@ type actual struct {
 	VoltageL2        *value[float64] `json:"voltage_l2"`
 	VoltageL3        *value[float64] `json:"voltage_l3"`
 	GasDelivered     *value[float64] `json:"gas_delivered"`
+	GasTimestamp     *value[string]  `json:"gas_delivered_timestamp"`
 }
 
 func fetch(ctx context.Context, base string) (Reading, error) {
@@ -104,6 +107,15 @@ func (a actual) reading() (Reading, error) {
 	if err != nil {
 		return Reading{}, err
 	}
+	var gasAt *time.Time
+	if a.GasDelivered != nil && a.GasTimestamp != nil {
+		t, err := parseTimestamp(a.GasTimestamp.Value)
+		if err != nil {
+			return Reading{}, fmt.Errorf("gas %w", err)
+		}
+		t = t.UTC()
+		gasAt = &t
+	}
 	return Reading{
 		MeasuredAt:       at.UTC(),
 		Date:             at.Format(time.DateOnly),
@@ -115,6 +127,7 @@ func (a actual) reading() (Reading, error) {
 		ReturnedTariff1:  a.ReturnedTariff1.Value,
 		ReturnedTariff2:  a.ReturnedTariff2.Value,
 		Gas:              ptr(a.GasDelivered),
+		GasAt:            gasAt,
 	}, nil
 }
 

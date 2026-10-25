@@ -88,15 +88,35 @@ func (m *p1) Update(ctx context.Context) error {
 		"taken":    r.DeliveredTariff1 + r.DeliveredTariff2,
 		"returned": r.ReturnedTariff1 + r.ReturnedTariff2,
 	}
-	if r.Gas != nil {
-		samples["gas"] = *r.Gas
-	}
 	for name, v := range samples {
 		if err := module.Series(ctx).Add(name, r.MeasuredAt, v); err != nil {
 			return err
 		}
 	}
+	if err := addGas(ctx, r); err != nil {
+		return err
+	}
 	return module.SaveSnapshot(ctx, r)
+}
+
+// addGas adds the gas sample at the gas meter's time. A reading the dongle
+// repeats is skipped: it would stretch the last value over the hour, or past
+// a gas meter that stopped reporting.
+func addGas(ctx context.Context, r Reading) error {
+	if r.Gas == nil {
+		return nil
+	}
+	if r.GasAt == nil {
+		return module.Series(ctx).Add("gas", r.MeasuredAt, *r.Gas)
+	}
+	var prev Reading
+	if _, err := module.LoadSnapshot(ctx, &prev); err != nil {
+		return err
+	}
+	if prev.GasAt != nil && !r.GasAt.After(*prev.GasAt) {
+		return nil
+	}
+	return module.Series(ctx).Add("gas", *r.GasAt, *r.Gas)
 }
 
 type historyParams struct {

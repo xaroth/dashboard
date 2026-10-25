@@ -25,6 +25,13 @@ import (
 // load runs p1 against handler, with now as the clock.
 func load(tb testing.TB, handler http.Handler, now func() time.Time) *module.Set {
 	tb.Helper()
+	set, _ := open(tb, handler, now)
+	return set
+}
+
+// open is load that also returns the database.
+func open(tb testing.TB, handler http.Handler, now func() time.Time) (*module.Set, *storage.DB) {
+	tb.Helper()
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
@@ -47,7 +54,7 @@ func load(tb testing.TB, handler http.Handler, now func() time.Time) *module.Set
 	if err != nil {
 		tb.Fatalf("Load: %v", err)
 	}
-	return set
+	return set, db
 }
 
 func actual(tb testing.TB, set *module.Set) *p1.Actual {
@@ -140,6 +147,13 @@ func (f *fakeDongle) set(ts string, d1, d2, r1, r2, pd, pr, gas float64) {
 	defer f.mu.Unlock()
 	f.body = body
 	f.at = meterTime(ts)
+}
+
+// setGasAt adds the gas meter's timestamp to the telegram set last.
+func (f *fakeDongle) setGasAt(ts string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.body["gas_delivered_timestamp"] = map[string]any{"value": ts}
 }
 
 func (f *fakeDongle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +276,48 @@ func TestGasLate(t *testing.T) {
 	}
 }
 
+// DSMR 4 gas meters report hourly: gas is stamped with the gas meter's
+// time, and a repeated gas reading is not stored again.
+func TestGasTimestamp(t *testing.T) {
+	t.Parallel()
+	fake := &fakeDongle{}
+	set, db := open(t, fake, fake.now)
+	for _, r := range []struct {
+		ts, gasAt string
+		gas       float64
+	}{
+		{"261025120000W", "261025110000W", 50},
+		{"261025120100W", "261025110000W", 50},
+		{"261025125900W", "261025110000W", 50},
+		{"261025130000W", "261025120000W", 51},
+	} {
+		fake.set(r.ts, 1, 2, 3, 4, 0, 0, r.gas)
+		fake.setGasAt(r.gasAt)
+		if err := set.Update(t.Context(), "p1"); err != nil {
+			t.Fatalf("Update %s: %v", r.ts, err)
+		}
+	}
+	if err := set.FlushSeries(t.Context()); err != nil {
+		t.Fatalf("FlushSeries: %v", err)
+	}
+	q := series.New(db.Reader)
+	id, err := q.GetName(t.Context(), "p1.gas")
+	if err != nil {
+		t.Fatalf("gas series: %v", err)
+	}
+	rows, err := q.ListSamples(t.Context(), series.ListSamplesParams{Series: id, To: math.MaxInt64})
+	if err != nil {
+		t.Fatalf("gas samples: %v", err)
+	}
+	want := []series.ListSamplesRow{
+		{Ts: time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC).Unix(), Value: 50},
+		{Ts: time.Date(2026, 10, 25, 11, 0, 0, 0, time.UTC).Unix(), Value: 51},
+	}
+	if diff := cmp.Diff(want, rows); diff != "" {
+		t.Errorf("gas samples (-want +got):\n%s", diff)
+	}
+}
+
 func TestUpdateErrors(t *testing.T) {
 	t.Parallel()
 	telegram := func(ts string, d1 float64) http.HandlerFunc {
@@ -309,6 +365,16 @@ func TestUpdateErrors(t *testing.T) {
 			name:    "bad date",
 			handler: telegram("261332120000W", 1),
 			wantErr: `timestamp "261332120000W": parsing time`,
+		},
+		{
+			name: "bad gas timestamp",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				f := &fakeDongle{}
+				f.set("261025120000W", 1, 0, 0, 0, 0, 0, 5)
+				f.setGasAt("261025110000X")
+				f.ServeHTTP(w, r)
+			},
+			wantErr: `gas timestamp "261025110000X": want W or S at the end`,
 		},
 		{
 			// The dongle lost the meter and serves its last telegram.
