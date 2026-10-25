@@ -325,7 +325,7 @@ The EVE Online modules share two values, each in a subpackage of `modules/eveonl
 
 #### ESI
 
-`esi.Shared` (`*esi.Client`, package `modules/eveonline/esi`) sends requests through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls; `*Client` is the sender for `lib-esi-go` requests. Its version in the admin UI is the ESI compatibility date requests are sent with (`lib-esi-go`'s `CompatibilityDate`). Config keys under `modules.eveonline_esi`:
+`esi.Shared` (`*esi.Client`, package `modules/eveonline/esi`) sends requests through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls. The transport includes `lib-esi-go`'s in-memory rate limiter: a request waits while its rate limit group is over 75% used. `*Client` is the sender for `lib-esi-go` requests. Its version in the admin UI is the ESI compatibility date requests are sent with (`lib-esi-go`'s `CompatibilityDate`). Config keys under `modules.eveonline_esi`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -337,7 +337,7 @@ Characters:
 
 - Modules declare the scopes they need: `module.WithShared(esi.Shared, esi.Scopes{...})`. A login asks for every declared scope.
 - `/eveonline_esi/` on the admin listener lists the characters with the declared scopes they have not granted, their token expiry and a rejected refresh. "Log in a character" goes to EVE SSO; the callback stores the character, its granted scopes and tokens in `eveonline_esi_characters`. Logging in a character again replaces its tokens and scopes and clears its error. Pending logins live in memory for 10 minutes.
-- `Client.Characters(ctx, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it is used from `Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token.
+- `Client.Characters(ctx, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it is used from `Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token. A refresh saves only if the stored refresh token is still the one it used; otherwise a login replaced it meanwhile, and the token reloads the login's.
 - A rejected refresh (`invalid_grant`, `invalid_client`) is recorded on the character and fails the update with `module.ErrAuth`. After logging in again, Update now on each affected module resumes it.
 - The access token's claims (character ID, name, scopes) are read without checking the signature: the token comes straight from the token endpoint over TLS, authenticated with the client secret.
 
@@ -347,7 +347,7 @@ Characters:
 
 #### Server status
 
-`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that hits lib-esi-go's 10 s timeout (ESI's own), or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update. Each successful update also stores a sample (time, online, players) in `eveonline_status_samples`, kept indefinitely: about 105,000 rows a year at the default interval.
+`eveonline_status` (`modules/eveonline/status`) has no config keys. `Update` runs every 5 minutes (ESI caches `/status` for 30 s; at most once a minute is reasonable); data is stale after 30 minutes. While the cluster is offline ESI does not answer `/status`: a request that hits lib-esi-go's 10 s timeout (ESI's own) after connecting, or a 503 or 504 response, is stored as offline (`online: false`, other fields zero, `startTime` null) rather than failing the update. Other errors fail the update, including a timeout before connecting (DNS, dial), which is our network rather than the cluster. Each successful update also stores a sample (time, online, players) in `eveonline_status_samples`, kept indefinitely: about 105,000 rows a year at the default interval.
 
 Queries:
 
@@ -358,7 +358,7 @@ Queries:
 
 `eveonline_skills` (`modules/eveonline/skills`) has no config keys. It declares scopes `esi-skills.read_skillqueue.v1` and `esi-skills.read_skills.v1` and is enabled when a logged-in character granted both. It declares `sde.Types` for skill names. `Update` runs every 15 minutes; data is stale after 2 hours. ESI caches both for 60 s, but they only change in game: queries count down from the stored finish dates, so more frequent updates add nothing.
 
-- `Update` fetches every such character's queue, ordered by queue position, and trained skills with total and unallocated skill points, and stores them as ESI returned them. A character whose requests fail keeps its previous data and fetch time, with the error; the update fails only when every character fails, so one rejected token does not pause the others. It fails with `module.ErrAuth` only when every character's refresh was rejected.
+- `Update` fetches every such character's queue, ordered by queue position, and trained skills with total and unallocated skill points, and stores them as ESI returned them. A character whose requests fail keeps its previous data and fetch time, with the error; the update fails only when every character fails, so one rejected token does not pause the others. A character's refresh rejected, or ESI answering 401 or 403 (token revoked, scope removed in game), is an auth failure; the update fails with `module.ErrAuth` only when every character failed that way.
 - Skill names come from the SDE when the query runs, so a new SDE build names skills without a skills update. A skill the imported build does not have, or any skill before the first import, has an empty name; the page shows `Skill <id>`.
 - ESI keeps finished skills in the queue, and does not add them to `/skills`, until the character logs in. Queries drop entries whose finish date has passed, using the current time rather than the update's, so a queue runs out on screen between updates, and add their points (the entry's end points less the skill's stored points) to the total.
 - A paused queue has entries without start and finish dates.

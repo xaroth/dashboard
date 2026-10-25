@@ -109,7 +109,8 @@ func (t *Token) RefreshIfNeeded(ctx context.Context) error {
 		t.set(row)
 		return nil
 	}
-	tok, err := t.c.requestToken(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {row.RefreshToken}})
+	old := row.RefreshToken
+	tok, err := t.c.requestToken(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {old}})
 	if errors.Is(err, module.ErrAuth) {
 		msg := err.Error()
 		if serr := q.SaveAuthError(ctx, SaveAuthErrorParams{AuthError: &msg, CharacterID: t.id}); serr != nil {
@@ -120,11 +121,26 @@ func (t *Token) RefreshIfNeeded(ctx context.Context) error {
 		return fmt.Errorf("refreshing token of %s: %w", row.Name, err)
 	}
 	row.AccessToken, row.RefreshToken, row.ExpiresAt = tok.AccessToken, tok.RefreshToken, tok.expiresAt(t.now())
-	err = q.SaveRefresh(ctx, SaveRefreshParams{
-		RefreshToken: row.RefreshToken, AccessToken: row.AccessToken, ExpiresAt: row.ExpiresAt, CharacterID: t.id,
+	n, err := q.SaveRefresh(ctx, SaveRefreshParams{
+		RefreshToken: row.RefreshToken, AccessToken: row.AccessToken, ExpiresAt: row.ExpiresAt,
+		CharacterID: t.id, OldRefreshToken: old,
 	})
 	if err != nil {
 		return fmt.Errorf("saving refreshed token of %s: %w", row.Name, err)
+	}
+	if n == 0 {
+		// A login saved newer tokens, possibly with more scopes, while this
+		// refresh was in flight: keep those.
+		return t.reload(ctx, q)
+	}
+	t.set(row)
+	return nil
+}
+
+func (t *Token) reload(ctx context.Context, q *Queries) error {
+	row, err := q.GetCharacter(ctx, t.id)
+	if err != nil {
+		return fmt.Errorf("reading character %d: %w", t.id, err)
 	}
 	t.set(row)
 	return nil

@@ -20,6 +20,11 @@ import (
 
 func load(tb testing.TB, handler http.Handler) *module.Set {
 	tb.Helper()
+	return loadClient(tb, moduletest.HTTPClient(handler))
+}
+
+func loadClient(tb testing.TB, client *http.Client) *module.Set {
+	tb.Helper()
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
 		tb.Fatalf("storage: %v", err)
@@ -36,7 +41,7 @@ func load(tb testing.TB, handler http.Handler) *module.Set {
 		Writer:        db.Writer,
 		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
-		HTTPClient:    moduletest.HTTPClient(handler),
+		HTTPClient:    client,
 		Now:           time.Now,
 	})
 	if err != nil {
@@ -51,6 +56,8 @@ func TestServer(t *testing.T) {
 	testCases := []struct {
 		name    string
 		handler http.HandlerFunc
+		// client replaces handler, for failures before ESI answers.
+		client  *http.Client
 		want    *status.Status
 		wantErr string
 	}{
@@ -77,6 +84,15 @@ func TestServer(t *testing.T) {
 			want: &status.Status{},
 		},
 		{
+			// Our network is down: the request times out before connecting.
+			name: "unreachable",
+			client: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			})},
+			wantErr: `requesting status: Get "https://esi.evetech.net/status": context deadline exceeded`,
+		},
+		{
 			name: "error",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
@@ -88,7 +104,11 @@ func TestServer(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			synctest.Test(t, func(t *testing.T) {
-				set := load(t, testCase.handler)
+				client := testCase.client
+				if client == nil {
+					client = moduletest.HTTPClient(testCase.handler)
+				}
+				set := loadClient(t, client)
 				err := set.Update(t.Context(), "eveonline_status")
 				if testCase.wantErr != "" {
 					if err == nil || err.Error() != testCase.wantErr {
@@ -110,6 +130,10 @@ func TestServer(t *testing.T) {
 		})
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestServerBeforeFirstUpdate(t *testing.T) {
 	t.Parallel()

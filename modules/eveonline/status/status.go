@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"sync/atomic"
 	"time"
 
 	"github.com/eve-online-tools/lib-esi-go/esi/getstatus"
@@ -65,12 +67,17 @@ func (*status) Update(ctx context.Context) error {
 }
 
 func fetch(ctx context.Context) (Status, error) {
-	resp, err := getstatus.Request(ctx, esi.Shared.Get(ctx))
+	var connected atomic.Bool
+	tctx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
+	})
+	resp, err := getstatus.Request(tctx, esi.Shared.Get(ctx))
 	if err != nil {
 		// ESI does not answer /status while the cluster is offline: the
-		// request hits lib-esi-go's timeout, which matches ESI's own.
+		// request hits lib-esi-go's timeout, which matches ESI's own. A
+		// timeout before connecting is our network, not the cluster.
 		var ne net.Error
-		if ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()) {
+		if ctx.Err() == nil && connected.Load() && (errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()) {
 			return Status{}, nil
 		}
 		return Status{}, fmt.Errorf("requesting status: %w", err)

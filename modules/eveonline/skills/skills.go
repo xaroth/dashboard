@@ -194,6 +194,11 @@ func check[T any](resp *request.Response[T]) error {
 	if resp.ErrorData != nil {
 		msg += ": " + resp.ErrorData.Error()
 	}
+	// The token was revoked or a scope removed in game: logging in again
+	// fixes it, retrying does not.
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("%s: %w", msg, module.ErrAuth)
+	}
 	return errors.New(msg)
 }
 
