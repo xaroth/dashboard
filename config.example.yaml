@@ -17,7 +17,7 @@ devices:
     mac: "AA:BB:CC:DD:EE:01"
     rotation: 0   # 0, 90, 180 or 270
     layout: e1001   # pages/layouts/e1001/
-    pages: [weather, eveonline, eveonline_skills, hello]   # the first is the main page; a button press shows the next
+    pages: [weather, energy, eveonline, eveonline_skills, hello]   # the first is the main page; a button press shows the next
 
 renderer:
   watch: true   # rebuild pages on change; reload the browser to see them
