@@ -21,7 +21,8 @@ import (
 	"github.com/xaroth/dashboard/storage"
 )
 
-func load(tb testing.TB, handler http.Handler) *module.Set {
+// load runs p1 against handler, with now as the clock.
+func load(tb testing.TB, handler http.Handler, now func() time.Time) *module.Set {
 	tb.Helper()
 	db, err := storage.Open(tb.Context(), tb.TempDir())
 	if err != nil {
@@ -40,7 +41,7 @@ func load(tb testing.TB, handler http.Handler) *module.Set {
 		Reader:        db.Reader,
 		Log:           slog.New(slog.DiscardHandler),
 		HTTPClient:    moduletest.HTTPClient(handler),
-		Now:           time.Now,
+		Now:           now,
 	})
 	if err != nil {
 		tb.Fatalf("Load: %v", err)
@@ -71,7 +72,7 @@ func TestActualFixture(t *testing.T) {
 			return
 		}
 		w.Write(body)
-	}))
+	}), func() time.Time { return time.Date(2026, 10, 25, 13, 15, 0, 0, time.UTC) })
 	if err := set.Update(t.Context(), "p1"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -96,6 +97,24 @@ func TestActualFixture(t *testing.T) {
 type fakeDongle struct {
 	mu   sync.Mutex
 	body map[string]any
+	at   time.Time
+}
+
+// now is the clock of a module reading fakeDongle: the telegram's time.
+func (f *fakeDongle) now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.at
+}
+
+// meterTime parses a DSMR timestamp as a Dutch meter means it.
+func meterTime(ts string) time.Time {
+	offset := 3600
+	if ts[12] == 'S' {
+		offset = 7200
+	}
+	t, _ := time.ParseInLocation("060102150405", ts[:12], time.FixedZone("", offset))
+	return t
 }
 
 // set replaces the telegram: timestamp, delivered and returned per tariff
@@ -119,6 +138,7 @@ func (f *fakeDongle) set(ts string, d1, d2, r1, r2, pd, pr, gas float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.body = body
+	f.at = meterTime(ts)
 }
 
 func (f *fakeDongle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +150,7 @@ func (f *fakeDongle) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func TestDays(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDongle{}
-	set := load(t, fake)
+	set := load(t, fake, fake.now)
 	update := func(ts string, d1, d2, r1, r2, pd, pr, gas float64) {
 		t.Helper()
 		fake.set(ts, d1, d2, r1, r2, pd, pr, gas)
@@ -166,7 +186,7 @@ func TestDays(t *testing.T) {
 func TestNoYesterday(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDongle{}
-	set := load(t, fake)
+	set := load(t, fake, fake.now)
 	// A day without readings in between: the 23rd is not yesterday.
 	for _, ts := range []string{"261023120000W", "261025120000W"} {
 		fake.set(ts, 1, 2, 3, 4, 0, 0, -1)
@@ -185,24 +205,75 @@ func TestNoYesterday(t *testing.T) {
 
 func TestMeterReplaced(t *testing.T) {
 	t.Parallel()
+	testCases := []struct {
+		name      string
+		d1, gas   float64 // the second reading
+		wantToday bool
+		wantGas   bool
+	}{
+		{name: "electricity meter", d1: 5, gas: 20, wantToday: false},
+		// The gas meter is a separate device: electricity still counts.
+		{name: "gas meter", d1: 1001, gas: 1, wantToday: true, wantGas: false},
+		{name: "neither", d1: 1001, gas: 21, wantToday: true, wantGas: true},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fake := &fakeDongle{}
+			set := load(t, fake, fake.now)
+			for _, r := range [][2]float64{{1000, 20}, {testCase.d1, testCase.gas}} {
+				fake.set("261025120000W", r[0], 0, 0, 0, 0, 0, r[1])
+				if err := set.Update(t.Context(), "p1"); err != nil {
+					t.Fatalf("Update: %v", err)
+				}
+			}
+			got := actual(t, set).Today
+			if (got != nil) != testCase.wantToday {
+				t.Fatalf("got today %+v, want usage %v", got, testCase.wantToday)
+			}
+			if got != nil && (got.GasM3 != nil) != testCase.wantGas {
+				t.Errorf("got gas %v, want gas %v", got.GasM3, testCase.wantGas)
+			}
+		})
+	}
+}
+
+// After a restart the dongle reports gas only once the gas meter has sent
+// a reading.
+func TestGasLate(t *testing.T) {
+	t.Parallel()
 	fake := &fakeDongle{}
-	set := load(t, fake)
-	for _, d1 := range []float64{1000, 5} {
-		fake.set("261025120000W", d1, 0, 0, 0, 0, 0, -1)
+	set := load(t, fake, fake.now)
+	for _, r := range []struct {
+		ts      string
+		d1, gas float64
+	}{{"261025000100W", 100, -1}, {"261025000600W", 101, 50}, {"261025120000W", 102, 52}} {
+		fake.set(r.ts, r.d1, 0, 0, 0, 0, 0, r.gas)
 		if err := set.Update(t.Context(), "p1"); err != nil {
-			t.Fatalf("Update: %v", err)
+			t.Fatalf("Update %s: %v", r.ts, err)
 		}
 	}
-	if got := actual(t, set); got.Today != nil {
-		t.Errorf("got today %+v, want null after a counter went down", got.Today)
+	at := func(h, m int) time.Time { return time.Date(2026, 10, 24, h, m, 0, 0, time.UTC) }
+	// Electricity counts from the first reading, gas from the first with gas.
+	want := &p1.Usage{From: at(23, 1), To: at(11, 0).AddDate(0, 0, 1), TakenKwh: 2, GasM3: ptr(2)}
+	if diff := cmp.Diff(want, actual(t, set).Today); diff != "" {
+		t.Errorf("today (-want +got):\n%s", diff)
 	}
 }
 
 func TestUpdateErrors(t *testing.T) {
 	t.Parallel()
+	telegram := func(ts string, d1 float64) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			f := &fakeDongle{}
+			f.set(ts, d1, 0, 0, 0, 0, 0, -1)
+			f.ServeHTTP(w, r)
+		}
+	}
 	testCases := []struct {
 		name     string
 		handler  http.HandlerFunc
+		now      time.Time
 		wantErr  string
 		wantAuth bool
 	}{
@@ -224,19 +295,32 @@ func TestUpdateErrors(t *testing.T) {
 			wantErr: "actual has no energy_delivered_tariff1",
 		},
 		{
-			name: "bad timestamp",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				f := &fakeDongle{}
-				f.set("261025120000X", 0, 0, 0, 0, 0, 0, -1)
-				f.ServeHTTP(w, r)
-			},
+			name:    "zero readings",
+			handler: telegram("261025120000W", 0),
+			wantErr: "actual has zero meter readings",
+		},
+		{
+			name:    "bad zone",
+			handler: telegram("261025120000X", 1),
 			wantErr: `timestamp "261025120000X": want W or S at the end`,
+		},
+		{
+			name:    "bad date",
+			handler: telegram("261332120000W", 1),
+			wantErr: `timestamp "261332120000W": parsing time`,
+		},
+		{
+			// The dongle lost the meter and serves its last telegram.
+			name:    "stale telegram",
+			handler: telegram("261025120000W", 1),
+			now:     time.Date(2026, 10, 25, 11, 11, 0, 0, time.UTC),
+			wantErr: "meter time 2026-10-25T11:00:00Z is 11m0s off the clock",
 		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			set := load(t, testCase.handler)
+			set := load(t, testCase.handler, func() time.Time { return testCase.now })
 			err := set.Update(t.Context(), "p1")
 			if err == nil || !strings.HasPrefix(err.Error(), testCase.wantErr) {
 				t.Errorf("got Update error %v, want %q", err, testCase.wantErr)
@@ -250,7 +334,7 @@ func TestUpdateErrors(t *testing.T) {
 
 func TestActualBeforeFirstUpdate(t *testing.T) {
 	t.Parallel()
-	set := load(t, http.NotFoundHandler())
+	set := load(t, http.NotFoundHandler(), time.Now)
 	res := set.Resolve(t.Context(), "p1", "actual", nil)
 	if res.Value.(*p1.Actual) != nil || !res.Stale {
 		t.Errorf("got %v, stale %v, want no reading, stale", res.Value, res.Stale)

@@ -48,7 +48,8 @@ func (q *Queries) ListDays(ctx context.Context, date string) ([]P1Day, error) {
 const startDay = `-- name: StartDay :exec
 INSERT INTO p1_days (date, read_at, delivered_t1, delivered_t2, returned_t1, returned_t2, gas)
 VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (date) DO NOTHING
+ON CONFLICT (date) DO UPDATE SET gas = excluded.gas
+WHERE p1_days.gas IS NULL AND excluded.gas IS NOT NULL
 `
 
 type StartDayParams struct {
@@ -61,6 +62,8 @@ type StartDayParams struct {
 	Gas         *float64  `json:"gas"`
 }
 
+// Gas comes in minutes after a dongle restart: fill it in when the day's
+// first reading had none.
 func (q *Queries) StartDay(ctx context.Context, arg StartDayParams) error {
 	_, err := q.db.ExecContext(ctx, startDay,
 		arg.Date,

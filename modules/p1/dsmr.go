@@ -94,6 +94,9 @@ func (a actual) reading() (Reading, error) {
 			return Reading{}, fmt.Errorf("actual has no %s", f.name)
 		}
 	}
+	if a.DeliveredTariff1.Value == 0 && a.DeliveredTariff2.Value == 0 && a.ReturnedTariff1.Value == 0 && a.ReturnedTariff2.Value == 0 {
+		return Reading{}, errors.New("actual has zero meter readings")
+	}
 	if a.Timestamp == nil {
 		return Reading{}, errors.New("actual has no timestamp")
 	}

@@ -17,8 +17,13 @@ import (
 //go:embed sql/migrations/*.sql
 var migrations embed.FS
 
-// The dongle's Wi-Fi is weak; a reading that takes longer is not coming.
-const requestTimeout = 10 * time.Second
+const (
+	// The dongle's Wi-Fi is weak; a reading that takes longer is not coming.
+	requestTimeout = 10 * time.Second
+	// A telegram this far from the clock is stale (the dongle lost the
+	// meter and serves its last one) or the meter's clock is wrong.
+	maxClockOffset = 10 * time.Minute
+)
 
 type config struct {
 	// URL is the dongle's base URL, e.g. http://192.168.5.180. Empty
@@ -57,6 +62,10 @@ func (m *p1) Update(ctx context.Context) error {
 	r, err := fetch(ctx, m.url)
 	if err != nil {
 		return err
+	}
+	now := module.Clock(ctx)()
+	if off := r.MeasuredAt.Sub(now).Abs(); off > maxClockOffset {
+		return fmt.Errorf("meter time %s is %s off the clock", r.MeasuredAt.Format(time.RFC3339), off.Round(time.Second))
 	}
 	err = New(module.Database(ctx)).StartDay(ctx, StartDayParams{
 		Date: r.Date, ReadAt: r.MeasuredAt,
@@ -128,8 +137,9 @@ func (*p1) actual(ctx context.Context, _ actualParams) (*Actual, error) {
 	return a, nil
 }
 
-// usage returns the difference from a to b, or nil when a counter went
-// down: the meter was replaced in between.
+// usage returns the difference from a to b, or nil when an electricity
+// counter went down: the meter was replaced in between. Gas is null when its
+// counter went down; the gas meter is a separate device.
 func usage(a, b P1Day) *Usage {
 	u := &Usage{
 		From:        a.ReadAt,
@@ -137,12 +147,12 @@ func usage(a, b P1Day) *Usage {
 		TakenKwh:    round(b.DeliveredT1 + b.DeliveredT2 - a.DeliveredT1 - a.DeliveredT2),
 		ReturnedKwh: round(b.ReturnedT1 + b.ReturnedT2 - a.ReturnedT1 - a.ReturnedT2),
 	}
-	if a.Gas != nil && b.Gas != nil {
+	if u.TakenKwh < 0 || u.ReturnedKwh < 0 {
+		return nil
+	}
+	if a.Gas != nil && b.Gas != nil && *b.Gas >= *a.Gas {
 		g := round(*b.Gas - *a.Gas)
 		u.GasM3 = &g
-	}
-	if u.TakenKwh < 0 || u.ReturnedKwh < 0 || u.GasM3 != nil && *u.GasM3 < 0 {
-		return nil
 	}
 	return u
 }

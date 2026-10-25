@@ -91,17 +91,18 @@ Reads the smart meter through a Smartstuff P1 dongle with DSMR-API firmware. Con
 | --- | --- | --- |
 | `url` | empty | The dongle's base URL, e.g. `http://192.168.5.180`. Empty disables the module. |
 
-`Update` runs every minute; data is stale after 10 minutes. Each update reads `/api/v2/sm/actual` with a 10 s timeout (the dongle's Wi-Fi is weak), stores the reading as the snapshot, and inserts it into `p1_days` when the meter's day has no row yet. HTTP 401 or 403 (Basic Auth set in the dongle) is `module.ErrAuth`. A response without a timestamp, meter readings or power, which the dongle sends before it has read a telegram, fails the update.
+`Update` runs every minute; data is stale after 10 minutes. Each update reads `/api/v2/sm/actual` with a 10 s timeout (the dongle's Wi-Fi is weak), stores the reading as the snapshot, and inserts it into `p1_days` when the meter's day has no row yet. HTTP 401 or 403 (Basic Auth set in the dongle) is `module.ErrAuth`. These fail the update: a response without a timestamp, meter readings or power (the dongle sends one before it has read a telegram), all four electricity readings zero, and a meter time more than 10 minutes off the clock (the dongle lost the meter and serves its last telegram, or the meter's clock is wrong).
 
 - The day is the date of the meter's timestamp (`YYMMDDhhmmss` plus `W` or `S`, CET or CEST), so the module needs no time zone. Times in the result are converted from it.
 - `p1_days` holds one row per day: the first reading that day. Day totals come from these rows, not from the dongle's history, and need one write a day. When the dongle is offline at midnight, the first reading after it starts the day, and usage in the gap counts for the new day.
+- After a dongle restart gas is missing until the gas meter sends a reading. A day row without gas gets it from the first reading that has it, so gas can start later than the row's time.
 
 Query `p1.actual` takes no params and returns:
 
 - `measuredAt`: the meter's time of the reading.
 - `voltage`: `l1`, `l2`, `l3` in V; null for phases the meter does not have.
 - `flowKw`: power delivered minus power returned; positive is taken from the net, negative is returned to it.
-- `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter; the meter reports gas every 5 minutes). A period is null when a day has no row, or when a counter went down in it (meter replaced).
+- `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter or when the gas counter went down; the meter reports gas every 5 minutes, DSMR 4 meters hourly, so gas lags `to`). A period is null when a day has no row, or when an electricity counter went down in it (meter replaced).
 
 ### Car
 
