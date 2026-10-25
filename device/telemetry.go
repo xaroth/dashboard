@@ -4,7 +4,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/screen"
 )
 
 var (
@@ -31,7 +31,7 @@ var (
 var wakeSources = map[string]bool{"timer": true, "button": true, "EXT0": true}
 
 // observe records a wake in the metrics.
-func (d *Devices) observe(name string, w *render.Wake) {
+func (d *Devices) observe(name string, w *screen.Wake) {
 	if d.simulated {
 		return
 	}

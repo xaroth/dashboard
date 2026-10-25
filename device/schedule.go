@@ -40,13 +40,17 @@ func (s Schedule) next(t time.Time, interval time.Duration) time.Time {
 	panic("device: schedule has no wake within two days")
 }
 
-// refresh is the device's sleep in whole seconds, at least 1, after showing a
-// page at now.
-func (s Schedule) refresh(now time.Time, detail, usb bool) int {
-	interval := s.Battery
+// interval is the time between timer wakes on USB or battery power.
+func (s Schedule) interval(usb bool) time.Duration {
 	if usb {
-		interval = s.USB
+		return s.USB
 	}
+	return s.Battery
+}
+
+// refresh is the device's sleep in whole seconds, at least 1, after showing a
+// page at now with timer wakes every interval.
+func (s Schedule) refresh(now time.Time, detail bool, interval time.Duration) int {
 	var sleep time.Duration
 	if detail {
 		sleep = min(s.Detail, s.next(now, interval).Sub(now))

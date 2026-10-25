@@ -171,9 +171,6 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	if err := o.Migrator.Migrate(ctx, stateOwner, stateMigrations, "sql/migrations"); err != nil {
 		return nil, err
 	}
-	if err := o.Migrator.Migrate(ctx, seriesOwner, series.Migrations, "sql/migrations"); err != nil {
-		return nil, err
-	}
 	declared := map[string]series.Kind{}
 	for _, r := range regs {
 		for name, kind := range r.series {
@@ -181,6 +178,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		}
 	}
 	s.series, err = series.Open(ctx, series.Options{
+		Migrator: o.Migrator,
 		Writer:   o.Writer,
 		Reader:   o.Reader,
 		Location: cmp.Or(o.Location, time.UTC),

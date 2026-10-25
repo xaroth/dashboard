@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"slices"
 	"testing"
 	"time"
 
@@ -108,9 +109,24 @@ func TestFinishErrors(t *testing.T) {
 	}
 }
 
+func TestPanelFor(t *testing.T) {
+	t.Parallel()
+	for _, model := range render.Models() {
+		if p, ok := render.PanelFor(model); !ok || p.Width == 0 {
+			t.Errorf("PanelFor(%q) = %v, %v; want a panel", model, p, ok)
+		}
+	}
+	if want := []string{"reterminal_e1001", "reterminal_e1003"}; !slices.Equal(render.Models(), want) {
+		t.Errorf("got models %v, want %v", render.Models(), want)
+	}
+	if _, ok := render.PanelFor("kindle"); ok {
+		t.Error("got a panel for kindle, want none")
+	}
+}
+
 func TestViewportFor(t *testing.T) {
 	t.Parallel()
-	panel := render.Panels["reterminal_e1003"]
+	panel, _ := render.PanelFor("reterminal_e1003")
 	testCases := []struct {
 		name     string
 		rotation int
@@ -141,7 +157,7 @@ func TestFilename(t *testing.T) {
 }
 
 func BenchmarkFinishE1003(b *testing.B) {
-	panel := render.Panels["reterminal_e1003"]
+	panel, _ := render.PanelFor("reterminal_e1003")
 	img := image.NewNRGBA(image.Rect(0, 0, panel.Width, panel.Height))
 	for i := range img.Pix {
 		img.Pix[i] = uint8(i)

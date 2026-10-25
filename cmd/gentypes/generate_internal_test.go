@@ -6,6 +6,7 @@ import (
 	"flag"
 	"net"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"github.com/xaroth/dashboard/series"
 )
 
-var update = flag.Bool("update", false, "rewrite testdata/golden.ts")
+var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 
 type cfg struct{}
 
@@ -79,17 +80,85 @@ func TestGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
+	checkGolden(t, "testdata/golden.ts", got)
+}
+
+func checkGolden(t *testing.T, file string, got []byte) {
+	t.Helper()
 	if *update {
-		if err := os.WriteFile("testdata/golden.ts", got, 0o644); err != nil {
+		if err := os.WriteFile(file, got, 0o644); err != nil {
 			t.Fatalf("writing golden: %v", err)
 		}
 	}
-	want, err := os.ReadFile("testdata/golden.ts")
+	want, err := os.ReadFile(file)
 	if err != nil {
 		t.Fatalf("reading golden (run with -update to create it): %v", err)
 	}
 	if diff := cmp.Diff(string(want), string(got)); diff != "" {
 		t.Errorf("generated (-want +got):\n%s", diff)
+	}
+}
+
+type level string
+
+type envelope struct {
+	Value any      `json:"value"`
+	Inner *inner   `json:"inner,omitempty"`
+	Level level    `json:"level"`
+	All   []level  `json:"all"`
+	Anon  struct{} `json:"anon"`
+}
+
+type inner struct {
+	N int `json:"n"`
+}
+
+func TestGenerateProps(t *testing.T) {
+	t.Parallel()
+	got, err := generateProps([]tsType{
+		{t: reflect.TypeFor[envelope](), name: "Envelope<T>", fields: map[string]string{"value": "T"}},
+		{t: reflect.TypeFor[inner](), name: "Inner"},
+	}, map[reflect.Type][]string{reflect.TypeFor[level](): {"low", "high"}})
+	if err != nil {
+		t.Fatalf("generateProps: %v", err)
+	}
+	checkGolden(t, "testdata/props.ts", got)
+}
+
+func TestGeneratePropsErrors(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name  string
+		types []tsType
+		want  string
+	}{
+		{"unnamed struct", []tsType{{t: reflect.TypeFor[envelope](), name: "Envelope", fields: map[string]string{"value": "unknown"}}}, "inner is not named"},
+		{"any without a type", []tsType{{t: reflect.TypeFor[envelope](), name: "Envelope"}, {t: reflect.TypeFor[inner](), name: "Inner"}}, "unsupported type interface {}"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := generateProps(testCase.types, map[reflect.Type][]string{reflect.TypeFor[level](): {"low"}})
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Errorf("got %v, want error containing %q", err, testCase.want)
+			}
+		})
+	}
+}
+
+// The committed props are what gentypes writes now.
+func TestPropsUpToDate(t *testing.T) {
+	t.Parallel()
+	got, err := generateProps(propsTypes, propsEnums)
+	if err != nil {
+		t.Fatalf("generateProps: %v", err)
+	}
+	want, err := os.ReadFile("../../pages/generated/props.ts")
+	if err != nil {
+		t.Fatalf("reading props: %v", err)
+	}
+	if diff := cmp.Diff(string(want), string(got)); diff != "" {
+		t.Errorf("pages/generated/props.ts is stale; run go run ./cmd/gentypes (-want +got):\n%s", diff)
 	}
 }
 
