@@ -125,17 +125,20 @@ func TestUpdateErrors(t *testing.T) {
 
 func TestConfigErrors(t *testing.T) {
 	t.Parallel()
-	for _, testCase := range []struct{ extra, wantErr string }{
-		{`, unused: ["100000000687"]`, `unused: want serial:port, got "100000000687"`},
-		{`, port: 0`, "port must be 1 to 65535, got 0"},
-		{`, night_interval: 10s`, "night_interval must be at least 1m, got 10s"},
-		{`, night_interval: 30m`, "night_interval must be under 30m0s, got 30m0s"},
+	for _, testCase := range []struct{ name, extra, wantErr string }{
+		{"unused not serial:port", `, unused: ["100000000687"]`, `unused: want serial:port, got "100000000687"`},
+		{"port zero", `, port: 0`, "port must be 1 to 65535, got 0"},
+		{"night interval too short", `, night_interval: 10s`, "night_interval must be at least 1m, got 10s"},
+		{"night interval too long", `, night_interval: 30m`, "night_interval must be under 30m0s, got 30m0s"},
 	} {
-		set := load(t, solar.NewFake(t), testCase.extra)
-		err := set.Update(t.Context(), "solar")
-		if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
-			t.Errorf("%s: got %v, want %q", testCase.extra, err, testCase.wantErr)
-		}
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			set := load(t, solar.NewFake(t), testCase.extra)
+			err := set.Update(t.Context(), "solar")
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Errorf("got %v, want %q", err, testCase.wantErr)
+			}
+		})
 	}
 }
 

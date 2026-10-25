@@ -151,7 +151,7 @@ func (e *env) setup(tb testing.TB) string {
 	tb.Helper()
 	code, body := e.do(tb, http.MethodGet, "/api/setup", map[string]string{"ID": mac})
 	if code != http.StatusOK || body["status"] != float64(200) {
-		tb.Fatalf("setup: got %d %v", code, body)
+		tb.Fatalf("setup: got %d %v, want 200 with status 200", code, body)
 	}
 	return body["api_key"].(string)
 }

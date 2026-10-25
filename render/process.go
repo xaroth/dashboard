@@ -82,10 +82,23 @@ type proc struct {
 	exitedAt time.Time // set before exited is closed
 }
 
+// ProcessOption configures a Process.
+type ProcessOption func(*Process)
+
+// WithTimeouts replaces the render and describe response timeouts.
+func WithTimeouts(render, describe time.Duration) ProcessOption {
+	return func(p *Process) { p.renderTimeout, p.describeTimeout = render, describe }
+}
+
+// WithClock replaces the clock of response timeouts and restart backoff.
+func WithClock(now func() time.Time, after func(time.Duration) <-chan time.Time) ProcessOption {
+	return func(p *Process) { p.now, p.after = now, after }
+}
+
 // NewProcess returns a Process that runs command in dir. The process starts
 // on the first request.
-func NewProcess(command []string, dir string, log *slog.Logger) *Process {
-	return &Process{
+func NewProcess(command []string, dir string, log *slog.Logger, opts ...ProcessOption) *Process {
+	p := &Process{
 		command:         command,
 		dir:             dir,
 		log:             log,
@@ -96,6 +109,10 @@ func NewProcess(command []string, dir string, log *slog.Logger) *Process {
 		turn:            make(chan struct{}, 1),
 		closing:         make(chan struct{}),
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // Describe returns the bundled pages.

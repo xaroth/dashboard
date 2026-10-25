@@ -364,7 +364,7 @@ func TestExpiredKeyNotRetried(t *testing.T) {
 		"issued": {testNow.AddDate(0, 0, -91).Format(time.DateOnly)},
 	})
 	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("saving key: got %d %s", rec.Code, rec.Body)
+		t.Fatalf("saving key: got %d %s, want 303", rec.Code, rec.Body)
 	}
 	e.fake.RejectKey(car.FakeClientID)
 	var pages []string
@@ -487,7 +487,7 @@ func TestAdminPage(t *testing.T) {
 				e := load(t, car.NewFake(t), "")
 				form := key(func(v url.Values) { v.Set("issued", testCase.issued.Format(time.DateOnly)) })
 				if rec := e.serve(t, http.MethodPost, "/car/keys", form); rec.Code != http.StatusSeeOther {
-					t.Fatalf("saving key: got %d %s", rec.Code, rec.Body)
+					t.Fatalf("saving key: got %d %s, want 303", rec.Code, rec.Body)
 				}
 				if body := e.serve(t, http.MethodGet, "/car/", nil).Body.String(); !strings.Contains(body, testCase.want) {
 					t.Errorf("got page without %q:\n%s", testCase.want, body)
@@ -510,7 +510,7 @@ func TestAdminPage(t *testing.T) {
 		e.name(t, car.FakeKiaVIN, "kona")
 
 		if rec := e.serve(t, http.MethodPost, "/car/keys/delete", url.Values{"client_id": {car.FakeKiaClientID}}); rec.Code != http.StatusSeeOther {
-			t.Fatalf("delete: got %d %s", rec.Code, rec.Body)
+			t.Fatalf("delete: got %d %s, want 303", rec.Code, rec.Body)
 		}
 		e.update(t)
 		var vins []string

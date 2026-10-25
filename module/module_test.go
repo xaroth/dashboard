@@ -435,9 +435,9 @@ func runRegs(t *testing.T, src string, regs []module.Registration, check func(t 
 
 // waitFirstAttempt advances the fake clock in 1 s steps until the first
 // update ran, so the start jitter does not matter.
-func waitFirstAttempt(t *testing.T, set *module.Set) {
-	t.Helper()
-	for status(t, set).AttemptedAt == nil {
+func waitFirstAttempt(tb testing.TB, set *module.Set) {
+	tb.Helper()
+	for status(tb, set).AttemptedAt == nil {
 		time.Sleep(time.Second)
 		synctest.Wait()
 	}

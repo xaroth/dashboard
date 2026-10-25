@@ -27,7 +27,7 @@ func TestDisplayMetrics(t *testing.T) {
 			reg := prometheus.NewRegistry()
 			e := newEnv(t, func(o *device.Options) { o.Metrics = reg })
 			if code, body := e.display(t, e.setup(t), testCase.source); code != http.StatusOK {
-				t.Fatalf("display: got %d %v", code, body)
+				t.Fatalf("display: got %d %v, want 200", code, body)
 			}
 			want := `
 # HELP dashboard_device_battery_volts Battery-Voltage reported on the device's latest wake.
