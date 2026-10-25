@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/screen"
 )
 
 //go:embed sql/migrations/*.sql
@@ -51,14 +51,16 @@ const (
 
 // Pipeline renders pages; *render.Pipeline in production.
 type Pipeline interface {
-	Render(ctx context.Context, t render.Target, page string) (render.Image, error)
+	Render(ctx context.Context, t screen.Target, page string) (screen.Image, error)
+	// KnownModel reports whether pages can be rendered for a Model header.
+	KnownModel(model string) bool
 }
 
 // Status is what the service knows about a device right now.
 type Status struct {
 	Config
 	Model string
-	Wake  *render.Wake
+	Wake  *screen.Wake
 	Page  string
 }
 
@@ -90,7 +92,7 @@ type Devices struct {
 type state struct {
 	cfg      Config
 	model    string
-	wake     *render.Wake
+	wake     *screen.Wake
 	page     int
 	filename string
 	key      string // API key, cached: keys never change once created
@@ -175,12 +177,12 @@ func validate(o Options) error {
 }
 
 // Target is how the named device is rendered: its reported model and wake.
-func (d *Devices) Target(name string) (render.Target, bool) {
+func (d *Devices) Target(name string) (screen.Target, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	s, ok := d.byName[name]
 	if !ok {
-		return render.Target{}, false
+		return screen.Target{}, false
 	}
 	return s.target(), true
 }
@@ -214,8 +216,8 @@ func (d *Devices) Pending() []Pending {
 	return out
 }
 
-func (s *state) target() render.Target {
-	return render.Target{Name: s.cfg.Name, Model: cmp.Or(s.model, DefaultModel), Rotation: s.cfg.Rotation, Wake: s.wake, Params: s.cfg.Params}
+func (s *state) target() screen.Target {
+	return screen.Target{Name: s.cfg.Name, Model: cmp.Or(s.model, DefaultModel), Rotation: s.cfg.Rotation, Wake: s.wake, Params: s.cfg.Params}
 }
 
 func newAPIKey() string {

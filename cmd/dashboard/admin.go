@@ -7,9 +7,7 @@ import (
 	"errors"
 	"html/template"
 	"log/slog"
-	"maps"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,18 +15,19 @@ import (
 	"github.com/xaroth/dashboard/device"
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/screen"
 )
 
 type Pipeline interface {
 	Pages(ctx context.Context) ([]string, error)
-	Props(ctx context.Context, t render.Target, page string) (render.Props, error)
-	Render(ctx context.Context, t render.Target, page string) (render.Image, error)
+	Props(ctx context.Context, t screen.Target, page string) (render.Props, error)
+	Render(ctx context.Context, t screen.Target, page string) (screen.Image, error)
 }
 
 type Devices interface {
 	Statuses() []device.Status
 	Pending() []device.Pending
-	Target(name string) (render.Target, bool)
+	Target(name string) (screen.Target, bool)
 }
 
 type Modules interface {
@@ -78,7 +77,7 @@ type panelView struct {
 
 func (h *adminHandler) index(w http.ResponseWriter, r *http.Request) {
 	var panels []panelView
-	for _, m := range slices.Sorted(maps.Keys(render.Panels)) {
+	for _, m := range render.Models() {
 		for _, rot := range []int{0, 90} {
 			panels = append(panels, panelView{m, rot})
 		}
@@ -114,7 +113,7 @@ func (h *adminHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	t := render.Target{Name: "preview", Model: q.Get("model"), Rotation: 0}
+	t := screen.Target{Name: "preview", Model: q.Get("model"), Rotation: 0}
 	if t.Model == "" {
 		t.Model = device.DefaultModel
 	}
@@ -167,7 +166,7 @@ func pngPage(r *http.Request) (string, bool) {
 }
 
 // target resolves the device in the path; ?model= overrides its model.
-func (h *adminHandler) target(r *http.Request) (render.Target, bool) {
+func (h *adminHandler) target(r *http.Request) (screen.Target, bool) {
 	t, ok := h.Devices.Target(r.PathValue("device"))
 	if !ok {
 		return t, false
@@ -178,7 +177,7 @@ func (h *adminHandler) target(r *http.Request) (render.Target, bool) {
 	return t, true
 }
 
-func (h *adminHandler) servePNG(w http.ResponseWriter, r *http.Request, t render.Target, page string) {
+func (h *adminHandler) servePNG(w http.ResponseWriter, r *http.Request, t screen.Target, page string) {
 	img, err := h.Pipeline.Render(r.Context(), t, page)
 	if err != nil {
 		h.fail(w, err)

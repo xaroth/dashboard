@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"html/template"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -34,7 +33,7 @@ func (h *adminHandler) simulatePage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	models := slices.Sorted(maps.Keys(render.Panels))
+	models := render.Models()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := simulateTmpl.Execute(w, map[string]any{"Device": st, "Models": models}); err != nil {
 		h.Log.Error("rendering simulator", "err", err)
@@ -59,7 +58,7 @@ func (h *adminHandler) simulateWake(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	model := q.Get("model")
-	panel, ok := render.Panels[model]
+	panel, ok := render.PanelFor(model)
 	if !ok {
 		http.Error(w, "unknown model", http.StatusBadRequest)
 		return

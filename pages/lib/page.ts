@@ -1,3 +1,4 @@
+import type { Props, Result } from "../generated/props";
 import type { Queries } from "../generated/queries";
 
 export type QueryName = keyof Queries;
@@ -19,33 +20,8 @@ export function query<K extends QueryName>(name: K, params: Queries[K]["params"]
   return { module, query: q, params };
 }
 
-export type Result<T> = { value: T | null; fetchedAt: string | null; stale: boolean; error: string | null };
+export type { Device, PowerSource, Result, System, Viewport, Wake } from "../generated/props";
 
-export type Viewport = { width: number; height: number; portrait: boolean };
-
-export type Device = {
-  name: string;
-  model: string;
-  rotation: number;
-  // Headers from the device's latest request, absent in previews without a device.
-  wake?: {
-    source?: string;
-    battery?: number;
-    rssi?: number;
-    firmware?: string;
-    at?: string;
-    usb?: boolean;
-    powerSource?: "header" | "config" | "default";
-  };
-};
-
-export type System = { staleModules: string[] };
-
-export type PageProps<D extends Record<string, Query> = Record<string, never>> = {
-  data: { [K in keyof D]: D[K] extends Query<infer N> ? Result<NonNullable<Queries[N]["result"]>> : never };
-  device: Device;
-  viewport: Viewport;
-  system: System;
-  now: string;
-  timezone: string;
-};
+export type PageProps<D extends Record<string, Query> = Record<string, never>> = Props<{
+  [K in keyof D]: D[K] extends Query<infer N> ? Result<NonNullable<Queries[N]["result"]>> : never;
+}>;

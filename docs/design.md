@@ -21,7 +21,8 @@ One Go service, `dashboard`, serves two Seeed reTerminal e-ink units (E1001, E10
 cmd/dashboard/             entrypoint and the only wiring point: config loading and
                            validation, storage, modules, renderer, listeners, admin UI
                            (status, preview, device simulator)
-cmd/gentypes/              generates pages/generated from the module query types
+cmd/gentypes/              generates pages/generated from the module query types and
+                           the page props
 storage/                   SQLite: connections, per-owner migrations
 module/                    registration API, module contract, scheduler, query dispatch,
                            module state
@@ -32,6 +33,7 @@ series/                    time series: write buffer, rollups, retention, bucket
 series/sql/                series migrations and queries
 device/sql/                API key migrations and queries
 render/                    page pipeline, renderer process, gray reduction, PNG
+screen/                    what device and render share: render target, wake, image
 modules/modules.go         modules.All: the list of every module
 modules/<name>/            one module per data source
 modules/<name>/sql/        the module's migrations and queries
@@ -42,7 +44,7 @@ module/moduletest/         helpers for module tests
 renderer/                  Bun process: bundles pages, renders with takumi-js
 pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
 pages/components/, lib/    shared by all layouts
-pages/generated/           TypeScript types generated from Go query results
+pages/generated/           TypeScript types generated from Go query results and props
 tools/                     standalone scripts (dtu_read.py: read-only Modbus check)
 ```
 
@@ -51,14 +53,15 @@ Packages are one level deep and named for what they do. They do not import each 
 ```
 cmd/dashboard  -> storage, module, modules, device, render
 module         -> series
-cmd/gentypes   -> module, modules
+cmd/gentypes   -> module, modules, render, screen
 modules        -> module, modules/<name>
 modules/<name> -> module
 modules/<group>/<name> -> module, the group's shared values
-device         -> render
+device         -> screen
+render         -> screen
 ```
 
-`module` and `device` do not import `storage`: `module.Load` and `device.Load` take their connections and a `Migrator`, which `*storage.DB` satisfies.
+`module`, `series` and `device` do not import `storage`: `module.Load`, `series.Open` and `device.Load` take their connections and a `Migrator`, which `*storage.DB` satisfies, and run their own migrations. `device` renders through its `Pipeline` interface, which `*render.Pipeline` satisfies.
 
 ## Modules
 
@@ -391,7 +394,7 @@ modules/p1/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
-- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then each shared value's, then each module's, before any `Initialize`. `device.Load` validates its options (positive intervals, pages per device, a known power) and runs the API key migrations (owner `device`). A failing migration stops startup.
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then `series.Open` the series migrations (owner `series`), then each shared value's, then each module's, before any `Initialize`. `device.Load` validates its options (positive intervals, pages per device, a known power) and runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
 - **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `module.SaveSnapshot` and `module.LoadSnapshot`.
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.
@@ -469,7 +472,7 @@ A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for 
 
 Device names and layouts may contain letters, digits, `-` and `_`; `page` is reserved as a device name (it is taken by the admin route `/preview/page/...`). MACs must be unique.
 
-The model comes from the device's `Model` header (`reterminal_e1001`, `reterminal_e1003`); the panel size follows from the model. An unknown model is ignored, and a device that has not reported one yet is treated as `reterminal_e1001`. Both models get the same 4-gray treatment: the E1003 is rendered at its own resolution but with the E1001's four gray levels, so one set of styles works on both.
+The model comes from the device's `Model` header (`reterminal_e1001`, `reterminal_e1003`); the panel size follows from the model (`render.PanelFor`). An unknown model is ignored, and a device that has not reported one yet is treated as `reterminal_e1001`. Both models get the same 4-gray treatment: the E1003 is rendered at its own resolution but with the E1001's four gray levels, so one set of styles works on both.
 
 ### Screen schedule
 
@@ -625,7 +628,7 @@ A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run 
 
 ### Types
 
-Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`; a struct from a package other than the module's is named for that package, e.g. `SeriesPoint`), and a `Queries` map from `"module.query"` to `{params, result}`. `query()` and `PageProps` use it, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated file is committed; CI checks it is up to date.
+Go query types are the source of truth. `cmd/gentypes` walks every registered query's params and result types by reflection and writes `pages/generated/queries.ts`: one interface per struct (named module + Go type name, e.g. `WeatherForecast`; a struct from a package other than the module's is named for that package, e.g. `SeriesPoint`), and a `Queries` map from `"module.query"` to `{params, result}`. It also writes `pages/generated/props.ts` from `render.Props` and the types it uses (`Device`, `Wake`, `Viewport`, `System`, `Result<T>`, `Props<D>`); `screen.PowerSource` becomes a union of `screen.PowerSources`. `page.ts` re-exports them. `query()` and `PageProps` use both, so a typo in a query name, a wrong param or a wrong field is a type error in the editor and in CI (`tsc --noEmit`). The generated files are committed; CI checks they are up to date.
 
 Mapping rules: `time.Time` is a string (RFC 3339), pointers are `T | null`, and exported fields are named by their `json` tag (`omitempty` and `omitzero` make them optional). Slices are typed without `null`, so queries return non-nil ones. Params fields are all optional: a missing param is the Go zero value, which a query treats as its default. Embedded fields, maps, `[]byte`, interfaces, the `,string` option and types with their own JSON encoding are errors; gentypes supports a shape once a query needs it.
 

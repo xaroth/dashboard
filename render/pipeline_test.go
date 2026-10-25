@@ -8,6 +8,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/screen"
 )
 
 var testNow = time.Date(2026, 10, 16, 5, 30, 0, 0, time.UTC)
@@ -45,8 +46,8 @@ func ptr[T any](v T) *T { return &v }
 func TestPipelineProps(t *testing.T) {
 	t.Parallel()
 	p, _ := newPipeline(t)
-	wake := &render.Wake{Source: "button", Battery: ptr(4.05), At: testNow}
-	got, err := p.Props(t.Context(), render.Target{Name: "hallway", Model: "reterminal_e1001", Rotation: 90, Wake: wake}, "overview")
+	wake := &screen.Wake{Source: "button", Battery: ptr(4.05), At: testNow}
+	got, err := p.Props(t.Context(), screen.Target{Name: "hallway", Model: "reterminal_e1001", Rotation: 90, Wake: wake}, "overview")
 	if err != nil {
 		t.Fatalf("Props: %v", err)
 	}
@@ -70,12 +71,12 @@ func TestPipelinePropsErrors(t *testing.T) {
 	p, _ := newPipeline(t)
 	testCases := []struct {
 		name   string
-		target render.Target
+		target screen.Target
 		page   string
 		want   error
 	}{
-		{"unknown page", render.Target{Model: "reterminal_e1001"}, "nope", render.ErrUnknownPage},
-		{"unknown model", render.Target{Model: "kindle"}, "hello", render.ErrUnknownModel},
+		{"unknown page", screen.Target{Model: "reterminal_e1001"}, "nope", render.ErrUnknownPage},
+		{"unknown model", screen.Target{Model: "kindle"}, "hello", render.ErrUnknownModel},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -90,7 +91,7 @@ func TestPipelinePropsErrors(t *testing.T) {
 func TestPipelineRender(t *testing.T) {
 	t.Parallel()
 	p, fake := newPipeline(t)
-	img, err := p.Render(t.Context(), render.Target{Name: "x", Model: "reterminal_e1003", Rotation: 270}, "hello")
+	img, err := p.Render(t.Context(), screen.Target{Name: "x", Model: "reterminal_e1003", Rotation: 270}, "hello")
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -100,7 +101,7 @@ func TestPipelineRender(t *testing.T) {
 	if want := render.Filename(img.PNG, testNow); img.Filename != want {
 		t.Errorf("got filename %q, want %q", img.Filename, want)
 	}
-	want, err := p.Props(t.Context(), render.Target{Name: "x", Model: "reterminal_e1003", Rotation: 270}, "hello")
+	want, err := p.Props(t.Context(), screen.Target{Name: "x", Model: "reterminal_e1003", Rotation: 270}, "hello")
 	if err != nil {
 		t.Fatalf("Props: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestPipelineRenderError(t *testing.T) {
 	p, fake := newPipeline(t)
 	boom := errors.New("boom")
 	fake.FailRenders(boom)
-	if _, err := p.Render(t.Context(), render.Target{Model: "reterminal_e1001"}, "hello"); !errors.Is(err, boom) {
+	if _, err := p.Render(t.Context(), screen.Target{Model: "reterminal_e1001"}, "hello"); !errors.Is(err, boom) {
 		t.Errorf("got %v, want %v", err, boom)
 	}
 }
@@ -123,7 +124,7 @@ func TestPipelineRenderMetrics(t *testing.T) {
 	t.Parallel()
 	p, fake := newPipeline(t)
 	fake.SetPages(render.PageInfo{Name: "metrics"})
-	target := render.Target{Model: "reterminal_e1001"}
+	target := screen.Target{Model: "reterminal_e1001"}
 	unknown := render.RenderCount("unknown", "failure")
 
 	if _, err := p.Render(t.Context(), target, "metrics"); err != nil {
@@ -160,7 +161,7 @@ func TestPipelineSeesRebuilds(t *testing.T) {
 	if diff := cmp.Diff([]string{"energy", "hello", "overview"}, got); diff != "" {
 		t.Errorf("pages (-want +got):\n%s", diff)
 	}
-	if _, err := p.Props(t.Context(), render.Target{Model: "reterminal_e1001"}, "energy"); err != nil {
+	if _, err := p.Props(t.Context(), screen.Target{Model: "reterminal_e1001"}, "energy"); err != nil {
 		t.Errorf("got %v for the new page, want nil", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestPipelineSeesRebuilds(t *testing.T) {
 func TestPipelineParamOverrides(t *testing.T) {
 	t.Parallel()
 	p, _, res := newPipelineWithResolver(t)
-	target := render.Target{Model: "reterminal_e1001", Params: map[string]map[string]any{
+	target := screen.Target{Model: "reterminal_e1001", Params: map[string]map[string]any{
 		"overview.power": {"step": "5m"},
 		"hello.other":    {"ignored": true},
 	}}
@@ -179,7 +180,7 @@ func TestPipelineParamOverrides(t *testing.T) {
 		t.Errorf("params (-want +got):\n%s", diff)
 	}
 	// The page's own descriptor is not changed by the override.
-	if _, err := p.Props(t.Context(), render.Target{Model: "reterminal_e1001"}, "overview"); err != nil {
+	if _, err := p.Props(t.Context(), screen.Target{Model: "reterminal_e1001"}, "overview"); err != nil {
 		t.Fatalf("Props: %v", err)
 	}
 	if diff := cmp.Diff(map[string]any{"range": "24h"}, res.Asked("p1.power")); diff != "" {

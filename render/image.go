@@ -10,6 +10,8 @@ import (
 	"hash/crc32"
 	"image"
 	"image/png"
+	"maps"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -22,10 +24,21 @@ type Panel struct {
 	Width, Height int
 }
 
-// Panels by the Model header the firmware sends.
-var Panels = map[string]Panel{
+// panels by the Model header the firmware sends.
+var panels = map[string]Panel{
 	"reterminal_e1001": {800, 480},
 	"reterminal_e1003": {1872, 1404},
+}
+
+// PanelFor returns the panel of model, as the firmware's Model header names it.
+func PanelFor(model string) (Panel, bool) {
+	p, ok := panels[model]
+	return p, ok
+}
+
+// Models returns the known models, sorted.
+func Models() []string {
+	return slices.Sorted(maps.Keys(panels))
 }
 
 // ViewportFor returns the size pages render at: 90 and 270 swap the panel's

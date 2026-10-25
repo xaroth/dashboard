@@ -19,6 +19,7 @@ import (
 
 	"github.com/xaroth/dashboard/device"
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/screen"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -245,8 +246,8 @@ func TestDisplay(t *testing.T) {
 	// The wake is recorded and used for later renders.
 	target, _ := e.devices.Target("hallway")
 	battery, rssi := 4.05, -61
-	wantTarget := render.Target{Name: "hallway", Model: "reterminal_e1003", Wake: &render.Wake{
-		Source: "timer", Battery: &battery, RSSI: &rssi, Firmware: "1.8.7", At: time.Unix(1792087200, 0), PowerSource: "default",
+	wantTarget := screen.Target{Name: "hallway", Model: "reterminal_e1003", Wake: &screen.Wake{
+		Source: "timer", Battery: &battery, RSSI: &rssi, Firmware: "1.8.7", At: time.Unix(1792087200, 0), PowerSource: screen.PowerSourceDefault,
 	}}
 	if diff := cmp.Diff(wantTarget, target); diff != "" {
 		t.Errorf("target (-want +got):\n%s", diff)
@@ -333,7 +334,7 @@ type slowPipeline struct {
 	took  time.Duration
 }
 
-func (p *slowPipeline) Render(ctx context.Context, t render.Target, page string) (render.Image, error) {
+func (p *slowPipeline) Render(ctx context.Context, t screen.Target, page string) (screen.Image, error) {
 	p.clock.Add(int64(p.took))
 	return p.Pipeline.Render(ctx, t, page)
 }
@@ -356,27 +357,40 @@ func TestDisplayRefreshAfterRender(t *testing.T) {
 
 func TestDisplayPower(t *testing.T) {
 	t.Parallel()
+	amsterdam, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		t.Fatalf("loading location: %v", err)
+	}
 	testCases := []struct {
 		name       string
 		power      device.Power
 		header     string // USB-Connected, if set
+		at         string // local time
 		wantUSB    bool
-		wantSource string
+		wantSource screen.PowerSource
 		want       float64
 	}{
-		{"no header", device.PowerAuto, "", false, "default", 3600},
-		{"header usb", device.PowerAuto, "true", true, "header", 300},
-		{"header battery", "", "false", false, "header", 3600},
-		{"bad header", device.PowerAuto, "maybe", false, "default", 3600},
-		{"config usb", device.PowerUSB, "", true, "config", 300},
-		{"config battery over header", device.PowerBattery, "true", false, "config", 3600},
+		// At 18:00 the USB interval's next wake is 18:05, the battery one's 19:00.
+		{"no header", device.PowerAuto, "", "2026-10-15 18:00:00", false, screen.PowerSourceDefault, 3600},
+		{"header usb", device.PowerAuto, "true", "2026-10-15 18:00:00", true, screen.PowerSourceHeader, 300},
+		{"header battery", "", "false", "2026-10-15 18:00:00", false, screen.PowerSourceHeader, 3600},
+		{"bad header", device.PowerAuto, "maybe", "2026-10-15 18:00:00", false, screen.PowerSourceDefault, 3600},
+		{"config usb", device.PowerUSB, "", "2026-10-15 18:00:00", true, screen.PowerSourceConfig, 300},
+		{"config battery over header", device.PowerBattery, "true", "2026-10-15 18:00:00", false, screen.PowerSourceConfig, 3600},
+		{"usb before last wake", device.PowerUSB, "", "2026-10-15 23:57:00", true, screen.PowerSourceConfig, 180},
+		{"usb night sleep", device.PowerUSB, "", "2026-10-16 00:00:00", true, screen.PowerSourceConfig, 7 * 3600},
+		{"usb night sleep on DST end", device.PowerUSB, "", "2026-10-25 00:00:00", true, screen.PowerSourceConfig, 8 * 3600},
+		{"usb night sleep on DST start", device.PowerUSB, "", "2027-03-28 00:00:00", true, screen.PowerSourceConfig, 6 * 3600},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			e := newEnv(t, func(o *device.Options) { o.Devices[0].Power = testCase.power })
-			// 18:00: the USB interval's next wake is 18:05, the battery one's 19:00.
-			e.clock.Store(time.Date(2026, 10, 15, 18, 0, 0, 0, time.UTC).UnixNano())
+			at, err := time.ParseInLocation(time.DateTime, testCase.at, amsterdam)
+			if err != nil {
+				t.Fatalf("parsing time: %v", err)
+			}
+			e := newEnvSchedule(t, hourly(amsterdam), func(o *device.Options) { o.Devices[0].Power = testCase.power })
+			e.clock.Store(at.UnixNano())
 			headers := map[string]string{"ID": mac, "Access-Token": e.setup(t), "Update-Source": "timer"}
 			if testCase.header != "" {
 				headers["USB-Connected"] = testCase.header
