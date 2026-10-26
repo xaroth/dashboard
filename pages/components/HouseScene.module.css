@@ -19,9 +19,9 @@
 .solar,
 .solarIdle {
   position: absolute;
-  left: 60px;
+  left: 54px;
   top: 56px;
-  width: 108px;
+  width: 120px;
   height: 46px;
   display: flex;
   flex-direction: column;
@@ -55,7 +55,8 @@
 
 .solarDay {
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .taken,
@@ -99,7 +100,7 @@
 
 .energyLabel {
   margin-top: 2px;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .flow {
@@ -108,7 +109,7 @@
   top: 241px;
   width: 160px;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   color: #555;
 }
 
@@ -163,13 +164,13 @@
   top: 162px;
   width: 122px;
   text-align: center;
-  font-size: 11px;
+  font-size: 12px;
   color: #555;
   white-space: nowrap;
 }
 
 .staleSolar {
-  left: 158px;
+  left: 164px;
   top: 48px;
 }
 
