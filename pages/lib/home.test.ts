@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { CarVehicle, EveonlineSkillsCharacter } from "../generated/queries";
-import { carsSummary, combine, nextEvent, soonestQueue } from "./home";
+import { carStatus, carsSummary, combine, dayEvents, fit, nextEvent, skillWarnings, soonestQueue, weekFraction } from "./home";
 
 test("combined status: stale if any is, oldest fetch, first error", () => {
   const fresh = { fetchedAt: "2026-10-16T10:25:00+02:00", stale: false, error: null };
@@ -69,4 +69,59 @@ test("soonest queue among characters with data", () => {
   expect(soonestQueue([never])).toEqual({ first: null, failed: 1 });
   const empty = pilot(4, {});
   expect(soonestQueue([later, empty]).first).toBe(empty);
+});
+
+test("skill warnings: queues ending within a week, empty or paused, most urgent first", () => {
+  const soon = pilot(1, { ends: "2026-10-17T00:00:00Z" });
+  const week = pilot(2, { ends: "2026-10-22T00:00:00Z" });
+  const far = pilot(3, { ends: "2026-10-30T00:00:00Z" });
+  const paused = pilot(4, { paused: true });
+  const empty = pilot(5, {});
+  const never = pilot(6, { fetchedAt: null, error: "token expired" });
+  expect(skillWarnings([far, paused, week, soon, empty, never], now)).toEqual([empty, soon, week, paused]);
+  expect(weekFraction(soon, now)).toBeCloseTo((13.5 + 2) / 168, 3);
+  expect(weekFraction(far, now)).toBe(1);
+  expect(weekFraction(paused, now)).toBe(0);
+});
+
+test("events on a day: filling the day first, ended ones left out", () => {
+  const holiday = event("Vakantie", "2026-10-10T00:00:00+02:00", "2026-10-19T00:00:00+02:00", true);
+  const standup = event("Standup", "2026-10-16T09:30:00+02:00", "2026-10-16T09:45:00+02:00");
+  const dentist = event("Tandarts", "2026-10-16T14:00:00+02:00", "2026-10-16T14:45:00+02:00");
+  const night = event("Nachtdienst", "2026-10-16T22:00:00+02:00", "2026-10-17T07:00:00+02:00");
+  const trip = event("Reis", "2026-10-15T08:00:00+02:00", "2026-10-18T20:00:00+02:00");
+  const all = [holiday, standup, dentist, night, trip];
+  expect(dayEvents(all, "2026-10-16", now, tz)).toEqual([
+    { title: "Vakantie", time: null },
+    { title: "Reis", time: null },
+    { title: "Tandarts", time: "14:00" },
+    { title: "Nachtdienst", time: "22:00" },
+  ]);
+  expect(dayEvents(all, "2026-10-17", now, tz)).toEqual([
+    { title: "Vakantie", time: null },
+    { title: "Reis", time: null },
+    { title: "Nachtdienst", time: "tot 07:00" },
+  ]);
+  expect(dayEvents(all, "2026-10-18", now, tz)).toEqual([
+    { title: "Vakantie", time: null },
+    { title: "Reis", time: "tot 20:00" },
+  ]);
+  expect(dayEvents([{ ...dentist, title: "" }], "2026-10-16", now, tz)).toEqual([{ title: "(geen titel)", time: "14:00" }]);
+  expect(dayEvents([holiday], "2026-10-19", now, tz)).toEqual([]);
+});
+
+test("fit: the last row counts what is left out", () => {
+  expect(fit([1, 2, 3], 3)).toEqual({ shown: [1, 2, 3], more: 0 });
+  expect(fit([1, 2, 3, 4], 3)).toEqual({ shown: [1, 2], more: 2 });
+});
+
+test("car status: level, charging and what to show under it", () => {
+  const ev = car({ stateOfCharge: 34, charge, updatedAt: now, ranges: [{ type: "EV", km: 120 }] });
+  expect(carStatus(ev, now, tz)).toEqual({ level: { label: "Accu", percent: 34 }, charging: true, pluggedIn: true, detail: "80% om 11:30" });
+  const plugged = car({ stateOfCharge: 80, charge: { ...charge, charging: false } });
+  expect(carStatus(plugged, now, tz)).toMatchObject({ charging: false, pluggedIn: true, detail: "aangesloten" });
+  const parked = car({ stateOfCharge: 78, ranges: [{ type: "EV", km: 312 }], updatedAt: "2026-10-16T09:20:00+02:00" });
+  expect(carStatus(parked, now, tz)).toEqual({ level: { label: "Accu", percent: 78 }, charging: false, pluggedIn: false, detail: "312 km · 09:20" });
+  const fuel = car({ type: "GN", fuelLevel: 18 });
+  expect(carStatus(fuel, now, tz)).toMatchObject({ level: { label: "Tank", percent: 18 }, detail: null });
 });

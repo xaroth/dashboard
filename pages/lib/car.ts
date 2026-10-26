@@ -38,6 +38,11 @@ function fastCharging(c: CarCharge): boolean {
   return /fast|quick/i.test(c.status);
 }
 
+/** The level the car charges to: the DC target while fast charging, else the AC one. */
+export function chargeTarget(c: CarCharge): number | null {
+  return fastCharging(c) ? c.targetDC : c.targetAC;
+}
+
 /** When charging ends: the reported minutes count from when the car sent them, not from now. */
 export function chargeDone(c: CarCharge, updatedAt: string | null, now: string): string | null {
   if (!c.charging || !c.remainingMinutes || !updatedAt) return null;
@@ -49,7 +54,7 @@ export function chargeDone(c: CarCharge, updatedAt: string | null, now: string):
 /** "Snelladen tot 80%, vol om 11:15", "Aangesloten", "Niet aangesloten". */
 export function chargeLabel(c: CarCharge, updatedAt: string | null, now: string, timezone: string): string {
   if (!c.charging) return c.pluggedIn ? "Aangesloten" : "Niet aangesloten";
-  const target = fastCharging(c) ? c.targetDC : c.targetAC;
+  const target = chargeTarget(c);
   const done = chargeDone(c, updatedAt, now);
   return `${fastCharging(c) ? "Snelladen" : "Laden"}${target != null ? ` tot ${target}%` : ""}${done ? `, vol om ${formatSeen(done, now, timezone)}` : ""}`;
 }

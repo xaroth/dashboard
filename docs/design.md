@@ -651,7 +651,7 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
 
 ### Home page
 
-`home` (`pages/shared/home.tsx`) is the main page on both devices: one `SummaryRow` per source with its key value, so a failing source is one row, not the page. Rows, in order:
+`home` (`pages/shared/home.tsx`) is the main page on both devices, overridden on the E1001 by its layout's own (below): one `SummaryRow` per source with its key value, so a failing source is one row, not the page. Rows, in order:
 
 | Row | Value | Detail | Queries |
 | --- | --- | --- | --- |
@@ -667,6 +667,23 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
 - A stale row shows `verouderd` and its fetch time; a row without data shows `Geen ...` and the error. A row built from several queries (Energie) shows what it has and is stale when any of them is.
 - The skill queue row picks among characters with data (`sortQueues`); characters with an update error are counted in its detail.
 - A device picks the feed with `home.news: {feed: ...}`.
+
+### E1001 home page
+
+`e1001/home` (`pages/layouts/e1001/home.tsx`) overrides `home` on the E1001: values as pictures, text only for the values themselves and for headlines. In landscape:
+
+| Block | Shows | Queries |
+| --- | --- | --- |
+| right, `HouseScene` | solar power now and today's kWh on the roof; today's kWh taken and returned inside the house, the net flow now under them; the car beside it with its first level as a battery, a bolt and cable while charging, the charge target and end time, else its longest range and when it was seen | `solar.production`, `solar.power`, `p1.actual`, `car.vehicle` |
+| left, top | characters whose skill queue ends within a week, is empty or paused (`skillWarnings`, at most 3): a bar of the time left on a 7-day scale, the training skill, the time left; left out when there are none | `eveonline_skills.queue` |
+| left | headlines of one feed with their age, as many as fit under the skill queues | `rss.items` |
+| bottom | five day cards: weather icon (`weatherIcon`), max / min, chance and amount of rain; the day's events (`dayEvents`), all-day first in gray, at most 6 rows with `+N meer` | `weather.forecast`, `calendar.upcoming` |
+
+- Top right, small (`DeviceStatus`), from the device's last wake: a Wi-Fi icon with its quality (`wifiQuality`, 2 x (RSSI + 100) as a percentage), then a battery icon with its charge (`batteryPercent`), or a bolt and `USB` on USB power; each icon has three arcs or segments, filled from 1, 34 and 67%. Under them, right-aligned, `Updated:` and the render time. The charge comes from a generic single-cell lithium resting-voltage curve, not measured on the reTerminals.
+- A block whose result is stale or failed shows a black "!" (`StaleMark`) instead of a fetch time; so do the agenda when a calendar failed, the skill queues when a character failed and the headlines when the feed failed.
+- After sunset today's card shows the temperature now instead of the day's range. Under 10 W of solar is idle: the roof box turns gray, with a moon once the sun is down.
+- Without a car (`car.vehicle` empty without error) the car is left out. A device picks the car with `home.car: {id: ...}` and the feed with `home.news: {feed: ...}`.
+- In portrait the house goes above the headlines and the bottom shows three days.
 
 ### Queries
 
@@ -731,8 +748,8 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 
 ### Shared code
 
-- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks, today's kWh from a power series), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency), `car.ts` (car names, levels, range, charge, open part and warning labels, key expiry, last seen), `calendar.ts` (agenda days, rows that fit, day labels, event times), `home.ts` (combined row status, the cars row, the most urgent skill queue, the next event). Pure functions; layouts keep derivation here so it is tested.
-- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time), `CarSeen` (when a car was last seen, marked only when its result is stale), `SummaryRow` (a label, a value and a detail line for one source, `verouderd` with the fetch time when stale, `Geen ...` with the error when missing; the label beside the value, or above it with `stacked` for portrait; `prose` for text values such as headlines and lists, smaller and clamped to one line, two when stacked).
+- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, ages, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks, today's kWh from a power series), `weather.ts` (weather code labels and icons, wind direction), `eveonline.ts` (skill levels, skill queues by urgency), `car.ts` (car names, levels, range, charge target and end, open part and warning labels, key expiry, last seen), `calendar.ts` (agenda days, rows that fit, day labels, event times), `device.ts` (Wi-Fi quality from RSSI, battery charge from its voltage), `home.ts` (combined row status, the cars row, the most urgent skill queue, the next event; for the E1001 home: skill queues running out and their bar, events per day, rows that fit, what the house scene shows of a car). Pure functions; layouts keep derivation here so it is tested.
+- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time), `CarSeen` (when a car was last seen, marked only when its result is stale), `HouseScene` (house and car with solar, energy and charge values, as SVG with the values over it), `WeatherIcon` (weather icons as SVG), `StaleMark` (the "!" on stale or missing data), `DeviceStatus` (update time, Wi-Fi and battery in small text), `SummaryRow` (a label, a value and a detail line for one source, `verouderd` with the fetch time when stale, `Geen ...` with the error when missing; the label beside the value, or above it with `stacked` for portrait; `prose` for text values such as headlines and lists, smaller and clamped to one line, two when stacked).
 
 Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
 

@@ -1,0 +1,184 @@
+/* Positions match the drawing in HouseScene.tsx. */
+.scene {
+  position: relative;
+  display: flex;
+}
+
+.drawing {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.unit {
+  margin-left: 3px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.solar,
+.solarIdle {
+  position: absolute;
+  left: 60px;
+  top: 56px;
+  width: 108px;
+  height: 46px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+.solar {
+  background: #000;
+  color: #fff;
+}
+
+.solarIdle {
+  background: #fff;
+  border: 2px solid #aaa;
+  color: #555;
+}
+
+.solarNow {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  line-height: 1;
+}
+
+.solarValue {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.solarDay {
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.taken,
+.returned {
+  position: absolute;
+  left: 44px;
+  width: 140px;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  border: 2px solid #000;
+  border-radius: 4px;
+}
+
+.taken {
+  top: 126px;
+  background: #fff;
+}
+
+.returned {
+  top: 184px;
+  background: #aaa;
+}
+
+.arrow {
+  flex-shrink: 0;
+}
+
+.energy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1;
+}
+
+.energyValue {
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.energyLabel {
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+.flow {
+  position: absolute;
+  left: 34px;
+  top: 241px;
+  width: 160px;
+  text-align: center;
+  font-size: 11px;
+  color: #555;
+}
+
+.battery {
+  position: absolute;
+  left: 218px;
+  top: 120px;
+  display: flex;
+  align-items: center;
+}
+
+.batteryBody {
+  position: relative;
+  width: 90px;
+  height: 38px;
+  padding: 3px;
+  border: 3px solid #000;
+  border-radius: 5px;
+  display: flex;
+}
+
+.batteryFill {
+  height: 100%;
+  background: #aaa;
+  border-radius: 2px;
+}
+
+.batteryText {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 84px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.batteryTip {
+  width: 6px;
+  height: 14px;
+  background: #000;
+  border-radius: 0 2px 2px 0;
+}
+
+.carDetail {
+  position: absolute;
+  left: 208px;
+  top: 162px;
+  width: 122px;
+  text-align: center;
+  font-size: 11px;
+  color: #555;
+  white-space: nowrap;
+}
+
+.staleSolar {
+  left: 158px;
+  top: 48px;
+}
+
+.staleMeter {
+  left: 176px;
+  top: 118px;
+}
+
+.staleCar {
+  left: 302px;
+  top: 112px;
+}

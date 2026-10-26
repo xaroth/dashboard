@@ -24,6 +24,7 @@ devices:
     #   rss.feed: {feed: tech}   # the rss page shows the first feed by name unless set
     #   car.car: {id: ioniq}   # the car page's car, by short name or VIN; the first car without it
     #   home.news: {feed: tech}   # the news row on home, like rss.feed
+    #   home.car: {id: ioniq}   # the car on the E1001 home, like car.car
   living_room:
     mac: "AA:BB:CC:DD:EE:02"
     layout: e1003   # 1872x1404; shared pages are scaled up to fill it
