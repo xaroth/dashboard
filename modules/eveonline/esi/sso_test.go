@@ -343,3 +343,54 @@ func TestLoginWithoutSSO(t *testing.T) {
 		t.Errorf("page does not say SSO is not configured:\n%s", page)
 	}
 }
+
+func TestRemove(t *testing.T) {
+	t.Parallel()
+	alice := url.Values{"character_id": {"90000001"}}
+	revoked := []url.Values{{"token_type_hint": {"refresh_token"}, "token": {"refresh-1"}}}
+	testCases := []struct {
+		name        string
+		method      string
+		form        url.Values
+		opts        []esi.FakeOption
+		wantCode    int
+		wantRemoved bool
+		wantRevokes []url.Values
+	}{
+		{"removes and revokes", http.MethodPost, alice, nil, http.StatusSeeOther, true, revoked},
+		{"revoke fails", http.MethodPost, alice, []esi.FakeOption{esi.ExpectRevoke_Error()}, http.StatusSeeOther, true, revoked},
+		{"GET", http.MethodGet, nil, nil, http.StatusMethodNotAllowed, false, nil},
+		{"unknown character", http.MethodPost, url.Values{"character_id": {"90000002"}}, nil, http.StatusNotFound, false, nil},
+		{"bad id", http.MethodPost, url.Values{"character_id": {"alice"}}, nil, http.StatusBadRequest, false, nil},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fake := newFake(t)
+			set := load(t, esi.FakeSSOConfig, fake, probeRegistration("probe", skillsScope))
+			mux := login(t, set, "skills")
+			fake.Set(t, testCase.opts...)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), testCase.method, "/eveonline_esi/remove", strings.NewReader(testCase.form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			mux.ServeHTTP(rec, req)
+			if rec.Code != testCase.wantCode {
+				t.Fatalf("got %d %s, want %d", rec.Code, rec.Body, testCase.wantCode)
+			}
+			if rec.Code == http.StatusSeeOther && rec.Header().Get("Location") != "/eveonline_esi/" {
+				t.Errorf("got redirect to %q, want /eveonline_esi/", rec.Header().Get("Location"))
+			}
+			want := []esi.Character{{ID: 90000001, Name: "Alice"}}
+			if testCase.wantRemoved {
+				want = []esi.Character{}
+			}
+			if res := set.Resolve(t.Context(), "probe", "characters", nil); !cmp.Equal(res.Value, want) {
+				t.Errorf("characters: got %v %q, want %v", res.Value, res.Error, want)
+			}
+			if diff := cmp.Diff(testCase.wantRevokes, fake.Revokes()); diff != "" {
+				t.Errorf("revoke requests (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

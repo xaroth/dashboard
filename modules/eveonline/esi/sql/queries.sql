@@ -24,3 +24,6 @@ WHERE character_id = sqlc.arg(character_id) AND refresh_token = sqlc.arg(old_ref
 
 -- name: SaveAuthError :exec
 UPDATE eveonline_esi_characters SET auth_error = ?, auth_error_code = ? WHERE character_id = ?;
+
+-- name: DeleteCharacter :execrows
+DELETE FROM eveonline_esi_characters WHERE character_id = ?;

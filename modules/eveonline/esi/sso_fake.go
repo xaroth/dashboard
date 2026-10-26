@@ -15,10 +15,11 @@ import (
 // FakeSSOConfig is an eveonline_esi config with SSO set up for FakeSSO.
 const FakeSSOConfig = `eveonline_esi: {contact: [x], client_id: app, client_secret: shh, callback_url: "http://admin/eveonline_esi/callback"}`
 
-// FakeSSO is the EVE SSO token endpoint, for moduletest.HTTPClient. Login
-// codes are set up with ExpectCharacter. Each token request issues
-// access and refresh tokens numbered n: the access token's signature is
-// "sig-<n>", the refresh token "refresh-<n>". A refresh token works once.
+// FakeSSO is the EVE SSO token and revoke endpoints, for
+// moduletest.HTTPClient. Login codes are set up with ExpectCharacter. Each
+// token request issues access and refresh tokens numbered n: the access
+// token's signature is "sig-<n>", the refresh token "refresh-<n>". A refresh
+// token works once, and not after it is revoked.
 type FakeSSO struct {
 	mu     sync.Mutex
 	logins map[string]fakeGrant
@@ -27,6 +28,8 @@ type FakeSSO struct {
 	issued    int
 	serving   bool
 	forms     []url.Values
+	revokes   []url.Values
+	revokeErr bool
 	during    func()
 }
 
@@ -72,6 +75,11 @@ func ExpectRefresh_Interleaved(fn func()) FakeOption {
 	return func(_ testing.TB, f *FakeSSO) { f.during = fn }
 }
 
+// ExpectRevoke_Error answers revoke requests with a 503.
+func ExpectRevoke_Error() FakeOption {
+	return func(_ testing.TB, f *FakeSSO) { f.revokeErr = true }
+}
+
 // Set applies opts to a serving FakeSSO.
 func (f *FakeSSO) Set(tb testing.TB, opts ...FakeOption) {
 	tb.Helper()
@@ -89,10 +97,23 @@ func (f *FakeSSO) Forms() []url.Values {
 	return slices.Clone(f.forms)
 }
 
+// Revokes returns the forms of the revoke requests.
+func (f *FakeSSO) Revokes() []url.Values {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.revokes)
+}
+
+const (
+	fakeTokenURL  = "login.eveonline.com/v2/oauth/token"
+	fakeRevokeURL = "login.eveonline.com/v2/oauth/revoke"
+)
+
 func (f *FakeSSO) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if r.URL.Host+r.URL.Path != "login.eveonline.com/v2/oauth/token" {
+	path := r.URL.Host + r.URL.Path
+	if path != fakeTokenURL && path != fakeRevokeURL {
 		http.NotFound(w, r)
 		return
 	}
@@ -102,6 +123,15 @@ func (f *FakeSSO) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.ParseForm()
+	if path == fakeRevokeURL {
+		f.revokes = append(f.revokes, r.PostForm)
+		if f.revokeErr {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		delete(f.refreshes, r.PostForm.Get("token"))
+		return
+	}
 	f.forms = append(f.forms, r.PostForm)
 	refresh := r.PostForm.Get("grant_type") == "refresh_token"
 	var g fakeGrant
