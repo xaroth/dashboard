@@ -541,6 +541,8 @@ devices:
 
 A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for one panel size; a page is named `<layout>/<page>`. Shared pages, `pages/shared/<page>.tsx`, are named `<page>` and work on any layout. Each device uses one layout and lists its pages by file name; the first page is the main page. A name resolves to the layout's page first, then the shared one, so a layout can override a shared page for its panel. A page in neither stops startup. Components and helpers live in `pages/components/` and `pages/lib/`.
 
+Layouts `e1001` and `e1003` hold only `logo`, the setup image (see [Protocol](#protocol)), sized for their panel: the mark is centered above the bottom third, where the firmware draws its messages. Every other page is shared.
+
 Shared pages are written in px for the E1001, 800x480 (480x800 in portrait). The renderer scales them by the factor that fits 800x480 into the panel and lays them out in the panel's size divided by it (E1003: scale 2.34, 800x600 landscape, 600x800 portrait), drawn at the panel's resolution with takumi's `devicePixelRatio`; the page's `viewport` prop is that layout size. On the E1001 the scale is 1. Layout pages get the panel's own size, unscaled. takumi resolves `em` against the parent but `rem` against a fixed 16px, not the root element, which is why sizes scale this way rather than through a root font size.
 
 Device names and layouts may contain letters, digits, `-` and `_`; `page` is reserved as a device name (it is taken by the admin route `/preview/page/...`). MACs must be unique.
@@ -647,6 +649,25 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
 - CSS modules: `import styles from "./x.module.css"`; Bun's bundler scopes class names and emits one CSS file per page. Takumi supports a CSS subset: class selectors, flexbox and grid, borders, fonts. Complex selectors and some properties may not render.
 - Inline `<svg>` works: charts are components that emit SVG.
 
+### Home page
+
+`home` (`pages/shared/home.tsx`) is the main page on both devices: one `SummaryRow` per source with its key value, so a failing source is one row, not the page. Rows, in order:
+
+| Row | Value | Detail | Queries |
+| --- | --- | --- | --- |
+| Weer | temperature now, conditions | today's max / min, rain in mm and its chance | `weather.forecast` |
+| Energie | net flow, solar power now | today's kWh taken, returned and from solar | `p1.actual`, `solar.production`, `solar.power` |
+| the car, or Auto's for several | one car: its levels (`levels`) and longest range; several: each car's levels | how each plugged-in car charges (`chargeLabel`) | `car.vehicles` |
+| EVE server | online, players | VIP | `eveonline_status.server` |
+| Skillqueue | the character whose queue needs attention first, time left | end time, characters that failed to update | `eveonline_skills.queue` |
+| Nieuws | latest headline of the first feed | published time, feed title | `rss.items` |
+| Agenda | the next event today or tomorrow that has yet to start, else one under way | day and time (`dayLabel`, `eventTime`), how many more, calendars that failed | `calendar.upcoming` |
+
+- No query returns today's solar energy: the row sums the 15-minute `solar.power` averages since local midnight (`kwhToday`), the current bucket up to `now`. "Taken" is grid import from the meter, not household use.
+- A stale row shows `verouderd` and its fetch time; a row without data shows `Geen ...` and the error. A row built from several queries (Energie) shows what it has and is stale when any of them is.
+- The skill queue row picks among characters with data (`sortQueues`); characters with an update error are counted in its detail.
+- A device picks the feed with `home.news: {feed: ...}`.
+
 ### Queries
 
 Modules expose named, typed queries; this is how stored data reaches pages.
@@ -710,8 +731,8 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 
 ### Shared code
 
-- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency), `car.ts` (car names, levels, range, charge, open part and warning labels, key expiry, last seen), `calendar.ts` (agenda days, rows that fit, day labels, event times). Pure functions; layouts keep derivation here so it is tested.
-- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time), `CarSeen` (when a car was last seen, marked only when its result is stale).
+- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks, today's kWh from a power series), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency), `car.ts` (car names, levels, range, charge, open part and warning labels, key expiry, last seen), `calendar.ts` (agenda days, rows that fit, day labels, event times), `home.ts` (combined row status, the cars row, the most urgent skill queue, the next event). Pure functions; layouts keep derivation here so it is tested.
+- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time), `CarSeen` (when a car was last seen, marked only when its result is stale), `SummaryRow` (a label, a value and a detail line for one source, `verouderd` with the fetch time when stale, `Geen ...` with the error when missing; the label beside the value, or above it with `stacked` for portrait; `prose` for text values such as headlines and lists, smaller and clamped to one line, two when stacked).
 
 Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
 

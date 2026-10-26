@@ -1,4 +1,5 @@
 import type { SeriesPoint } from "../generated/queries";
+import { localDate } from "./calendar";
 import { formatNumber, localClock, round } from "./format";
 
 /** +1,23 kW taken from the net, -0,45 kW returned to it. */
@@ -83,4 +84,23 @@ export function hourTicks(start: number, end: number, timezone: string, every = 
     if (minute === 0 && hour % every === 0) ticks.push(t);
   }
   return ticks;
+}
+
+/**
+ * kWh in the local day of now from a power series in W (average per step).
+ * The bucket holding now counts only up to now.
+ */
+export function kwhToday(points: SeriesPoint[], now: string, timezone: string): number | null {
+  const end = Date.parse(now);
+  const today = localDate(end, timezone);
+  const step = points.length > 1 ? Date.parse(points[1]!.t) - Date.parse(points[0]!.t) : DEFAULT_STEP;
+  let wh = 0;
+  let seen = false;
+  for (const p of points) {
+    const t = Date.parse(p.t);
+    if (p.v == null || t >= end || localDate(t, timezone) !== today) continue;
+    wh += (p.v * Math.min(step, end - t)) / (60 * MINUTE);
+    seen = true;
+  }
+  return seen ? wh / 1000 : null;
 }

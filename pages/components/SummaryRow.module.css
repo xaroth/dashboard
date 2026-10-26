@@ -1,0 +1,90 @@
+.row {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: 16px;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 2px solid #aaa;
+}
+
+.rowStacked {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 2px solid #aaa;
+}
+
+.head {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.headStacked {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.label {
+  font-size: 20px;
+  color: #555;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.value {
+  overflow: hidden;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+  line-clamp: 1;
+  text-overflow: ellipsis;
+}
+
+.prose {
+  overflow: hidden;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  line-clamp: 1;
+  text-overflow: ellipsis;
+}
+
+.proseStacked {
+  overflow: hidden;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  line-clamp: 2;
+  text-overflow: ellipsis;
+}
+
+.missing {
+  font-size: 24px;
+  color: #555;
+}
+
+.detail {
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 1.2;
+  color: #555;
+  line-clamp: 2;
+  text-overflow: ellipsis;
+}
+
+.status {
+  flex-shrink: 0;
+  font-size: 16px;
+  font-weight: 700;
+}

@@ -1,0 +1,16 @@
+/* The E1001 logo at 1872x1404: the bottom third stays clear, the mark scales by the width ratio, 2.34. */
+.screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding-bottom: 468px;
+  background: #fff;
+  color: #000;
+}
+
+.mark {
+  font-size: 168px;
+  font-weight: 700;
+}

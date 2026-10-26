@@ -9,6 +9,7 @@ import {
   formatVolt,
   formatWatt,
   hourTicks,
+  kwhToday,
   panelLabel,
   startedLate,
 } from "./energy";
@@ -114,6 +115,19 @@ test("hour ticks across DST", () => {
   const spring = hourTicks(springStart, springStart + 23 * hour, tz);
   expect(labels(spring)).toEqual(["00:00", "06:00", "12:00", "18:00"]);
   expect(spring[1]! - spring[0]!).toBe(5 * hour);
+});
+
+test("kWh today from a power series, up to now", () => {
+  // Local midnight is 22:00Z; the bucket holding now counts 10 of its 15 minutes.
+  const points = [
+    { t: "2026-10-15T21:45:00Z", v: 4000 },
+    { t: "2026-10-15T22:00:00Z", v: 1000 },
+    { t: "2026-10-15T22:15:00Z", v: null },
+    { t: "2026-10-15T22:30:00Z", v: 600 },
+  ];
+  expect(kwhToday(points, "2026-10-16T00:40:00+02:00", tz)).toBeCloseTo(0.25 + 0.1);
+  expect(kwhToday(points.slice(0, 1), "2026-10-16T00:40:00+02:00", tz)).toBeNull();
+  expect(kwhToday([], "2026-10-16T00:40:00+02:00", tz)).toBeNull();
 });
 
 test("hour ticks in a zone with a half-hour offset", () => {
