@@ -17,13 +17,8 @@ devices:
   hallway:
     mac: "AA:BB:CC:DD:EE:01"
     rotation: 0   # 0, 90, 180 or 270
-<<<<<<< HEAD
     layout: e1001   # pages/layouts/e1001/; pages not in it come from pages/shared/
-    pages: [weather, energy, energy_day, eveonline, eveonline_skills, hello]   # the first is the main page; a button press shows the next
-=======
-    layout: e1001   # pages/layouts/e1001/
     pages: [weather, energy, energy_day, eveonline, eveonline_skills, rss, hello]   # the first is the main page; a button press shows the next
->>>>>>> 4c96855 (feat(rss): module for named RSS/Atom feeds)
     # power: usb   # auto (default) follows USB-Connected, which the reTerminals do not send, and assumes battery
     # params:   # query param overrides, <page>.<data key>
     #   rss.feed: {feed: tech}   # the rss page shows the first feed by name unless set

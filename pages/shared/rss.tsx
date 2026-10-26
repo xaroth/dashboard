@@ -1,6 +1,6 @@
-import { Missing, PageFrame, Updated } from "../../components/PageFrame";
-import { formatDayTime } from "../../lib/format";
-import { query, type PageProps } from "../../lib/page";
+import { Missing, PageFrame, Updated } from "../components/PageFrame";
+import { formatDayTime } from "../lib/format";
+import { query, type PageProps } from "../lib/page";
 import styles from "./rss.module.css";
 
 // A device picks its feed with params: {rss.feed: {feed: tech}}.
