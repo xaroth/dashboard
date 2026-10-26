@@ -28,6 +28,17 @@ type Reading struct {
 	Gas              *float64 `json:"gas"` // m³, null without a gas meter
 	// GasAt is when the gas meter read Gas; DSMR 4 gas meters report hourly.
 	GasAt *time.Time `json:"gasAt"`
+	// GasDate is the gas meter's local date, YYYY-MM-DD; empty without gas.
+	GasDate string `json:"gasDate"`
+}
+
+// gasTime is when the gas meter read Gas: the meter's time when the dongle
+// does not send the gas meter's.
+func (r Reading) gasTime() time.Time {
+	if r.GasAt != nil {
+		return *r.GasAt
+	}
+	return r.MeasuredAt
 }
 
 // Phases holds a value per phase; null for phases the meter does not have.
@@ -108,11 +119,16 @@ func (a actual) reading() (Reading, error) {
 		return Reading{}, err
 	}
 	var gasAt *time.Time
+	var gasDate string
+	if a.GasDelivered != nil {
+		gasDate = at.Format(time.DateOnly)
+	}
 	if a.GasDelivered != nil && a.GasTimestamp != nil {
 		t, err := parseTimestamp(a.GasTimestamp.Value)
 		if err != nil {
 			return Reading{}, fmt.Errorf("gas %w", err)
 		}
+		gasDate = t.Format(time.DateOnly)
 		t = t.UTC()
 		gasAt = &t
 	}
@@ -128,6 +144,7 @@ func (a actual) reading() (Reading, error) {
 		ReturnedTariff2:  a.ReturnedTariff2.Value,
 		Gas:              ptr(a.GasDelivered),
 		GasAt:            gasAt,
+		GasDate:          gasDate,
 	}, nil
 }
 

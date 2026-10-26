@@ -15,5 +15,10 @@ type P1Day struct {
 	DeliveredT2 float64   `json:"deliveredT2"`
 	ReturnedT1  float64   `json:"returnedT1"`
 	ReturnedT2  float64   `json:"returnedT2"`
-	Gas         *float64  `json:"gas"`
+}
+
+type P1GasDay struct {
+	Date   string    `json:"date"`
+	ReadAt time.Time `json:"readAt"`
+	Gas    float64   `json:"gas"`
 }
