@@ -89,8 +89,8 @@ var helloPage = render.PageInfo{Name: "e1001/hello", Data: map[string]render.Que
 	"failing": {Module: "car", Query: "reading"},
 }}
 
-// newFixture serves devices, or a hallway device when nil, with helloPage.
-// opts set up the renderer further.
+// newFixture serves devices, or a hallway device when nil, with helloPage and
+// a shared page, clock. opts set up the renderer further.
 func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRendererOption) *fixture {
 	tb.Helper()
 	if devices == nil {
@@ -124,7 +124,7 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 	if err != nil {
 		tb.Fatalf("modules: %v", err)
 	}
-	renderer := render.NewFakeRenderer(tb, append([]render.FakeRendererOption{render.ExpectPages(helloPage)}, opts...)...)
+	renderer := render.NewFakeRenderer(tb, append([]render.FakeRendererOption{render.ExpectPages(helloPage, render.PageInfo{Name: "clock"})}, opts...)...)
 	pipeline, err := render.NewPipeline(render.PipelineOptions{Renderer: renderer, Resolver: resolver{set: set, loc: loc}, Location: loc, Now: now})
 	if err != nil {
 		tb.Fatalf("pipeline: %v", err)
@@ -240,11 +240,13 @@ func TestIndexPanel(t *testing.T) {
 				t.Errorf("got %d selected panels, want 1", n)
 			}
 			// One image per page, on the selected panel only.
-			if got, want := strings.Count(body, `<img src="/preview/page/`), 1; got != want {
+			if got, want := strings.Count(body, `<img src="/preview/page/`), 2; got != want {
 				t.Errorf("got %d page previews, want %d", got, want)
 			}
-			if want := `src="/preview/page/e1001/hello.png?` + testCase.wantImage + `"`; !strings.Contains(body, want) {
-				t.Errorf("got index without %s, want it", want)
+			for _, page := range []string{"e1001/hello", "clock"} {
+				if want := `src="/preview/page/` + page + `.png?` + testCase.wantImage + `"`; !strings.Contains(body, want) {
+					t.Errorf("got index without %s, want it", want)
+				}
 			}
 		})
 	}
@@ -328,6 +330,8 @@ func TestPreviewPNG(t *testing.T) {
 		{"device with model", "/preview/hallway/e1001/hello.png?model=reterminal_e1003", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "hallway", Model: "reterminal_e1003", Rotation: 90}},
 		{"panel defaults", "/preview/page/e1001/hello.png", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "preview", Model: "reterminal_e1001"}},
 		{"panel", "/preview/page/e1001/hello.png?model=reterminal_e1003&rotation=270", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "preview", Model: "reterminal_e1003", Rotation: 270}},
+		{"device shared", "/preview/hallway/clock.png", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "hallway", Model: "reterminal_e1001", Rotation: 90}},
+		{"panel shared", "/preview/page/clock.png", nil, http.StatusOK, "image/png", render.DeviceProps{Name: "preview", Model: "reterminal_e1001"}},
 		{"unknown device", "/preview/garage/e1001/hello.png", nil, http.StatusNotFound, textType, render.DeviceProps{}},
 		{"not png", "/preview/hallway/e1001/hello.jpg", nil, http.StatusNotFound, textType, render.DeviceProps{}},
 		{"bad rotation", "/preview/page/e1001/hello.png?rotation=45", nil, http.StatusBadRequest, textType, render.DeviceProps{}},
@@ -375,6 +379,7 @@ func TestPreviewProps(t *testing.T) {
 			Now:      "2026-10-15T20:00:00+02:00",
 			Timezone: "Europe/Amsterdam",
 		}},
+		{"shared", "/preview/hallway/clock/props.json", nil, http.StatusOK, nil},
 		{"unknown device", "/preview/garage/e1001/hello/props.json", nil, http.StatusNotFound, nil},
 		{"unknown page", "/preview/hallway/e1001/nope/props.json", nil, http.StatusNotFound, nil},
 		{"pages error", "/preview/hallway/e1001/hello/props.json", []render.FakeRendererOption{render.ExpectDescribe_Error(errors.New("bundle broken"))}, http.StatusInternalServerError, nil},

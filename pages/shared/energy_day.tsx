@@ -1,9 +1,9 @@
-import { EnergyChart } from "../../components/EnergyChart";
-import { Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../../components/PageFrame";
-import { linear } from "../../lib/chart";
-import { chartDomain, formatKwAxis, hourTicks } from "../../lib/energy";
-import { formatTime } from "../../lib/format";
-import { query, type PageProps } from "../../lib/page";
+import { EnergyChart } from "../components/EnergyChart";
+import { Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../components/PageFrame";
+import { linear } from "../lib/chart";
+import { chartDomain, formatKwAxis, hourTicks } from "../lib/energy";
+import { formatTime } from "../lib/format";
+import { query, type PageProps } from "../lib/page";
 import styles from "./energy_day.module.css";
 
 export const data = {

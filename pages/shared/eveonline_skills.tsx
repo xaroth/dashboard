@@ -1,6 +1,6 @@
-import { HEADER_HEIGHT, Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../../components/PageFrame";
-import { SkillQueues } from "../../components/SkillQueues";
-import { query, type PageProps } from "../../lib/page";
+import { HEADER_HEIGHT, Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../components/PageFrame";
+import { SkillQueues } from "../components/SkillQueues";
+import { query, type PageProps } from "../lib/page";
 
 export const data = {
   queues: query("eveonline_skills.queue", { skills: 20 }),

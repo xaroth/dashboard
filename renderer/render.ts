@@ -6,15 +6,34 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { render } from "takumi-js";
 import type { Page, RenderProps } from "./bundle";
 
+type Viewport = RenderProps["viewport"];
+
+/**
+ * The viewport page lays out in, and the scale from it to viewport. Shared
+ * pages are written for the E1001's 800x480 and scaled to fit the panel, so
+ * one set of px sizes works on both panels; layout pages get the panel as is.
+ */
+export function layout(page: Page, viewport: Viewport): { viewport: Viewport; scale: number } {
+  if (!page.shared) return { viewport, scale: 1 };
+  const [w, h] = viewport.portrait ? [480, 800] : [800, 480];
+  const scale = Math.min(viewport.width / w, viewport.height / h);
+  return {
+    viewport: { ...viewport, width: Math.round(viewport.width / scale), height: Math.round(viewport.height / scale) },
+    scale,
+  };
+}
+
 /** Renders page with props, at props.viewport. */
 export async function renderPage(
   renderer: Renderer,
   page: Page,
   props: RenderProps,
 ): Promise<Uint8Array> {
-  const { viewport } = props;
-  const element = createElement(page.component, props);
-  return render(element, { renderer, width: viewport.width, height: viewport.height, format: "png", css: page.css });
+  const { width, height } = props.viewport;
+  const { viewport, scale } = layout(page, props.viewport);
+  const element = createElement(page.component, { ...props, viewport });
+  // takumi lays out in px of width / devicePixelRatio and draws at full resolution.
+  return render(element, { renderer, width, height, devicePixelRatio: scale, format: "png", css: page.css });
 }
 
 // Takumi's defaults: border-box sizing, no margins, and its built-in font.
@@ -37,15 +56,16 @@ body { overflow: hidden; font-family: Geist, system-ui, sans-serif; }`;
  * not exactly like, a browser; renderPage is what the device shows.
  */
 export function renderHTML(page: Page, props: RenderProps): string {
-  const { width, height } = props.viewport;
-  const markup = renderToStaticMarkup(createElement(page.component, props));
+  const { viewport, scale } = layout(page, props.viewport);
+  const { width, height } = viewport;
+  const markup = renderToStaticMarkup(createElement(page.component, { ...props, viewport }));
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <title>${page.name}</title>
 <style>${base()}
-body { width: ${width}px; height: ${height}px; }</style>
+body { width: ${width}px; height: ${height}px;${scale !== 1 ? ` zoom: ${scale};` : ""} }</style>
 <style>${page.css}</style>
 </head>
 <body>${markup}</body>

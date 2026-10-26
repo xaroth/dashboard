@@ -3,15 +3,18 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/xaroth/dashboard/device"
+	"github.com/xaroth/dashboard/render"
 )
 
 type Device struct {
 	// MAC is normalized by parseConfig, as device.NormalizeMAC returns it.
 	MAC      string `yaml:"mac"`
 	Rotation int    `yaml:"rotation"`
-	// Layout is a folder under pages/layouts/; Pages are files in it.
+	// Layout is a folder under pages/layouts/. Pages are files in it or,
+	// when it has none of that name, in pages/shared/.
 	Layout string   `yaml:"layout"`
 	Pages  []string `yaml:"pages"`
 	// Power is auto (the USB-Connected header, else battery), usb or battery.
@@ -26,20 +29,40 @@ const logoPage = "logo"
 // Device and layout names appear in URL paths.
 var deviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// pages returns the device's pages as page names, "<layout>/<page>".
-func (d Device) pages() []string {
+// resolve returns the name of the page a device page refers to: the layout's
+// "<layout>/<page>" if pages has it, else the shared "<page>".
+func (d Device) resolve(pages map[string]render.PageInfo, page string) (string, bool) {
+	if name := d.Layout + "/" + page; hasPage(pages, name) {
+		return name, true
+	}
+	// A slash would reach into another layout.
+	if !strings.Contains(page, "/") && hasPage(pages, page) {
+		return page, true
+	}
+	return "", false
+}
+
+func hasPage(pages map[string]render.PageInfo, name string) bool {
+	_, ok := pages[name]
+	return ok
+}
+
+// pages returns the device's pages as page names, resolved in pages.
+func (d Device) pages(pages map[string]render.PageInfo) []string {
 	out := make([]string, len(d.Pages))
 	for i, p := range d.Pages {
-		out[i] = d.Layout + "/" + p
+		out[i], _ = d.resolve(pages, p)
 	}
 	return out
 }
 
-// params returns Params keyed by page name, "<layout>/<page>.<key>".
-func (d Device) params() map[string]map[string]any {
+// params returns Params keyed by page name and key, "<name>.<key>".
+func (d Device) params(pages map[string]render.PageInfo) map[string]map[string]any {
 	out := make(map[string]map[string]any, len(d.Params))
 	for ref, v := range d.Params {
-		out[d.Layout+"/"+ref] = v
+		page, key, _ := strings.Cut(ref, ".")
+		name, _ := d.resolve(pages, page)
+		out[name+"."+key] = v
 	}
 	return out
 }

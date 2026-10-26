@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/device"
+	"github.com/xaroth/dashboard/render"
 )
 
 func env(vars map[string]string) func(string) (string, bool) {
@@ -159,5 +160,35 @@ func TestParseConfigErrors(t *testing.T) {
 				t.Errorf("got %v, want error containing %q", err, testCase.want)
 			}
 		})
+	}
+}
+
+func TestDeviceResolve(t *testing.T) {
+	t.Parallel()
+	pages := map[string]render.PageInfo{"e1001/weather": {}, "weather": {}, "energy": {}, "e1003/clock": {}}
+	d := Device{Layout: "e1001", Params: map[string]map[string]any{"weather.forecast": {"hours": 2}, "energy.flow": {}}}
+	testCases := []struct {
+		page   string
+		want   string
+		wantOK bool
+	}{
+		{"weather", "e1001/weather", true}, // the layout's own wins over the shared one
+		{"energy", "energy", true},
+		{"clock", "", false}, // only in another layout
+		{"e1003/clock", "", false},
+		{"nope", "", false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.page, func(t *testing.T) {
+			t.Parallel()
+			got, ok := d.resolve(pages, testCase.page)
+			if got != testCase.want || ok != testCase.wantOK {
+				t.Errorf("got %q, %v, want %q, %v", got, ok, testCase.want, testCase.wantOK)
+			}
+		})
+	}
+	want := map[string]map[string]any{"e1001/weather.forecast": {"hours": 2}, "energy.flow": {}}
+	if diff := cmp.Diff(want, d.params(pages)); diff != "" {
+		t.Errorf("params (-want +got):\n%s", diff)
 	}
 }

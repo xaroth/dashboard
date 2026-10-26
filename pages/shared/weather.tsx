@@ -1,8 +1,8 @@
-import { LineChart } from "../../components/LineChart";
-import { Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../../components/PageFrame";
-import { formatDayShort, formatMillimeters, formatTemperature, formatTime } from "../../lib/format";
-import { query, type PageProps } from "../../lib/page";
-import { weatherLabel, windDirection } from "../../lib/weather";
+import { LineChart } from "../components/LineChart";
+import { Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../components/PageFrame";
+import { formatDayShort, formatMillimeters, formatTemperature, formatTime } from "../lib/format";
+import { query, type PageProps } from "../lib/page";
+import { weatherLabel, windDirection } from "../lib/weather";
 import styles from "./weather.module.css";
 
 export const data = {

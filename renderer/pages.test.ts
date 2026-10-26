@@ -27,7 +27,7 @@ describe("every page renders", () => {
 });
 
 test("every page is bundled", () => {
-  const files = [...new Glob("layouts/*/*.tsx").scanSync({ cwd: pagesDir })];
+  const files = ["layouts/*/*.tsx", "shared/*.tsx"].flatMap((p) => [...new Glob(p).scanSync({ cwd: pagesDir })]);
   expect(pages.size).toBe(files.length);
 });
 
