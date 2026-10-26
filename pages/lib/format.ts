@@ -83,3 +83,11 @@ export function localClock(t: number, timezone: string): { hour: number; minute:
   }
   return { hour, minute };
 }
+
+/** How long ago iso was, in its largest unit: 12 m, 3 u, 2 d. */
+export function formatAge(iso: string, now: string): string {
+  const minutes = Math.max(0, Math.floor((Date.parse(now) - Date.parse(iso)) / 60_000));
+  if (minutes < 60) return `${minutes} m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} u`;
+  return `${Math.floor(minutes / 1440)} d`;
+}

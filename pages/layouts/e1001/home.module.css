@@ -1,0 +1,283 @@
+.screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 8px 10px;
+  background: #fff;
+  color: #000;
+}
+
+/* Top right, over the empty sky right of the roof. */
+.device {
+  right: 10px;
+  top: 6px;
+}
+
+.top {
+  display: flex;
+  gap: 12px;
+}
+
+.topPortrait {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+}
+
+.left {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+/* Skill queues running out: 22 px per row (SKILL_HEIGHT). */
+.skills {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  border: 2px solid #000;
+  border-radius: 6px;
+}
+
+.skill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+  font-size: 15px;
+}
+
+.skillName {
+  width: 120px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track {
+  display: flex;
+  flex: 1;
+  height: 10px;
+  border: 1.5px solid #000;
+  border-radius: 2px;
+}
+
+.trackFill {
+  height: 100%;
+  background: #000;
+}
+
+.trackFillPaused {
+  height: 100%;
+  background: #aaa;
+}
+
+.skillNow {
+  width: 128px;
+  font-size: 13px;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skillLeft {
+  width: 62px;
+  text-align: right;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.staleSkills {
+  right: -8px;
+  top: -8px;
+}
+
+/* Headlines: 24 px per row (NEWS_HEIGHT). */
+.news {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.newsHead {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 18px;
+  font-size: 13px;
+  color: #555;
+}
+
+.newsTitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.staleNews {
+  right: 0;
+  top: 0;
+}
+
+.newsItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  font-size: 15px;
+  border-bottom: 1px solid #aaa;
+}
+
+.newsItemTitle {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.newsAge {
+  width: 34px;
+  text-align: right;
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+
+.days {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-height: 0;
+}
+
+.day {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  border: 2px solid #000;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dayHead,
+.dayHeadToday {
+  display: flex;
+  justify-content: space-between;
+  padding: 1px 6px;
+  font-size: 14px;
+  font-weight: 700;
+  border-bottom: 2px solid #000;
+}
+
+.dayHeadToday {
+  background: #000;
+  color: #fff;
+}
+
+.weather {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 42px;
+  padding: 0 6px;
+}
+
+.temps {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.tempMax {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.tempMin {
+  font-size: 14px;
+  color: #555;
+}
+
+.noWeather {
+  font-size: 18px;
+  color: #555;
+}
+
+.rain {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 1.15;
+}
+
+/* Over the icon's top left corner, clear of the temperatures and rain. */
+.staleWeather {
+  left: 1px;
+  top: 1px;
+}
+
+.events {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+  padding: 3px 5px 4px;
+  border-top: 1px solid #aaa;
+}
+
+.event,
+.eventAllDay {
+  display: flex;
+  gap: 5px;
+  font-size: 13px;
+  line-height: 1.15;
+}
+
+.eventAllDay {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #aaa;
+  font-weight: 600;
+}
+
+.eventTime {
+  min-width: 38px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.eventTitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.more {
+  font-size: 12px;
+  color: #555;
+}
+
+.none {
+  font-size: 12px;
+  color: #aaa;
+}
+
+.staleAgenda {
+  right: 4px;
+  bottom: 4px;
+}

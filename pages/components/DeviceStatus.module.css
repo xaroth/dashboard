@@ -1,0 +1,15 @@
+.status {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #555;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}

@@ -40,3 +40,17 @@ const directions = ["N", "NO", "O", "ZO", "Z", "ZW", "W", "NW"];
 export function windDirection(degrees: number): string {
   return directions[Math.round((((degrees % 360) + 360) % 360) / 45) % 8]!;
 }
+
+export type WeatherIconName = "sun" | "moon" | "partly" | "partlyNight" | "cloud" | "fog" | "rain" | "snow" | "thunder";
+
+/** The icon for a WMO code; clear and mostly clear skies show the moon at night. */
+export function weatherIcon(code: number, isDay = true): WeatherIconName {
+  if (code <= 1) return isDay ? "sun" : "moon";
+  if (code === 2) return isDay ? "partly" : "partlyNight";
+  if (code === 3) return "cloud";
+  if (code === 45 || code === 48) return "fog";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "snow";
+  if (code >= 95) return "thunder";
+  if (code >= 51) return "rain";
+  return "cloud";
+}
