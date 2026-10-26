@@ -191,6 +191,7 @@ func TestLoadErrors(t *testing.T) {
 		{"unknown schedule key", "test: {schedule: {every: 1m}}", "every"},
 		{"negative interval", "test: {schedule: {update_interval: -1m}}", "positive"},
 		{"negative stale after", "test: {schedule: {stale_after: -1m}}", "positive"},
+		{"interval too short", "test: {schedule: {update_interval: 1s}}", "at least 1m"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -273,6 +274,42 @@ func TestLoadOptions(t *testing.T) {
 			testCase.mutate(&o)
 			if _, err := module.Load(t.Context(), o); err == nil {
 				t.Error("got no error, want one")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsNames(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+		regs []module.Registration
+		want string
+	}{
+		{"registered twice", []module.Registration{greeterRegistration("a"), greeterRegistration("a")}, "module a: registered twice"},
+		{"module owner", []module.Registration{greeterRegistration("storage")}, `module name "storage" is reserved`},
+		{"module reserved owner", []module.Registration{greeterRegistration("device")}, `module name "device" is reserved`},
+		{"shared reserved owner", []module.Registration{greeterRegistration("a", module.WithShared(module.DefineShared("device",
+			func() *greetingConfig { return &greetingConfig{} },
+			func(context.Context, *greetingConfig, []string, module.Env) (int, error) { return 0, nil })))}, `shared name "device" is reserved`},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			db, err := storage.Open(t.Context(), t.TempDir())
+			if err != nil {
+				t.Fatalf("storage: %v", err)
+			}
+			defer db.Close()
+			_, err = module.Load(t.Context(), module.Options{
+				Registrations: testCase.regs,
+				Migrator:      db,
+				Writer:        db.Writer,
+				Reader:        db.Reader,
+				Reserved:      []string{"device"},
+			})
+			if err == nil || err.Error() != testCase.want {
+				t.Errorf("got %v, want %q", err, testCase.want)
 			}
 		})
 	}

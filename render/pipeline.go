@@ -77,20 +77,29 @@ type Pipeline struct {
 	tracer         trace.Tracer
 }
 
-// PipelineOptions are what NewPipeline needs.
+// PipelineOptions are what NewPipeline needs. Renderer, Resolver and
+// Location are required.
 type PipelineOptions struct {
 	Renderer Renderer
 	Resolver Resolver
+	// Location is the time zone pages show.
 	Location *time.Location
-	Now      func() time.Time
+	Now      func() time.Time // nil is time.Now
 	// Metrics registers the render metrics; nil records them nowhere.
 	Metrics prometheus.Registerer
 	// Tracing starts the render spans; nil is a no-op.
 	Tracing trace.TracerProvider
 }
 
-// NewPipeline returns a pipeline, or an error if its metrics cannot be registered.
+// NewPipeline returns a pipeline, or an error if an option is missing or its
+// metrics cannot be registered.
 func NewPipeline(o PipelineOptions) (*Pipeline, error) {
+	if o.Renderer == nil || o.Resolver == nil || o.Location == nil {
+		return nil, errors.New("render: PipelineOptions need a Renderer, Resolver and Location")
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
 	h, err := newRenderDuration(o.Metrics)
 	if err != nil {
 		return nil, fmt.Errorf("render metrics: %w", err)

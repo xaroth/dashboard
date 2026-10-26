@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -105,7 +106,11 @@ const maxPending = 32
 // DefaultModel is assumed for a device that has not reported its model yet.
 const DefaultModel = "reterminal_e1001"
 
-// Options are the dependencies of Devices.
+// MigrationOwner owns the device tables' migrations.
+const MigrationOwner = "device"
+
+// Options are the dependencies of Devices. Pipeline, Store, DB, Migrator and
+// Schedule.Location are required.
 type Options struct {
 	Devices  []Config
 	Pipeline Pipeline
@@ -116,8 +121,8 @@ type Options struct {
 	// PublicURL is the base of image_url, as the devices reach this service.
 	PublicURL string
 	Schedule  Schedule
-	Log       *slog.Logger
-	Now       func() time.Time
+	Log       *slog.Logger     // nil discards
+	Now       func() time.Time // nil is time.Now
 	// Metrics registers the wake metrics; nil records them nowhere.
 	Metrics prometheus.Registerer
 }
@@ -125,6 +130,15 @@ type Options struct {
 // Load validates the options, runs the device migrations and returns the
 // devices. Invalid options or a failing migration are an error.
 func Load(ctx context.Context, o Options) (*Devices, error) {
+	if o.Pipeline == nil || o.Store == nil || o.DB == nil || o.Migrator == nil || o.Schedule.Location == nil {
+		return nil, errors.New("device: Options need a Pipeline, Store, DB, Migrator and Schedule.Location")
+	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
 	if err := validate(o); err != nil {
 		return nil, err
 	}
@@ -132,7 +146,7 @@ func Load(ctx context.Context, o Options) (*Devices, error) {
 	if err != nil {
 		return nil, fmt.Errorf("device metrics: %w", err)
 	}
-	if err := o.Migrator.Migrate(ctx, "device", migrations, "sql/migrations"); err != nil {
+	if err := o.Migrator.Migrate(ctx, MigrationOwner, migrations, "sql/migrations"); err != nil {
 		return nil, fmt.Errorf("device migrations: %w", err)
 	}
 	d := &Devices{

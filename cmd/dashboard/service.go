@@ -114,6 +114,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Registrations: s.regs,
 		Configs:       moduleConfigs,
 		Migrator:      s.db,
+		Reserved:      []string{device.MigrationOwner},
 		Writer:        s.db.Writer,
 		Reader:        s.db.Reader,
 		Log:           log,
