@@ -279,13 +279,18 @@ func TestFlushFailureKeepsSamples(t *testing.T) {
 }
 
 // TestFlushFailureCapsBuffer keeps a day of samples per series through a
-// failed write and drops the oldest.
+// failed write and drops the oldest of the series over it only.
 func TestFlushFailureCapsBuffer(t *testing.T) {
 	t.Parallel()
 	start := at("2026-07-01 00:00:00")
 	c := &clock{start.Add(72 * time.Hour)}
 	s := open(t, c)
-	// Two declared series: room for 2*1440 samples.
+	// The slow series' samples are the oldest in the buffer.
+	for i := range 3 {
+		add(t, s, "meter", start.Add(time.Duration(i)*time.Minute), 5)
+	}
+	// More than both series' share together, so a shared cap would drop
+	// the slow series' samples too.
 	const n = 2*24*60 + 10
 	for i := range n {
 		add(t, s, "power", start.Add(time.Duration(i)*time.Minute), 1)
@@ -298,10 +303,14 @@ func TestFlushFailureCapsBuffer(t *testing.T) {
 	if err := s.Flush(t.Context()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	got := values(query(t, s, "power", start, start.Add(20*time.Minute), time.Minute))
-	want := []float64{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("oldest samples (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]float64{5, 5, 5}, values(query(t, s, "meter", start, start.Add(3*time.Minute), time.Minute))); diff != "" {
+		t.Errorf("slow series (-want +got):\n%s", diff)
+	}
+	// power keeps its newest 1440 samples.
+	first := start.Add((n - 24*60) * time.Minute)
+	got := values(query(t, s, "power", first.Add(-2*time.Minute), first.Add(2*time.Minute), time.Minute))
+	if diff := cmp.Diff([]float64{-1, -1, 1, 1}, got); diff != "" {
+		t.Errorf("around the oldest kept sample (-want +got):\n%s", diff)
 	}
 	last := start.Add((n - 1) * time.Minute)
 	if got := values(query(t, s, "power", last, last.Add(time.Minute), time.Minute)); got[0] != 1 {
