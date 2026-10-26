@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { CalendarEvent } from "../generated/queries";
-import { agendaDays, dayLabel, eventTime, fitRows, localDate } from "./calendar";
+import { agendaDays, dayEvents, dayLabel, eventTime, fit, fitRows, isWeekend, localDate, shortDate } from "./calendar";
 
 const tz = "Europe/Amsterdam";
 const now = "2026-10-22T08:00:00+02:00";
@@ -63,4 +63,38 @@ test("event times", () => {
   expect(eventTime(event("a", "2026-10-21T20:00:00+02:00", "2026-10-23T09:00:00+02:00"), day, tz)).toBe("Hele dag");
   expect(eventTime(event("a", "2026-10-22T22:00:00+02:00", "2026-10-23T06:00:00+02:00"), day, tz)).toBe("22:00 - ...");
   expect(eventTime(event("a", "2026-10-22T22:00:00+02:00", "2026-10-23T00:00:00+02:00"), day, tz)).toBe("22:00 - 00:00");
+});
+
+test("events on a day: filling the day first, ended ones left out", () => {
+  const at = "2026-10-16T10:30:00+02:00";
+  const holiday = event("Vakantie", "2026-10-10T00:00:00+02:00", "2026-10-19T00:00:00+02:00", true);
+  const standup = { ...event("Standup", "2026-10-16T09:30:00+02:00", "2026-10-16T09:45:00+02:00"), calendar: "work" };
+  const dentist = event("Tandarts", "2026-10-16T14:00:00+02:00", "2026-10-16T14:45:00+02:00");
+  const night = event("Nachtdienst", "2026-10-16T22:00:00+02:00", "2026-10-17T07:00:00+02:00");
+  const trip = event("Reis", "2026-10-15T08:00:00+02:00", "2026-10-18T20:00:00+02:00");
+  const all = [holiday, standup, dentist, night, trip];
+  const e = (title: string, time: string | null, before: boolean, after: boolean) => ({ title, calendar: "family", time, before, after });
+  expect(dayEvents(all, "2026-10-16", at, tz)).toEqual([
+    e("Vakantie", null, true, true),
+    e("Reis", null, true, true),
+    e("Tandarts", "14:00", false, false),
+    e("Nachtdienst", "22:00", false, true),
+  ]);
+  expect(dayEvents(all, "2026-10-17", at, tz)).toEqual([e("Vakantie", null, true, true), e("Reis", null, true, true), e("Nachtdienst", "tot 07:00", true, false)]);
+  expect(dayEvents(all, "2026-10-18", at, tz)).toEqual([e("Vakantie", null, true, false), e("Reis", "tot 20:00", true, false)]);
+  expect(dayEvents([{ ...dentist, title: "" }], "2026-10-16", at, tz)).toEqual([e("(geen titel)", "14:00", false, false)]);
+  expect(dayEvents([{ ...standup, start: "2026-10-16T11:00:00+02:00", end: "2026-10-16T11:15:00+02:00" }], "2026-10-16", at, tz)[0]?.calendar).toBe("work");
+  expect(dayEvents([holiday], "2026-10-19", at, tz)).toEqual([]);
+});
+
+test("fit: the last row counts what is left out", () => {
+  expect(fit([1, 2, 3], 3)).toEqual({ shown: [1, 2, 3], more: 0 });
+  expect(fit([1, 2, 3, 4], 3)).toEqual({ shown: [1, 2], more: 2 });
+});
+
+test("short dates and weekends", () => {
+  expect(shortDate("2026-11-01")).toBe("zo 1 nov");
+  expect(isWeekend("2026-10-31")).toBe(true);
+  expect(isWeekend("2026-11-01")).toBe(true);
+  expect(isWeekend("2026-11-02")).toBe(false);
 });

@@ -11,6 +11,7 @@ export interface CalendarEvent {
 
 export interface CalendarStatus {
   name: string;
+  muted: boolean;
   fetchedAt: string | null;
   error: string;
 }

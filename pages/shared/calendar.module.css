@@ -1,67 +1,121 @@
-.agenda {
+.title {
+  font-weight: 700;
+  color: #000;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.grid {
+  display: grid;
+  flex: 1;
+  gap: 6px; /* CELL_GAP */
+  min-height: 0;
+}
+
+.cell {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border: 2px solid #000;
+  border-radius: 6px;
   overflow: hidden;
 }
 
-.day {
-  display: flex;
-  flex-direction: column;
-}
-
-.date,
-.event {
+/* 20 px plus a 2 px rule, in CELL_CHROME. */
+.head,
+.headToday,
+.headWeekend {
   display: flex;
   align-items: center;
-  box-sizing: border-box;
-  height: 38px; /* ROW */
-  gap: 16px;
+  justify-content: space-between;
+  height: 22px;
+  padding: 0 5px;
+  border-bottom: 2px solid #000;
+  font-size: 13px;
+  font-weight: 700;
   white-space: nowrap;
 }
 
-.date {
-  font-size: 24px;
-  font-weight: 700;
-  border-bottom: 2px solid #000;
+.headToday {
+  background: #000;
+  color: #fff;
 }
 
-.event {
-  font-size: 22px;
+.headWeekend {
+  background: #aaa;
+}
+
+.weather {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.events {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 0 2px;
+}
+
+/* Each 15 px plus the 1 px gap: EVENT_ROW. */
+.bar,
+.barQuiet {
+  height: 15px;
+  padding: 0 4px;
+  background: #aaa;
+  font-size: 12px;
+  line-height: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar {
+  font-weight: 600;
+}
+
+.barQuiet {
+  font-weight: 500;
+  color: #555;
+}
+
+.event,
+.eventMuted {
+  display: flex;
+  gap: 4px;
+  height: 15px;
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.eventMuted {
+  color: #555;
 }
 
 .time {
   flex-shrink: 0;
-  width: 150px;
-  color: #555;
+  min-width: 33px;
+  font-weight: 700;
 }
 
-.title {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  flex: 1;
-  min-width: 0;
+.eventTitle {
   overflow: hidden;
-  font-weight: 600;
+  text-overflow: ellipsis;
 }
 
-.location {
-  font-size: 18px;
-  font-weight: 400;
+.more {
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 15px;
   color: #555;
-}
-
-.calendar {
-  flex-shrink: 0;
-  font-size: 18px;
-  color: #555;
-}
-
-.errors {
-  height: 26px; /* ERROR_ROW */
-  font-size: 18px;
-  color: #555;
-  white-space: nowrap;
-  overflow: hidden;
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { CarVehicle, EveonlineSkillsCharacter } from "../generated/queries";
-import { carStatus, carsSummary, combine, dayEvents, fit, nextEvent, skillWarnings, soonestQueue, weekFraction } from "./home";
+import { carStatus, carsSummary, combine, nextEvent, skillWarnings, soonestQueue, weekFraction } from "./home";
 
 test("combined status: stale if any is, oldest fetch, first error", () => {
   const fresh = { fetchedAt: "2026-10-16T10:25:00+02:00", stale: false, error: null };
@@ -82,37 +82,6 @@ test("skill warnings: queues ending within a week, empty or paused, most urgent 
   expect(weekFraction(soon, now)).toBeCloseTo((13.5 + 2) / 168, 3);
   expect(weekFraction(far, now)).toBe(1);
   expect(weekFraction(paused, now)).toBe(0);
-});
-
-test("events on a day: filling the day first, ended ones left out", () => {
-  const holiday = event("Vakantie", "2026-10-10T00:00:00+02:00", "2026-10-19T00:00:00+02:00", true);
-  const standup = event("Standup", "2026-10-16T09:30:00+02:00", "2026-10-16T09:45:00+02:00");
-  const dentist = event("Tandarts", "2026-10-16T14:00:00+02:00", "2026-10-16T14:45:00+02:00");
-  const night = event("Nachtdienst", "2026-10-16T22:00:00+02:00", "2026-10-17T07:00:00+02:00");
-  const trip = event("Reis", "2026-10-15T08:00:00+02:00", "2026-10-18T20:00:00+02:00");
-  const all = [holiday, standup, dentist, night, trip];
-  expect(dayEvents(all, "2026-10-16", now, tz)).toEqual([
-    { title: "Vakantie", time: null },
-    { title: "Reis", time: null },
-    { title: "Tandarts", time: "14:00" },
-    { title: "Nachtdienst", time: "22:00" },
-  ]);
-  expect(dayEvents(all, "2026-10-17", now, tz)).toEqual([
-    { title: "Vakantie", time: null },
-    { title: "Reis", time: null },
-    { title: "Nachtdienst", time: "tot 07:00" },
-  ]);
-  expect(dayEvents(all, "2026-10-18", now, tz)).toEqual([
-    { title: "Vakantie", time: null },
-    { title: "Reis", time: "tot 20:00" },
-  ]);
-  expect(dayEvents([{ ...dentist, title: "" }], "2026-10-16", now, tz)).toEqual([{ title: "(geen titel)", time: "14:00" }]);
-  expect(dayEvents([holiday], "2026-10-19", now, tz)).toEqual([]);
-});
-
-test("fit: the last row counts what is left out", () => {
-  expect(fit([1, 2, 3], 3)).toEqual({ shown: [1, 2, 3], more: 0 });
-  expect(fit([1, 2, 3, 4], 3)).toEqual({ shown: [1, 2], more: 2 });
 });
 
 test("car status: level, charging and what to show under it", () => {

@@ -26,6 +26,8 @@ type config struct {
 type calendarConfig struct {
 	// URL is a credential for private feeds: it is never logged or shown.
 	URL string `yaml:"url"`
+	// Muted calendars are shown less prominently, such as work next to family.
+	Muted bool `yaml:"muted"`
 }
 
 type calendar struct {
@@ -225,10 +227,11 @@ type Event struct {
 	Location string    `json:"location"`
 }
 
-// Status is a calendar's last fetch. FetchedAt is null before the first
-// success; Error is why the latest fetch failed.
+// Status is a calendar's last fetch, and whether it is muted. FetchedAt is
+// null before the first success; Error is why the latest fetch failed.
 type Status struct {
 	Name      string     `json:"name"`
+	Muted     bool       `json:"muted"`
 	FetchedAt *time.Time `json:"fetchedAt"`
 	Error     string     `json:"error"`
 }
@@ -267,7 +270,7 @@ func (m *calendar) upcoming(ctx context.Context, q module.Query, p upcomingParam
 	end := time.Date(y, mo, d+cmp.Or(p.Days, defaultDays), 0, 0, 0, 0, q.Location)
 	out := &Upcoming{Events: []Event{}, Calendars: make([]Status, 0, len(names))}
 	for _, name := range names {
-		st := Status{Name: name}
+		st := Status{Name: name, Muted: m.cfg.Calendars[name].Muted}
 		if i := slices.IndexFunc(snap.Calendars, func(s stored) bool { return s.Name == name }); i >= 0 {
 			s := snap.Calendars[i]
 			st.FetchedAt, st.Error = s.FetchedAt, s.Error
