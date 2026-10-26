@@ -192,7 +192,7 @@ func TestIndex(t *testing.T) {
 	for _, want := range []string{
 		`src="/preview/hallway/e1001/hello.png"`,
 		`href="/preview/hallway/e1001/hello/props.json"`,
-		`src="/preview/page/e1001/hello.png?model=reterminal_e1003&rotation=90"`,
+		`<option value="reterminal_e1003-0">reterminal_e1003 landscape</option>`,
 		"<td>sun</td>\n    <td>waiting</td>",
 		"<td>car</td>\n    <td>waiting <span class=\"stale\">stale</span></td>",
 		`<td>15m0s</td>`,
@@ -202,6 +202,51 @@ func TestIndex(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("got index without %s, want it", want)
 		}
+	}
+}
+
+func TestIndexPanel(t *testing.T) {
+	t.Parallel()
+	hallway := func(rotation int) []device.Config {
+		return []device.Config{{Name: "hallway", MAC: "AA:BB:CC:DD:EE:FF", Pages: []string{"e1001/hello"}, Rotation: rotation}}
+	}
+	testCases := []struct {
+		name      string
+		devices   []device.Config
+		query     string
+		wantPanel string // the selected option
+		wantImage string
+	}{
+		{"first device", hallway(90), "", `<option value="reterminal_e1001-90" selected>reterminal_e1001 portrait</option>`, "model=reterminal_e1001&rotation=90"},
+		{"first device upside down", hallway(180), "", `<option value="reterminal_e1001-180" selected>reterminal_e1001 landscape, upside down</option>`, "model=reterminal_e1001&rotation=180"},
+		{"no devices", []device.Config{}, "", `<option value="reterminal_e1001-0" selected>reterminal_e1001 landscape</option>`, "model=reterminal_e1001&rotation=0"},
+		{"chosen", hallway(90), "?panel=reterminal_e1003-0", `<option value="reterminal_e1003-0" selected>reterminal_e1003 landscape</option>`, "model=reterminal_e1003&rotation=0"},
+		{"unknown model", hallway(90), "?panel=kindle-0", `<option value="reterminal_e1001-90" selected>`, "model=reterminal_e1001&rotation=90"},
+		{"bad rotation", hallway(90), "?panel=reterminal_e1003-45", `<option value="reterminal_e1001-90" selected>`, "model=reterminal_e1001&rotation=90"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, testCase.devices)
+			rec := get(t, f.handler, "/"+testCase.query)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("got %d %s, want 200", rec.Code, rec.Body)
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, testCase.wantPanel) {
+				t.Errorf("got index without %s, want it", testCase.wantPanel)
+			}
+			if n := strings.Count(body, " selected>"); n != 1 {
+				t.Errorf("got %d selected panels, want 1", n)
+			}
+			// One image per page, on the selected panel only.
+			if got, want := strings.Count(body, `<img src="/preview/page/`), 1; got != want {
+				t.Errorf("got %d page previews, want %d", got, want)
+			}
+			if want := `src="/preview/page/e1001/hello.png?` + testCase.wantImage + `"`; !strings.Contains(body, want) {
+				t.Errorf("got index without %s, want it", want)
+			}
+		})
 	}
 }
 
