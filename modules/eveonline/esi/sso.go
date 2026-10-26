@@ -162,8 +162,22 @@ func (t tokenResponse) expiresAt(now time.Time) time.Time {
 	return now.Add(time.Duration(t.ExpiresIn) * time.Second)
 }
 
-// requestToken posts form to the SSO token endpoint. A rejected grant or
-// client is module.ErrAuth: retrying will not help, logging in again may.
+// ErrClientRejected is SSO rejecting client_id and client_secret: a config
+// error, not one of the character's. It comes with module.ErrAuth.
+var ErrClientRejected = errors.New("SSO rejected the application: check client_id and client_secret")
+
+// oauthError is an error response of the SSO token endpoint.
+type oauthError struct {
+	// code is the OAuth error code, e.g. invalid_grant.
+	code string
+	msg  string
+}
+
+func (e *oauthError) Error() string { return e.msg }
+
+// requestToken posts form to the SSO token endpoint. A rejected grant is
+// module.ErrAuth: retrying will not help, logging in again may. A rejected
+// client is ErrClientRejected and module.ErrAuth.
 func (c *Client) requestToken(ctx context.Context, form url.Values) (tokenResponse, error) {
 	var tok tokenResponse
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ssoURL+"/v2/oauth/token", strings.NewReader(form.Encode()))
@@ -187,11 +201,14 @@ func (c *Client) requestToken(ctx context.Context, form url.Values) (tokenRespon
 			Description string `json:"error_description"`
 		}
 		_ = json.Unmarshal(body, &e)
-		err := fmt.Errorf("SSO token: %s: %s", resp.Status, cmp.Or(e.Description, e.Error, strings.TrimSpace(string(body))))
-		if e.Error == "invalid_grant" || e.Error == "invalid_client" {
-			err = fmt.Errorf("%w: %w", err, module.ErrAuth)
+		oerr := &oauthError{code: e.Error, msg: fmt.Sprintf("SSO token: %s: %s", resp.Status, cmp.Or(e.Description, e.Error, strings.TrimSpace(string(body))))}
+		switch e.Error {
+		case invalidGrant:
+			return tok, fmt.Errorf("%w: %w", oerr, module.ErrAuth)
+		case "invalid_client":
+			return tok, fmt.Errorf("%w: %w: %w", ErrClientRejected, oerr, module.ErrAuth)
 		}
-		return tok, err
+		return tok, oerr
 	}
 	if err := json.Unmarshal(body, &tok); err != nil {
 		return tok, fmt.Errorf("SSO token: decoding: %w", err)

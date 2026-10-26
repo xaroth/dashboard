@@ -9,11 +9,12 @@ import (
 )
 
 type EveonlineEsiCharacter struct {
-	CharacterID  int64     `json:"characterId"`
-	Name         string    `json:"name"`
-	Scopes       string    `json:"scopes"`
-	RefreshToken string    `json:"refreshToken"`
-	AccessToken  string    `json:"accessToken"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	AuthError    *string   `json:"authError"`
+	CharacterID   int64     `json:"characterId"`
+	Name          string    `json:"name"`
+	Scopes        string    `json:"scopes"`
+	RefreshToken  string    `json:"refreshToken"`
+	AccessToken   string    `json:"accessToken"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+	AuthError     *string   `json:"authError"`
+	AuthErrorCode *string   `json:"authErrorCode"`
 }
