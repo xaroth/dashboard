@@ -408,23 +408,31 @@ func TestProcessConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// TestBunRenderer runs the real renderer when bun is installed.
-func TestBunRenderer(t *testing.T) {
-	t.Parallel()
+// newBun returns a Process running the real renderer, skipping tb when bun
+// or node_modules is missing.
+func newBun(tb testing.TB) *render.Process {
+	tb.Helper()
 	bun, err := exec.LookPath("bun")
 	if err != nil {
 		home, _ := os.UserHomeDir()
 		if bun = filepath.Join(home, ".bun", "bin", "bun"); !exists(bun) {
-			t.Skip("bun not installed")
+			tb.Skip("bun not installed")
 		}
 	}
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(file), "..")
 	if !exists(filepath.Join(root, "node_modules")) {
-		t.Skip("node_modules missing; run bun install")
+		tb.Skip("node_modules missing; run bun install")
 	}
 	p := render.NewProcess([]string{bun, "renderer/main.ts", "--pages", "pages"}, root, slog.New(slog.DiscardHandler))
-	t.Cleanup(func() { p.Close() })
+	tb.Cleanup(func() { p.Close() })
+	return p
+}
+
+// TestBunRenderer runs the real renderer when bun is installed.
+func TestBunRenderer(t *testing.T) {
+	t.Parallel()
+	p := newBun(t)
 
 	pages, err := p.Describe(t.Context())
 	if err != nil {

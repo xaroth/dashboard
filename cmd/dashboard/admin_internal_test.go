@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,8 +46,20 @@ func (m *adminModule) Update(context.Context, *module.Update) error {
 	return nil
 }
 
+type readingParams struct {
+	NaN bool `json:"nan"`
+}
+
+// reading returns 42, or NaN, which JSON cannot encode, when asked.
+func (*adminModule) reading(_ context.Context, _ module.Query, p readingParams) (float64, error) {
+	if p.NaN {
+		return math.NaN(), nil
+	}
+	return 42, nil
+}
+
 func adminRegistration(name string, opts ...module.Option) module.Registration {
-	opts = append(opts, module.WithUpdateInterval(15*time.Minute))
+	opts = append(opts, module.WithUpdateInterval(15*time.Minute), module.WithQuery("reading", (*adminModule).reading))
 	return module.Define[adminModule, adminConfig](name, func() *adminConfig { return &adminConfig{} }, opts...)
 }
 
@@ -62,15 +75,22 @@ var logins = module.DefineShared("logins", func() *struct{} { return &struct{}{}
 
 // fixture is the admin UI on a real pipeline, devices and module set: modules
 // "sun", which uses the shared logins page, and "car", whose updates fail,
-// and pages from a fake renderer.
+// and pages from a fake renderer. It runs in Europe/Amsterdam.
 type fixture struct {
 	handler  http.Handler
 	renderer *render.FakeRenderer
 	db       *storage.DB
 }
 
-// newFixture serves devices, or a hallway device when nil, with the page
-// e1001/hello. opts set up the renderer further.
+// helloPage queries both modules, one of them for a NaN.
+var helloPage = render.PageInfo{Name: "e1001/hello", Data: map[string]render.QueryDescriptor{
+	"reading": {Module: "sun", Query: "reading"},
+	"nan":     {Module: "sun", Query: "reading", Params: map[string]any{"nan": true}},
+	"failing": {Module: "car", Query: "reading"},
+}}
+
+// newFixture serves devices, or a hallway device when nil, with helloPage.
+// opts set up the renderer further.
 func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRendererOption) *fixture {
 	tb.Helper()
 	if devices == nil {
@@ -82,6 +102,10 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 	}
 	tb.Cleanup(func() { db.Close() })
 	now := func() time.Time { return adminNow }
+	loc, err := time.LoadLocation("Europe/Amsterdam")
+	if err != nil {
+		tb.Fatalf("location: %v", err)
+	}
 
 	configs, err := yamlconfig.Parse([]byte("car: {fail: true}"))
 	if err != nil {
@@ -100,8 +124,8 @@ func newFixture(tb testing.TB, devices []device.Config, opts ...render.FakeRende
 	if err != nil {
 		tb.Fatalf("modules: %v", err)
 	}
-	renderer := render.NewFakeRenderer(tb, append([]render.FakeRendererOption{render.ExpectPages(render.PageInfo{Name: "e1001/hello"})}, opts...)...)
-	pipeline, err := render.NewPipeline(render.PipelineOptions{Renderer: renderer, Resolver: resolver{set: set, loc: time.UTC}, Location: time.UTC, Now: now})
+	renderer := render.NewFakeRenderer(tb, append([]render.FakeRendererOption{render.ExpectPages(helloPage)}, opts...)...)
+	pipeline, err := render.NewPipeline(render.PipelineOptions{Renderer: renderer, Resolver: resolver{set: set, loc: loc}, Location: loc, Now: now})
 	if err != nil {
 		tb.Fatalf("pipeline: %v", err)
 	}
@@ -294,12 +318,17 @@ func TestPreviewProps(t *testing.T) {
 		want       *render.Props
 	}{
 		{"device", "/preview/hallway/e1001/hello/props.json", nil, http.StatusOK, &render.Props{
-			Data:     map[string]render.Result{},
+			Data: map[string]render.Result{
+				"reading": {Value: float64(42), FetchedAt: new("2026-10-15T20:00:00+02:00")},
+				"nan":     {FetchedAt: new("2026-10-15T20:00:00+02:00"), Error: new("encoding result: json: unsupported value: NaN")},
+				// car's update failed: the query still answers, marked stale with the update error.
+				"failing": {Value: float64(42), Stale: true, Error: new("token refused")},
+			},
 			Device:   render.DeviceProps{Name: "hallway", Model: "reterminal_e1001", Rotation: 90},
 			Viewport: render.Viewport{Width: 480, Height: 800, Portrait: true},
-			System:   render.SystemProps{StaleModules: []string{"car", "sun"}},
-			Now:      adminNow.UTC().Format(time.RFC3339),
-			Timezone: "UTC",
+			System:   render.SystemProps{StaleModules: []string{"car"}},
+			Now:      "2026-10-15T20:00:00+02:00",
+			Timezone: "Europe/Amsterdam",
 		}},
 		{"unknown device", "/preview/garage/e1001/hello/props.json", nil, http.StatusNotFound, nil},
 		{"unknown page", "/preview/hallway/e1001/nope/props.json", nil, http.StatusNotFound, nil},
@@ -309,6 +338,9 @@ func TestPreviewProps(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, nil, testCase.renderer...)
+			for _, name := range []string{"sun", "car"} {
+				post(t, f.handler, "/modules/"+name+"/update")
+			}
 			rec := get(t, f.handler, testCase.url)
 			if rec.Code != testCase.wantStatus {
 				t.Fatalf("got %d %s, want %d", rec.Code, rec.Body, testCase.wantStatus)
