@@ -777,7 +777,9 @@ Each step has its own test with no network:
 | Pipeline, renderer process | `go test` | fake renderer and queries, including failing and stale ones; frame encoding; timeouts, restarts, backoff; one integration test against the real Bun renderer |
 | Service and admin UI | `go test` | config parsing, startup checks, previews, simulator, `/healthz`, `/metrics`, request spans, shutdown drain |
 | Types | `go test`, `tsc --noEmit` | gentypes against a golden file; pages against generated types |
-| Formatting, renderer frames, pages | `bun test` | table tests on pure functions; frame encoding, the request guard and rendering in `renderer/`; every page rendered at both orientations with typed fixtures (missing, stale and populated data); every CSS module class a component uses exists |
+| Formatting, renderer frames, pages | `bun test` | table tests on pure functions; frame encoding, the request guard and rendering in `renderer/`; every page rendered at both orientations with typed fixtures (missing, stale and populated data); every CSS module class a component uses exists; text legibility (below) |
+
+Text legibility (`renderer/legibility.ts`): every page is rendered with the populated fixtures on both panels at both orientations, as raw RGBA, and laid out with takumi's `measure`, which gives each text run's box. Per run, the background is the box's most common gray and the ink its gray furthest from it; stroke pixels are those at least halfway from background to ink. Each stroke pixel is reduced exactly like `reduce` in `render/image.go`, and the run scores the share that reach the ink's nearest level. A run under 0.35 fails the test with its page, panel, text and score. Light text on a dark ground needs a heavier weight than dark text on paper: the darker rounding thins it. Text too thin to ever reach its color scores high, since the ink is taken from the render, not the CSS.
 
 ### Fonts
 
@@ -789,7 +791,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), shared values with their version, devices with their last wake and page previews, pending devices, every page on one panel. `?panel=<model>-<rotation>` (e.g. `reterminal_e1001-90`) picks it from a select of each model at 0 and 90, so it survives a reload; it defaults to the first device's model and rotation, else `reterminal_e1001` at 0. Without JavaScript a button submits the select |
+| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), shared values with their version, devices with their last wake and page previews, pending devices, every page on one panel. `?panel=<model>-<rotation>` (e.g. `reterminal_e1001-90`) picks it from a select of each model at 0 and 90, so it survives a reload; it defaults to the first device's model and rotation, else `reterminal_e1001` at 0. Without JavaScript a button submits the select. Previews show at one panel pixel per CSS px with `image-rendering: pixelated`, scrolling sideways when wider than the window; a checkbox (CSS only) doubles them, and a preview links to its PNG |
 | `POST /modules/{module}/update` | Run one update of the module now, then redirect to `/` |
 | `GET /preview/{device}/{name}.png` | Exactly what the device gets; `{name}` is a page name, `<layout>/<page>` or a shared `<page>`; `?model=` overrides the device's model |
 | `GET /preview/{device}/{name}/props.json` | The props the page receives; `?model=` as above |

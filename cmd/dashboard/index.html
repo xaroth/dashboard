@@ -7,16 +7,19 @@
   body { font: 14px system-ui, sans-serif; margin: 24px; background: #eee; color: #111; }
   h2 { margin-top: 32px; }
   .row { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
-  figure { margin: 0; }
+  figure { margin: 0; max-width: 100%; overflow-x: auto; }
   figcaption { margin-top: 4px; }
   table { border-collapse: collapse; background: #fff; }
   td, th { padding: 4px 10px; text-align: left; border-bottom: 1px solid #ddd; }
   .stale { color: #a00; }
-  img { display: block; background: #fff; border: 8px solid #222; border-radius: 6px; max-width: 480px; max-height: 480px; }
+  /* One panel pixel per CSS px, unsmoothed, so the previews show what breaks up on the panel. */
+  img { display: block; background: #fff; border: 8px solid #222; border-radius: 6px; image-rendering: pixelated; }
+  body:has(#zoom:checked) figure img { zoom: 2; }
 </style>
 </head>
 <body>
 <h1>dashboard</h1>
+<label><input type="checkbox" id="zoom"> Previews at 2x</label>
 
 <h2>Modules</h2>
 {{with .Modules}}
