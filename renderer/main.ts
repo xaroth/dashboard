@@ -1,12 +1,12 @@
 // Long-running render process. Reads request frames on stdin, writes response
 // frames on stdout. Usage: bun renderer/main.ts --pages pages [--watch]
 import { Renderer } from "@takumi-rs/core";
-import { watch } from "node:fs";
 import { parseArgs } from "node:util";
 import { bundlePages, type Page } from "./bundle";
 import { encodeFrame, FrameReader } from "./frame";
 import { renderPage } from "./render";
 import { isRequest } from "./request";
+import { rebuildOnChange } from "./watch";
 
 // stdout carries frames only; frames go through Bun.stdout, which these do not touch.
 console.log = console.info = console.debug = console.error;
@@ -24,34 +24,13 @@ let pages: Map<string, Page> = await bundlePages(args.pages!);
 console.error(`renderer: bundled ${pages.size} pages`);
 
 if (args.watch) {
-  let timer: Timer | undefined;
-  let building = false;
-  let again = false;
-  const rebuild = async () => {
-    // One build at a time, so an older build never replaces a newer one.
-    if (building) return void (again = true);
-    building = true;
+  rebuildOnChange([args.pages!], async () => {
     try {
       pages = await bundlePages(args.pages!);
       console.error(`renderer: rebuilt ${pages.size} pages`);
     } catch (e) {
       console.error(`renderer: rebuild failed, keeping previous bundle: ${e}`);
-    } finally {
-      building = false;
-      if (again) {
-        again = false;
-        rebuild();
-      }
     }
-  };
-  const watcher = watch(args.pages!, { recursive: true }, () => {
-    clearTimeout(timer);
-    timer = setTimeout(rebuild, 100);
-  });
-  // Without a listener a watch error is uncaught and ends the process; keep serving the current bundle.
-  watcher.on("error", (e) => {
-    console.error(`renderer: watching ${args.pages} failed, no more rebuilds: ${e}`);
-    watcher.close();
   });
 }
 
