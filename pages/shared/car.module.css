@@ -1,0 +1,73 @@
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px 48px;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.big {
+  font-size: 88px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.track {
+  display: flex;
+  width: 200px;
+  height: 20px;
+  border: 2px solid #000;
+  border-radius: 4px;
+}
+
+.fill {
+  height: 100%;
+  background: #000;
+}
+
+.label {
+  font-size: 22px;
+  color: #555;
+}
+
+.charge {
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 0;
+  font-size: 24px;
+}
+
+.fact {
+  display: flex;
+  gap: 12px;
+}
+
+.factLabel {
+  width: 120px;
+  flex-shrink: 0;
+  color: #555;
+}
+
+.alert {
+  font-weight: 700;
+}
+
+.warnings {
+  margin-top: auto;
+  padding: 8px 12px;
+  border: 2px solid #000;
+  border-radius: 8px;
+  font-size: 22px;
+  font-weight: 700;
+}

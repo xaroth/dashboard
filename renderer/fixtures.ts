@@ -19,6 +19,30 @@ function series(value: (i: number) => number) {
 
 const skill = (id: number, level: number, finish: string | null) => ({ id, name: `Skill ${id}`, level, start: null, finish });
 
+// An EV charging, a plug-in hybrid with the trunk open, and a combustion car seen yesterday.
+const car = {
+  brand: "hyundai", nickname: "", keyExpiresAt: "2027-01-01T00:00:00Z", activeAt: null, ignitionOn: false,
+  location: null, open: [], climateOn: false, outsideTemperature: 12, warnings: [],
+};
+const cars = [
+  {
+    ...car, vin: "KMH0000000000001", shortName: "Ioniq", model: "IONIQ 5", modelCode: "NE", type: "EV", updatedAt: fetchedAt, odometerKm: 12345,
+    stateOfCharge: 64, fuelLevel: null, ranges: [{ type: "EV", km: 255 }], locked: true,
+    charge: { pluggedIn: true, charging: true, status: "charging", targetAC: 80, targetDC: 80, remainingMinutes: 95 },
+  },
+  {
+    ...car, vin: "KNA0000000000002", shortName: "Sportage", brand: "kia", model: "Sportage PHEV", modelCode: "NQ5", type: "PE",
+    updatedAt: "2026-10-16T08:10:00+02:00", odometerKm: 40210, stateOfCharge: 35, fuelLevel: 72,
+    ranges: [{ type: "EV", km: 18 }, { type: "ICE", km: 540 }, { type: "PHEV", km: 558 }], locked: true, open: ["trunk"], warnings: ["washFluid"],
+    charge: { pluggedIn: false, charging: false, status: "notCharging", targetAC: 100, targetDC: 80, remainingMinutes: 0 },
+  },
+  {
+    ...car, vin: "TMA0000000000003", shortName: null, model: "i20", modelCode: "BC3", type: "GN", updatedAt: "2026-10-15T21:40:00+02:00",
+    odometerKm: 98000, stateOfCharge: null, fuelLevel: 18, ranges: [{ type: "ICE", km: 95 }], locked: false, charge: null,
+    keyExpiresAt: "2026-10-21T00:00:00Z", outsideTemperature: null,
+  },
+];
+
 // A populated result for every query: a new query fails to type-check until it has one.
 export const fixtures: { [K in QueryName]: NonNullable<Queries[K]["result"]> } = {
   "calendar.upcoming": {
@@ -39,31 +63,8 @@ export const fixtures: { [K in QueryName]: NonNullable<Queries[K]["result"]> } =
       { name: "work", fetchedAt: "2026-10-16T09:10:00+02:00", error: "feed: 500 Internal Server Error" },
     ],
   },
-  "car.vehicle": {
-    vin: "KMH0000000000000",
-    shortName: "Ioniq",
-    brand: "hyundai",
-    nickname: "Auto",
-    keyExpiresAt: "2027-01-01T00:00:00Z",
-    model: "IONIQ 5",
-    modelCode: "NE",
-    type: "EV",
-    updatedAt: fetchedAt,
-    activeAt: null,
-    ignitionOn: false,
-    odometerKm: 12345,
-    location: { latitude: 52.1, longitude: 5.1 },
-    stateOfCharge: 80,
-    fuelLevel: null,
-    ranges: [{ type: "ev", km: 320 }],
-    charge: { pluggedIn: true, charging: true, status: "charging", targetAC: 80, targetDC: 80, remainingMinutes: 45 },
-    locked: true,
-    open: [],
-    climateOn: false,
-    outsideTemperature: 12,
-    warnings: [],
-  },
-  "car.vehicles": [],
+  "car.vehicle": cars[0]!,
+  "car.vehicles": cars,
   "eveonline_skills.queue": [
     {
       id: 1,
