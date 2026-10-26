@@ -45,7 +45,7 @@ export default function Cars({ data, now, timezone }: PageProps<Data>) {
                 </span>
               ))}
               {v.ranges.length > 0 ? <span className={styles.value}>{formatKm(range)}</span> : null}
-              {v.charge ? <span>{chargeLabel(v.charge, v.updatedAt, timezone)}</span> : null}
+              {v.charge ? <span>{chargeLabel(v.charge, v.updatedAt, now, timezone)}</span> : null}
               {v.locked != null ? <span className={v.locked ? undefined : styles.value}>{v.locked ? "Op slot" : "Niet op slot"}</span> : null}
               {open ? <span className={styles.value}>{`Open: ${open}`}</span> : null}
               {warnings.length > 0 ? <span className={styles.value}>{`Let op: ${warnings.join(", ")}`}</span> : null}

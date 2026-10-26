@@ -39,17 +39,19 @@ function fastCharging(c: CarCharge): boolean {
 }
 
 /** When charging ends: the reported minutes count from when the car sent them, not from now. */
-export function chargeDone(c: CarCharge, updatedAt: string | null): string | null {
+export function chargeDone(c: CarCharge, updatedAt: string | null, now: string): string | null {
   if (!c.charging || !c.remainingMinutes || !updatedAt) return null;
-  return new Date(Date.parse(updatedAt) + c.remainingMinutes * 60_000).toISOString();
+  const done = Date.parse(updatedAt) + c.remainingMinutes * 60_000;
+  // A parked car reports rarely, so an estimate already past says nothing.
+  return done > Date.parse(now) ? new Date(done).toISOString() : null;
 }
 
 /** "Snelladen tot 80%, vol om 11:15", "Aangesloten", "Niet aangesloten". */
-export function chargeLabel(c: CarCharge, updatedAt: string | null, timezone: string): string {
+export function chargeLabel(c: CarCharge, updatedAt: string | null, now: string, timezone: string): string {
   if (!c.charging) return c.pluggedIn ? "Aangesloten" : "Niet aangesloten";
   const target = fastCharging(c) ? c.targetDC : c.targetAC;
-  const done = chargeDone(c, updatedAt);
-  return `${fastCharging(c) ? "Snelladen" : "Laden"}${target != null ? ` tot ${target}%` : ""}${done ? `, vol om ${formatTime(done, timezone)}` : ""}`;
+  const done = chargeDone(c, updatedAt, now);
+  return `${fastCharging(c) ? "Snelladen" : "Laden"}${target != null ? ` tot ${target}%` : ""}${done ? `, vol om ${formatSeen(done, now, timezone)}` : ""}`;
 }
 
 const openLabels: Record<string, string> = {

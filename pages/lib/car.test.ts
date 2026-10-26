@@ -34,11 +34,14 @@ test("charge labels", () => {
     pluggedIn: true, charging: true, status: "charging", targetAC: 80, targetDC: 90, remainingMinutes: 45, ...o,
   });
   // The minutes count from when the car reported them.
-  expect(chargeLabel(c({}), "2026-10-16T10:00:00+02:00", tz)).toBe("Laden tot 80%, vol om 10:45");
-  expect(chargeLabel(c({ status: "fastCharging" }), "2026-10-16T10:00:00+02:00", tz)).toBe("Snelladen tot 90%, vol om 10:45");
-  expect(chargeLabel(c({ targetAC: null, remainingMinutes: null }), null, tz)).toBe("Laden");
-  expect(chargeLabel(c({ charging: false }), null, tz)).toBe("Aangesloten");
-  expect(chargeLabel(c({ charging: false, pluggedIn: false }), null, tz)).toBe("Niet aangesloten");
+  const now = "2026-10-16T10:10:00+02:00";
+  expect(chargeLabel(c({}), "2026-10-16T10:00:00+02:00", now, tz)).toBe("Laden tot 80%, vol om 10:45");
+  expect(chargeLabel(c({ status: "fastCharging" }), "2026-10-16T10:00:00+02:00", now, tz)).toBe("Snelladen tot 90%, vol om 10:45");
+  expect(chargeLabel(c({ remainingMinutes: 900 }), "2026-10-16T10:00:00+02:00", now, tz)).toBe("Laden tot 80%, vol om za 17 01:00");
+  expect(chargeLabel(c({}), "2026-10-16T08:00:00+02:00", now, tz)).toBe("Laden tot 80%");
+  expect(chargeLabel(c({ targetAC: null, remainingMinutes: null }), null, now, tz)).toBe("Laden");
+  expect(chargeLabel(c({ charging: false }), null, now, tz)).toBe("Aangesloten");
+  expect(chargeLabel(c({ charging: false, pluggedIn: false }), null, now, tz)).toBe("Niet aangesloten");
 });
 
 test("open parts and warnings in Dutch, unknown ones as named", () => {

@@ -65,7 +65,7 @@ export default function Car({ data, viewport, now, timezone }: PageProps<Data>) 
           </div>
         ) : null}
       </div>
-      {v.charge ? <div className={styles.charge}>{chargeLabel(v.charge, v.updatedAt, timezone)}</div> : null}
+      {v.charge ? <div className={styles.charge}>{chargeLabel(v.charge, v.updatedAt, now, timezone)}</div> : null}
       <div className={styles.facts}>
         {facts.map((f) => (
           <div key={f.label} className={styles.fact} style={{ width: viewport.portrait || f.wide ? "100%" : "50%" }}>
