@@ -33,7 +33,7 @@ To work on pages without the service, config or live data:
 bun run preview            # bun renderer/preview.ts --watch [--port 8090]
 ```
 
-Open http://127.0.0.1:8090/ for every page in each state in `renderer/fixtures.ts` (populated, stale, missing), in landscape or portrait. HTML mode renders pages in the browser for inspecting with dev tools; it matches takumi closely but not exactly. PNG mode is takumi's output, before the device's reduction to 4 grays. With `--watch`, edits to pages or fixtures rebuild and reload the browser.
+Open http://127.0.0.1:8090/ for every page in each state in `renderer/fixtures.ts` (populated, stale, missing), in landscape or portrait. HTML mode renders pages in the browser for inspecting with dev tools, with takumi's own font inlined (`renderer/fonts/`), so it works offline; layout matches takumi, text anti-aliasing differs slightly. PNG mode is takumi's output, before the device's reduction to 4 grays. With `--watch`, edits to pages or fixtures rebuild and reload the browser.
 
 Prometheus metrics are at http://127.0.0.1:8081/metrics. Traces are exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, e.g. `http://localhost:4318`. See [Observability](docs/design.md#observability).
 

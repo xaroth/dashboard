@@ -1,4 +1,6 @@
 import type { Renderer } from "@takumi-rs/core";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { render } from "takumi-js";
@@ -15,9 +17,19 @@ export async function renderPage(
   return render(element, { renderer, width: viewport.width, height: viewport.height, format: "png", css: page.css });
 }
 
-// Takumi's defaults: border-box sizing, no margins, and Geist as its built-in font.
-const baseCSS = `*, *::before, *::after { box-sizing: border-box; margin: 0; }
+// Takumi's defaults: border-box sizing, no margins, and its built-in font.
+// fonts/Geist.woff2 is that font, extracted from @takumi-rs/core 2.16.2: Geist
+// 1.500, weights 300-800, subset to the characters takumi ships.
+let baseCSS: string | undefined;
+function base(): string {
+  if (baseCSS === undefined) {
+    const font = readFileSync(join(import.meta.dir, "fonts/Geist.woff2")).toString("base64");
+    baseCSS = `@font-face { font-family: Geist; font-weight: 300 800; src: url(data:font/woff2;base64,${font}) format("woff2"); }
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
 body { overflow: hidden; font-family: Geist, system-ui, sans-serif; }`;
+  }
+  return baseCSS;
+}
 
 /**
  * Renders page with props as an HTML document of props.viewport's size, for
@@ -32,8 +44,7 @@ export function renderHTML(page: Page, props: RenderProps): string {
 <head>
 <meta charset="utf-8">
 <title>${page.name}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap">
-<style>${baseCSS}
+<style>${base()}
 body { width: ${width}px; height: ${height}px; }</style>
 <style>${page.css}</style>
 </head>
