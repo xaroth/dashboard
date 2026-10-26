@@ -38,10 +38,13 @@ func freeAddr(tb testing.TB) string {
 
 func testConfig(tb testing.TB, device, admin string) Config {
 	tb.Helper()
-	cfg := DefaultConfig()
+	cfg, err := parseConfig([]byte("public_url: http://dash\n"), env(nil))
+	if err != nil {
+		tb.Fatalf("parsing config: %v", err)
+	}
 	cfg.DataDir = tb.TempDir()
 	cfg.Listen = Listen{Device: device, Admin: admin}
-	cfg.Devices = map[string]Device{"hallway": {MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello"}}}
+	cfg.Devices = map[string]Device{"hallway": {MAC: "AA:BB:CC:DD:EE:FF", Layout: "e1001", Pages: []string{"hello"}}}
 	return cfg
 }
 
@@ -63,7 +66,7 @@ func TestNewErrors(t *testing.T) {
 		want   string
 	}{
 		{"unknown page", func(_ testing.TB, cfg *Config) {
-			cfg.Devices["hallway"] = Device{MAC: "aa:bb:cc:dd:ee:ff", Layout: "e1001", Pages: []string{"hello", "nope"}}
+			cfg.Devices["hallway"] = Device{MAC: "AA:BB:CC:DD:EE:FF", Layout: "e1001", Pages: []string{"hello", "nope"}}
 		}, `checking pages: devices.hallway: page "nope" does not exist`},
 		{"unusable data dir", func(tb testing.TB, cfg *Config) {
 			// A file where the data directory should be.
@@ -76,7 +79,7 @@ func TestNewErrors(t *testing.T) {
 			cfg.Modules = map[string]yaml.Node{"nope": {}}
 		}, "no such module"},
 		{"invalid device schedule", func(_ testing.TB, cfg *Config) {
-			cfg.Schedule.IntervalUSB = 0
+			cfg.Schedule.USB = 0
 		}, "loading devices: schedule"},
 	}
 	for _, testCase := range testCases {

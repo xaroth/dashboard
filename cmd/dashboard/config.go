@@ -13,13 +13,27 @@ import (
 	"github.com/xaroth/dashboard/device"
 )
 
-// Config is the service configuration, decoded from the YAML file.
+// Config is the service configuration, parsed from the YAML file by
+// parseConfig.
 type Config struct {
+	Listen    Listen
+	PublicURL string
+	Location  *time.Location
+	DataDir   string
+	// Schedule.Location is Location.
+	Schedule device.Schedule
+	Renderer RendererConfig
+	Modules  map[string]yaml.Node
+	Devices  map[string]Device
+}
+
+// fileConfig is the YAML file as written.
+type fileConfig struct {
 	Listen    Listen               `yaml:"listen"`
 	PublicURL string               `yaml:"public_url"`
 	Timezone  string               `yaml:"timezone"`
 	DataDir   string               `yaml:"data_dir"`
-	Schedule  Schedule             `yaml:"schedule"`
+	Schedule  fileSchedule         `yaml:"schedule"`
 	Renderer  RendererConfig       `yaml:"renderer"`
 	Modules   map[string]yaml.Node `yaml:"modules"`
 	Devices   map[string]Device    `yaml:"devices"`
@@ -30,9 +44,9 @@ type Listen struct {
 	Admin  string `yaml:"admin"`
 }
 
-// Schedule is when devices wake: every IntervalBattery or IntervalUSB from
-// FirstWake up to and including LastWake.
-type Schedule struct {
+// fileSchedule is when devices wake: every IntervalBattery or IntervalUSB
+// from FirstWake up to and including LastWake.
+type fileSchedule struct {
 	FirstWake       string        `yaml:"first_wake"`
 	LastWake        string        `yaml:"last_wake"`
 	IntervalBattery time.Duration `yaml:"interval_battery"`
@@ -49,65 +63,88 @@ type RendererConfig struct {
 	Watch bool `yaml:"watch"`
 }
 
-// DefaultConfig returns the values used for keys missing from the file.
-func DefaultConfig() Config {
-	return Config{
+// defaults returns the values used for keys missing from the file.
+func defaults() fileConfig {
+	return fileConfig{
 		Listen:   Listen{Device: ":8080", Admin: "127.0.0.1:8081"},
 		Timezone: "Europe/Amsterdam",
 		DataDir:  "/data",
-		Schedule: Schedule{FirstWake: "07:00", LastWake: "00:00", IntervalBattery: time.Hour, IntervalUSB: 5 * time.Minute, DetailTimeout: 5 * time.Minute},
+		Schedule: fileSchedule{FirstWake: "07:00", LastWake: "00:00", IntervalBattery: time.Hour, IntervalUSB: 5 * time.Minute, DetailTimeout: 5 * time.Minute},
 		Renderer: RendererConfig{Bun: "bun", Dir: "."},
 	}
 }
 
-// Validate reports the first configuration error.
-func (c *Config) Validate() error {
-	if c.PublicURL == "" {
-		return fmt.Errorf("public_url is required")
+// parse reports the first configuration error or returns the typed config.
+func (f fileConfig) parse() (Config, error) {
+	if f.PublicURL == "" {
+		return Config{}, fmt.Errorf("public_url is required")
 	}
-	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("public_url %q is not an absolute URL", c.PublicURL)
+	if u, err := url.Parse(f.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
+		return Config{}, fmt.Errorf("public_url %q is not an absolute URL", f.PublicURL)
 	}
-	if _, err := time.LoadLocation(c.Timezone); err != nil {
-		return fmt.Errorf("timezone: %w", err)
+	loc, err := time.LoadLocation(f.Timezone)
+	if err != nil {
+		return Config{}, fmt.Errorf("timezone: %w", err)
 	}
-	for _, s := range []string{c.Schedule.FirstWake, c.Schedule.LastWake} {
-		if _, err := time.Parse("15:04", s); err != nil {
-			return fmt.Errorf("schedule: %q is not HH:MM", s)
-		}
+	schedule, err := f.Schedule.parse(loc)
+	if err != nil {
+		return Config{}, fmt.Errorf("schedule: %w", err)
 	}
-	for key, i := range map[string]time.Duration{"interval_battery": c.Schedule.IntervalBattery, "interval_usb": c.Schedule.IntervalUSB} {
-		if i < time.Minute || i > 24*time.Hour || i%time.Minute != 0 {
-			return fmt.Errorf("schedule: %s must be whole minutes from 1m to 24h", key)
-		}
+	devices, err := parseDevices(f.Devices)
+	if err != nil {
+		return Config{}, err
 	}
-	if c.Schedule.DetailTimeout <= 0 {
-		return fmt.Errorf("schedule: detail_timeout must be positive")
-	}
-	return validateDevices(c.Devices)
+	return Config{
+		Listen:    f.Listen,
+		PublicURL: f.PublicURL,
+		Location:  loc,
+		DataDir:   f.DataDir,
+		Schedule:  schedule,
+		Renderer:  f.Renderer,
+		Modules:   f.Modules,
+		Devices:   devices,
+	}, nil
 }
 
-// device converts the schedule for the device package. Call after Validate.
-func (s Schedule) device(loc *time.Location) device.Schedule {
+func (s fileSchedule) parse(loc *time.Location) (device.Schedule, error) {
+	first, err := sinceMidnight(s.FirstWake)
+	if err != nil {
+		return device.Schedule{}, err
+	}
+	last, err := sinceMidnight(s.LastWake)
+	if err != nil {
+		return device.Schedule{}, err
+	}
+	for key, i := range map[string]time.Duration{"interval_battery": s.IntervalBattery, "interval_usb": s.IntervalUSB} {
+		if i < time.Minute || i > 24*time.Hour || i%time.Minute != 0 {
+			return device.Schedule{}, fmt.Errorf("%s must be whole minutes from 1m to 24h", key)
+		}
+	}
+	if s.DetailTimeout <= 0 {
+		return device.Schedule{}, fmt.Errorf("detail_timeout must be positive")
+	}
 	return device.Schedule{
-		First:    sinceMidnight(s.FirstWake),
-		Last:     sinceMidnight(s.LastWake),
+		First:    first,
+		Last:     last,
 		Battery:  s.IntervalBattery,
 		USB:      s.IntervalUSB,
 		Detail:   s.DetailTimeout,
 		Location: loc,
-	}
+	}, nil
 }
 
-func sinceMidnight(hhmm string) time.Duration {
-	t, _ := time.Parse("15:04", hhmm)
-	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+func sinceMidnight(hhmm string) (time.Duration, error) {
+	t, err := time.Parse("15:04", hhmm)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not HH:MM", hhmm)
+	}
+	return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute, nil
 }
 
 var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // loadConfig reads the YAML file at path, substitutes ${VAR} references from
-// the environment and validates the result.
+// the environment and parses the result.
 func loadConfig(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -150,16 +187,13 @@ func parseConfig(raw []byte, lookup func(string) (string, bool)) (Config, error)
 	if err != nil {
 		return Config{}, fmt.Errorf("encoding config: %w", err)
 	}
-	cfg := DefaultConfig()
+	file := defaults()
 	dec := yaml.NewDecoder(bytes.NewReader(expanded))
 	dec.KnownFields(true)
-	if err := dec.Decode(&cfg); err != nil {
+	if err := dec.Decode(&file); err != nil {
 		return Config{}, fmt.Errorf("decoding config: %w", err)
 	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
+	return file.parse()
 }
 
 func walkScalars(n *yaml.Node, fn func(*yaml.Node)) {
