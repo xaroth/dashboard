@@ -86,37 +86,6 @@ export function weekFraction(c: EveonlineSkillsCharacter, now: string): number {
   return Math.min(1, Math.max(0, (Date.parse(c.ends) - Date.parse(now)) / WEEK));
 }
 
-/** An event on one day: time is when it starts, "tot 07:00" when it started before, null when it fills the day. */
-export type DayEvent = { title: string; time: string | null };
-
-/**
- * The events on a local day, YYYY-MM-DD, those filling the day first. Timed
- * events that already ended are left out.
- */
-export function dayEvents(events: CalendarEvent[], date: string, now: string, timezone: string): DayEvent[] {
-  const allDay: DayEvent[] = [];
-  const timed: DayEvent[] = [];
-  for (const e of events) {
-    const start = Date.parse(e.start);
-    const end = Date.parse(e.end);
-    const first = localDate(start, timezone);
-    // The end is exclusive: an event ending at midnight is not on the next day.
-    const last = localDate(Math.max(start, end - 1), timezone);
-    if (first > date || last < date) continue;
-    const title = e.title || "(geen titel)";
-    if (e.allDay || (first < date && last > date)) allDay.push({ title, time: null });
-    else if (end >= Date.parse(now)) timed.push({ title, time: first < date ? `tot ${formatTime(e.end, timezone)}` : formatTime(e.start, timezone) });
-  }
-  return [...allDay, ...timed];
-}
-
-/** At most rows of items; when some are left out, the last row counts them instead. */
-export function fit<T>(items: T[], rows: number): { shown: T[]; more: number } {
-  if (items.length <= rows) return { shown: items, more: 0 };
-  const shown = items.slice(0, Math.max(0, rows - 1));
-  return { shown, more: items.length - shown.length };
-}
-
 export type CarStatus = {
   /** The first level a car reports, battery before tank. */
   level: Level | null;

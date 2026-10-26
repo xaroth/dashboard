@@ -30,7 +30,7 @@ func mustLoad(name string) *time.Location {
 // fixtureNow is a Thursday, three days before the end of summer time.
 var fixtureNow = time.Date(2026, 10, 22, 8, 0, 0, 0, ams)
 
-const twoCalendars = `calendar: {calendars: {family: {url: "` + calendar.FakeFamilyURL + `"}, work: {url: "` + calendar.FakeWorkURL + `"}}}`
+const twoCalendars = `calendar: {calendars: {family: {url: "` + calendar.FakeFamilyURL + `"}, work: {url: "` + calendar.FakeWorkURL + `", muted: true}}}`
 
 type loaded struct {
 	set *module.Set
@@ -102,7 +102,7 @@ func TestUpcoming(t *testing.T) {
 	if got, want := u.Events[3].Location, "Tandartspraktijk, Hoofdstraat 1, Utrecht"; got != want {
 		t.Errorf("got location %q, want %q", got, want)
 	}
-	wantStatus := []calendar.Status{{Name: "family", FetchedAt: &fixtureNow}, {Name: "work", FetchedAt: &fixtureNow}}
+	wantStatus := []calendar.Status{{Name: "family", FetchedAt: &fixtureNow}, {Name: "work", Muted: true, FetchedAt: &fixtureNow}}
 	if diff := cmp.Diff(wantStatus, u.Calendars); diff != "" {
 		t.Errorf("calendars (-want +got):\n%s", diff)
 	}
@@ -198,7 +198,7 @@ func TestCalendarErrors(t *testing.T) {
 		t.Errorf("got error %q, want none: family worked", res.Error)
 	}
 	later := fixtureNow.Add(time.Hour)
-	wantStatus := []calendar.Status{{Name: "family", FetchedAt: &later}, {Name: "work", FetchedAt: &fixtureNow, Error: "feed: 500 Internal Server Error"}}
+	wantStatus := []calendar.Status{{Name: "family", FetchedAt: &later}, {Name: "work", Muted: true, FetchedAt: &fixtureNow, Error: "feed: 500 Internal Server Error"}}
 	if diff := cmp.Diff(wantStatus, u.Calendars); diff != "" {
 		t.Errorf("calendars (-want +got):\n%s", diff)
 	}

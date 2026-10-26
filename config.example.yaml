@@ -46,7 +46,7 @@ modules:
   calendar:   # iCal feeds by name, e.g. Google Calendar's secret address in iCal format
     # calendars:   # empty disables the module
     #   family: {url: "${CALENDAR_FAMILY_ICAL}"}   # the URL is a credential: keep it in the environment
-    #   work: {url: "${CALENDAR_WORK_ICAL}"}
+    #   work: {url: "${CALENDAR_WORK_ICAL}", muted: true}   # muted: shown in gray
   car:   # Pleos Vehicle Data API; enter keys on /car/ on the admin listener
     # active_interval: 15m   # while a car is on, charging or moving
     # max_interval: 12h      # a parked car is polled every quarter of its idle time, up to this

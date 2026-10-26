@@ -70,11 +70,57 @@ export function eventTime(e: CalendarEvent, day: string, timezone: string): stri
   if (e.allDay) {
     // The end is the midnight after the last day.
     const last = addDays(localDate(e.end, timezone), -1);
-    return last > day ? `t/m ${shortDays.format(new Date(`${last}T12:00:00Z`))}` : "Hele dag";
+    return last > day ? `t/m ${shortDate(last)}` : "Hele dag";
   }
   const start = localDate(e.start, timezone);
   const end = localDate(Date.parse(e.end) - 1, timezone);
   if (start < day) return end > day ? "Hele dag" : `tot ${formatTime(e.end, timezone)}`;
   if (e.start === e.end) return formatTime(e.start, timezone);
   return `${formatTime(e.start, timezone)} - ${end > day ? "..." : formatTime(e.end, timezone)}`;
+}
+
+/**
+ * An event on one day. time is when it starts, "tot 07:00" when it started
+ * on an earlier day, null when it fills the day; before and after say it
+ * continues from the day before or into the next.
+ */
+export type DayEvent = { title: string; calendar: string; time: string | null; before: boolean; after: boolean };
+
+/**
+ * The events on a local day, YYYY-MM-DD, those filling the day first. Timed
+ * events that already ended are left out.
+ */
+export function dayEvents(events: CalendarEvent[], date: string, now: string, timezone: string): DayEvent[] {
+  const allDay: DayEvent[] = [];
+  const timed: DayEvent[] = [];
+  for (const e of events) {
+    const start = Date.parse(e.start);
+    const end = Date.parse(e.end);
+    const first = localDate(start, timezone);
+    // The end is exclusive: an event ending at midnight is not on the next day.
+    const last = localDate(Math.max(start, end - 1), timezone);
+    if (first > date || last < date) continue;
+    const day = { title: e.title || "(geen titel)", calendar: e.calendar, before: first < date, after: last > date };
+    if (e.allDay || (first < date && last > date)) allDay.push({ ...day, time: null });
+    else if (end >= Date.parse(now)) timed.push({ ...day, time: first < date ? `tot ${formatTime(e.end, timezone)}` : formatTime(e.start, timezone) });
+  }
+  return [...allDay, ...timed];
+}
+
+/** At most rows of items; when some are left out, the last row counts them instead. */
+export function fit<T>(items: T[], rows: number): { shown: T[]; more: number } {
+  if (items.length <= rows) return { shown: items, more: 0 };
+  const shown = items.slice(0, Math.max(0, rows - 1));
+  return { shown, more: items.length - shown.length };
+}
+
+/** za 1 nov; date is YYYY-MM-DD. */
+export function shortDate(date: string): string {
+  return shortDays.format(new Date(`${date}T12:00:00Z`));
+}
+
+/** Whether a date, YYYY-MM-DD, is a Saturday or Sunday. */
+export function isWeekend(date: string): boolean {
+  const day = new Date(`${date}T12:00:00Z`).getUTCDay();
+  return day === 0 || day === 6;
 }
