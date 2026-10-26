@@ -4,16 +4,19 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
+    "preview": "bun renderer/preview.ts --watch",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@takumi-rs/core": "^2.16.2",
     "react": "^19.3.1",
+    "react-dom": "19.3.1",
     "takumi-js": "^2.16.2"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "typescript": "^7.0.2"
   }
 }

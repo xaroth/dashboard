@@ -27,6 +27,14 @@ Without `-config` the service reads `/config/dashboard.yaml`.
 
 Open http://127.0.0.1:8081/ for module status, previews of every page per device and panel, and a simulator per device that wakes it through the real device API (timer or button). With `renderer.watch`, page edits rebuild on save; reload the browser.
 
+To work on pages without the service, config or live data:
+
+```sh
+bun run preview            # bun renderer/preview.ts --watch [--port 8090]
+```
+
+Open http://127.0.0.1:8090/ for every page in each state in `renderer/fixtures.ts` (populated, stale, missing), in landscape or portrait. HTML mode renders pages in the browser for inspecting with dev tools; it matches takumi closely but not exactly. PNG mode is takumi's output, before the device's reduction to 4 grays. With `--watch`, edits to pages or fixtures rebuild and reload the browser.
+
 Prometheus metrics are at http://127.0.0.1:8081/metrics. Traces are exported over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, e.g. `http://localhost:4318`. See [Observability](docs/design.md#observability).
 
 After changing SQL or query types: `go tool sqlc generate` and `go run ./cmd/gentypes`; both outputs are committed.
