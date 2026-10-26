@@ -71,7 +71,7 @@ render         -> screen
 | --- | --- | --- |
 | `eveonline_skills` | ESI `/characters/{id}/skillqueue`, `/characters/{id}/skills` (logged-in characters); SDE types for skill names | snapshot (each character's queue, trained skills and skill points) in module state |
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; player count in a series while online |
-| `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days` |
+| `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days`, first gas reading of each day in `p1_gas_days` |
 | `solar` | Hoymiles DTU-Pro-S, Modbus TCP | snapshot (DTU serial and every inverter input) in module state |
 | `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
@@ -100,18 +100,18 @@ Reads the smart meter through a Smartstuff P1 dongle with DSMR-API firmware. Con
 | --- | --- | --- |
 | `url` | empty | The dongle's base URL, e.g. `http://192.168.1.20`. Empty disables the module. |
 
-`Update` runs every minute; data is stale after 10 minutes. Each update reads `/api/v2/sm/actual` with a 10 s timeout (the dongle's Wi-Fi is weak), stores the reading as the snapshot, and inserts it into `p1_days` when the meter's day has no row yet. HTTP 401 or 403 (Basic Auth set in the dongle) is `module.ErrAuth`. These fail the update: a response without a timestamp, meter readings or power (the dongle sends one before it has read a telegram), all four electricity readings zero, and a meter time more than 10 minutes off the clock (the dongle lost the meter and serves its last telegram, or the meter's clock is wrong).
+`Update` runs every minute; data is stale after 10 minutes. Each update reads `/api/v2/sm/actual` with a 10 s timeout (the dongle's Wi-Fi is weak), stores the reading as the snapshot, inserts it into `p1_days` when the meter's day has no row yet, and its gas into `p1_gas_days` when the gas meter's day has no row yet. HTTP 401 or 403 (Basic Auth set in the dongle) is `module.ErrAuth`. These fail the update: a response without a timestamp, meter readings or power (the dongle sends one before it has read a telegram), all four electricity readings zero, and a meter time more than 10 minutes off the clock (the dongle lost the meter and serves its last telegram, or the meter's clock is wrong).
 
 - The day is the date of the meter's timestamp (`YYMMDDhhmmss` plus `W` or `S`, CET or CEST), so the module needs no time zone. Times in the result are converted from it.
 - `p1_days` holds one row per day: the first reading that day. Day totals come from these rows, not from the dongle's history, and need one write a day. When the dongle is offline at midnight, the first reading after it starts the day, and usage in the gap counts for the new day.
-- After a dongle restart gas is missing until the gas meter sends a reading. A day row without gas gets it from the first reading that has it, so gas can start later than the row's time.
+- `p1_gas_days` holds one row per gas day: the first gas reading that day, keyed on the gas meter's date and time (`gas_delivered_timestamp`; the meter's when the dongle does not send it). A DSMR 4 gas meter reports hourly, so at midnight its reading is from 23:00 and belongs to the day before. After a dongle restart gas is missing until the gas meter sends a reading; the first reading with gas starts the gas day.
 
 Query `p1.actual` takes no params and returns:
 
 - `measuredAt`: the meter's time of the reading.
 - `voltage`: `l1`, `l2`, `l3` in V; null for phases the meter does not have.
 - `flowKw`: power delivered minus power returned; positive is taken from the net, negative is returned to it.
-- `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs) and `gasM3` (null without a gas meter or when the gas counter went down; the meter reports gas every 5 minutes, DSMR 4 meters hourly, so gas lags `to`). A period is null when a day has no row, or when an electricity counter went down in it (meter replaced).
+- `today`: from the first reading of the meter's current day to the latest. `yesterday`: from the first reading of the day before to the first of today. Each has `from` and `to` (the readings' times; `from` later than midnight means the period is partial), `takenKwh` and `returnedKwh` (both tariffs), and `gasM3` with `gasFrom` and `gasTo` (the gas meter's times; the meter reports gas every 5 minutes, DSMR 4 meters hourly, so gas lags `to`). Gas is null without a gas meter, when the gas counter went down, or when the gas meter has not read on a day yet: `today` and `yesterday` gas are null after midnight until the first gas reading of the day. A period is null when a day has no row, or when an electricity counter went down in it (meter replaced).
 
 Each update also writes [series](#time-series) at the meter's time: `p1.flow` (kW, rate, as `flowKw`), and the counters `p1.taken` and `p1.returned` (kWh, both tariffs). `p1.gas` (m³, when reported) is written at the gas meter's time (`gas_delivered_timestamp`; the meter's time when the dongle does not send it), and a gas reading whose time has not advanced since the last update is skipped.
 
@@ -398,7 +398,7 @@ modules/eveonline/esi/sql/migrations/00001_characters.sql
 modules/eveonline/esi/sql/queries.sql
 modules/eveonline/sde/sql/migrations/00001_sde.sql
 modules/eveonline/sde/sql/queries.sql
-modules/p1/sql/migrations/00001_days.sql
+modules/p1/sql/migrations/00002_gas_days.sql
 modules/p1/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
