@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example News</title>
+    <link>https://news.example.com/</link>
+    <description>Headlines</description>
+    <item>
+      <title>Second story</title>
+      <link>https://news.example.com/2</link>
+      <pubDate>Fri, 16 Oct 2026 08:00:00 +0200</pubDate>
+      <description><![CDATA[<p>Rain <b>all</b> day.</p><p>Bring an umbrella &amp; boots.</p><script>track()</script>]]></description>
+    </item>
+    <item>
+      <title>Undated story</title>
+      <link>https://news.example.com/undated</link>
+      <description>No date given.</description>
+    </item>
+    <item>
+      <title>  Newest
+        story  </title>
+      <link>https://news.example.com/3</link>
+      <pubDate>Fri, 16 Oct 2026 09:30:00 +0200</pubDate>
+      <description>Plain text summary.</description>
+    </item>
+    <item>
+      <title>Oldest story</title>
+      <link>https://news.example.com/1</link>
+      <pubDate>Thu, 15 Oct 2026 18:00:00 +0200</pubDate>
+    </item>
+  </channel>
+</rss>

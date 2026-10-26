@@ -105,6 +105,27 @@ export interface P1Usage {
   gasTo: string | null;
 }
 
+export interface RssFeed {
+  name: string;
+  title: string;
+  link: string;
+  fetchedAt: string | null;
+  error: string;
+  items: RssItem[];
+}
+
+export interface RssItem {
+  title: string;
+  link: string;
+  published: string | null;
+  summary: string;
+}
+
+export interface RssItemsParams {
+  feed?: string;
+  limit?: number;
+}
+
 export interface SeriesHistoryParams {
   hours?: number;
   stepMinutes?: number;
@@ -185,6 +206,7 @@ export interface Queries {
   "eveonline_status.server": { params: Record<string, never>; result: EveonlineStatusStatus | null };
   "p1.actual": { params: Record<string, never>; result: P1Actual | null };
   "p1.flow": { params: SeriesHistoryParams; result: SeriesPoint[] };
+  "rss.items": { params: RssItemsParams; result: RssFeed | null };
   "solar.power": { params: SeriesHistoryParams; result: SeriesPoint[] };
   "solar.production": { params: Record<string, never>; result: SolarProduction | null };
   "weather.forecast": { params: WeatherForecastParams; result: WeatherForecast | null };

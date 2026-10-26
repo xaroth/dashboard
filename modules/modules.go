@@ -7,11 +7,12 @@ import (
 	"github.com/xaroth/dashboard/modules/eveonline/skills"
 	"github.com/xaroth/dashboard/modules/eveonline/status"
 	"github.com/xaroth/dashboard/modules/p1"
+	"github.com/xaroth/dashboard/modules/rss"
 	"github.com/xaroth/dashboard/modules/solar"
 	"github.com/xaroth/dashboard/modules/weather"
 )
 
 // All returns every module's registration.
 func All() []module.Registration {
-	return []module.Registration{car.Module, p1.Module, skills.Module, solar.Module, status.Module, weather.Module}
+	return []module.Registration{car.Module, p1.Module, rss.Module, skills.Module, solar.Module, status.Module, weather.Module}
 }

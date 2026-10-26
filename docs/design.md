@@ -74,6 +74,7 @@ render         -> screen
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; player count in a series while online |
 | `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days`, first gas reading of each day in `p1_gas_days` |
 | `solar` | Hoymiles DTU-Pro-S, Modbus TCP | snapshot (DTU serial and every inverter input) in module state |
+| `rss` | RSS 1.0, RSS 2.0, Atom and JSON Feed URLs | snapshot (per feed: title, newest items, HTTP validators) in module state |
 | `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
 
@@ -180,6 +181,28 @@ Queries:
 A vehicle has: `vin`, `shortName`, `brand`, `nickname` (from the brand's app, often empty), `keyExpiresAt`, `model` (sales name), `modelCode`, `type`, `updatedAt`, `activeAt`, `ignitionOn`, `odometerKm`, `location`, `stateOfCharge`, `fuelLevel`, `ranges` (km per energy source), `charge` (plugged in, charging, status, AC/DC targets, minutes remaining), `locked` (all doors locked), `open` (doors, hood, trunk, sunroof), `climateOn`, `outsideTemperature` (°C) and `warnings`. Fields a car does not report are null. Short names and key expiry are read at query time, so changes on the admin page show without an update.
 
 `car.NewFake(tb, opts...)` serves the Pleos API in-process for a Hyundai key with one car, plus a Kia key with `ExpectKey_Kia`, from the documented example responses in `modules/car/testdata` with each car's state on top. It checks brands, tokens and which key a VIN belongs to; `Expect*` options and methods set up failures. It works inside a synctest bubble.
+
+### RSS
+
+Reads named feeds (RSS 1.0, RSS 2.0, Atom, JSON Feed), parsed with `gofeed`. Config keys under `modules.rss`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `feeds` | empty | Feeds by name, each with `url` (http or https). Empty disables the module. Another URL fails `Initialize`. |
+
+```yaml
+modules:
+  rss:
+    feeds:
+      news: { url: https://example.com/rss }
+      tech: { url: https://example.org/atom.xml }
+```
+
+`Update` runs every 15 minutes; data is stale after 2 hours. Each update fetches every feed concurrently, with `If-None-Match` and `If-Modified-Since` from the feed's last response; a 304 keeps its items. A response is read up to 5 MB. Items are stored newest first (published time, else updated time; undated items last, in feed order), at most 50 per feed, with the description (else the content) as plain text cut at about 300 characters. An item without a title takes its summary as title. A feed that fails keeps its previous items with the error; the update fails only when every feed fails. A feed whose URL changed starts over: its old items and validators are dropped.
+
+Query `rss.items` takes `feed` (a configured name; empty is the first by name) and `limit` (default 10, at most 50), and returns the feed's `name`, `title` and `link` as it publishes them, `fetchedAt` and `error` of that feed, and `items` (`title`, `link`, `published`, `summary`). An unknown feed is an error. The value is null until the feed's first fetch. A device selects its feed by overriding `feed` for the page, so one page shows a different feed per device.
+
+`rss.NewFake(tb, opts...)` (in `feed_fake.go`) serves the RSS and Atom fixtures in `modules/rss/testdata` at `rss.FakeNewsURL` (ETag and Last-Modified) and `rss.FakeTechURL` (Last-Modified only), answering conditional requests with 304; `ExpectFeed` serves another body, `Publish` changes a feed and `Fail` makes it answer with a status.
 
 ### Registration
 
@@ -662,7 +685,7 @@ Each step has its own test with no network:
 
 | What | Tool | How |
 | --- | --- | --- |
-| Module `Update` and queries | `go test` | `moduletest.Load` loads modules on a temp database; `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble). Fakes live in `<name>_fake.go` with `NewFake(tb, opts...)` and `Expect<Thing>` options: `weather.NewFake` (Open-Meteo, fixtures in `modules/weather/testdata`), `p1.NewFake`, `car.NewFake`, `solar.NewFake`, `esi.NewFake` (SSO), `status.NewFake`, `sde.NewFake`. Assertions on the query results |
+| Module `Update` and queries | `go test` | `moduletest.Load` loads modules on a temp database; `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble). Fakes live in `<name>_fake.go` with `NewFake(tb, opts...)` and `Expect<Thing>` options: `weather.NewFake` (Open-Meteo, fixtures in `modules/weather/testdata`), `p1.NewFake`, `car.NewFake`, `rss.NewFake`, `solar.NewFake`, `esi.NewFake` (SSO), `status.NewFake`, `sde.NewFake`. Assertions on the query results |
 | Module loading, scheduler | `go test` | fake modules: config errors, panics, backoff, auth pause, manual updates, snapshots |
 | Storage | `go test` | pragmas and page size, reader cannot write, per-owner migrations |
 | Device protocol | `go test` | setup, keys surviving a restart, auth, page selection, refresh rate (including DST), render failure, image store |

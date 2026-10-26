@@ -72,6 +72,27 @@ export const fixtures: { [K in QueryName]: NonNullable<Queries[K]["result"]> } =
     yesterday: { from: "2026-10-15T06:30:00+02:00", to: "2026-10-16T00:00:05+02:00", takenKwh: 9.1, returnedKwh: 3.4, gasM3: null, gasFrom: null, gasTo: null },
   },
   "p1.flow": series((i) => Math.sin(i / 8) * 2),
+  "rss.items": {
+    name: "news",
+    title: "Voorbeeldnieuws",
+    link: "https://news.example.com/",
+    fetchedAt,
+    error: "",
+    items: [
+      { title: "Kabinet presenteert plannen voor woningbouw", published: "2026-10-16T09:45:00+02:00", summary: "Het kabinet wil de komende tien jaar een miljoen woningen bouwen." },
+      {
+        title: "Storm verwacht in het noorden van het land, code oranje voor de Waddeneilanden en de kust van Groningen en Friesland",
+        published: "2026-10-16T08:10:00+02:00",
+        summary: "Het KNMI waarschuwt voor windstoten tot 110 km/u. Veerdiensten varen mogelijk niet, en het advies is om niet onnodig de weg op te gaan.",
+      },
+      { title: "Spoorstoring tussen Utrecht en Amersfoort opgelost", published: "2026-10-16T07:30:00+02:00", summary: "" },
+      { title: "Nieuwe tentoonstelling in het Rijksmuseum", published: "2026-10-15T21:00:00+02:00", summary: "Ruim honderd werken uit de Gouden Eeuw." },
+      { title: "Ajax wint thuis van PSV", published: "2026-10-15T20:15:00+02:00", summary: "Een doelpunt in de slotminuut besliste het duel." },
+      { title: "Benzineprijs daalt voor derde week op rij", published: "2026-10-15T16:00:00+02:00", summary: "Een liter Euro95 kost gemiddeld 1,89 euro." },
+      { title: "Bericht zonder datum", published: null, summary: "Sommige feeds geven geen tijd." },
+      { title: "Universiteit opent nieuw onderzoekscentrum", published: "2026-10-15T11:00:00+02:00", summary: "Het centrum richt zich op klimaatadaptatie." },
+    ].map((item, i) => ({ ...item, link: `https://news.example.com/${i}` })),
+  },
   "solar.power": series((i) => Math.max(0, Math.sin((i - 24) / 15) * 3000)),
   "solar.production": {
     powerW: 2345,
