@@ -19,15 +19,20 @@ import (
 // MaxImageSize is the firmware's PNG limit with PSRAM, for both models.
 const MaxImageSize = 750 << 10
 
-// Panel is a device's native screen size, landscape.
+// Panel is a device's native screen size, landscape, and how its PNG
+// carries the 4 gray levels.
 type Panel struct {
 	Width, Height int
+	depth         int      // PNG bit depth
+	grays         [4]uint8 // PNG sample per level, black to white
 }
 
-// panels by the Model header the firmware sends.
+// panels by the Model header the firmware sends. The firmware expands a
+// 2-bit PNG on the E1003 evenly to 0/5/10/15 of its 16 levels, which shows
+// both grays too light; a 4-bit PNG reaches the panel as is.
 var panels = map[string]Panel{
-	"reterminal_e1001": {800, 480},
-	"reterminal_e1003": {1872, 1404},
+	"reterminal_e1001": {800, 480, 2, [4]uint8{0, 1, 2, 3}},
+	"reterminal_e1003": {1872, 1404, 4, [4]uint8{0, 3, 7, 15}},
 }
 
 // PanelFor returns the panel of model, as the firmware's Model header names it.
@@ -50,17 +55,18 @@ func ViewportFor(p Panel, rotation int) Viewport {
 	return Viewport{Width: p.Width, Height: p.Height}
 }
 
-// Finish turns a rendered PNG into what the device gets: turned 180° for
-// rotation 180 and 270, reduced to 4 grays, encoded as a 2-bit grayscale PNG.
-// Both models get the E1001's four levels so one set of styles works on both.
-// An image over MaxImageSize is an error; the caller keeps serving the previous one.
-func Finish(rendered []byte, rotation int) ([]byte, error) {
+// Finish turns a rendered PNG into what p's device gets: turned 180° for
+// rotation 180 and 270, reduced to 4 grays, encoded as a grayscale PNG of p's
+// bit depth. Both models get the E1001's four levels so one set of styles
+// works on both. An image over MaxImageSize is an error; the caller keeps
+// serving the previous one.
+func Finish(rendered []byte, rotation int, p Panel) ([]byte, error) {
 	img, err := png.Decode(bytes.NewReader(rendered))
 	if err != nil {
 		return nil, fmt.Errorf("decoding rendered png: %w", err)
 	}
 	b := img.Bounds()
-	out, err := encodeGray2(reduce(img, rotation == 180 || rotation == 270), b.Dx(), b.Dy())
+	out, err := encodeGray(reduce(img, rotation == 180 || rotation == 270), b.Dx(), b.Dy(), p)
 	if err != nil {
 		return nil, err
 	}
@@ -104,15 +110,17 @@ func reduce(img image.Image, turn bool) []uint8 {
 	return out
 }
 
-// encodeGray2 writes levels (0-3, row-major) as a 2-bit grayscale PNG, the
-// format TRMNL serves to 4-gray panels. image/png has no 2-bit gray encoder.
-func encodeGray2(levels []uint8, w, h int) ([]byte, error) {
-	stride := (w + 3) / 4
+// encodeGray writes levels (0-3, row-major) as a grayscale PNG of p's bit
+// depth, each level as p's sample for it. image/png has no 2- or 4-bit gray
+// encoder.
+func encodeGray(levels []uint8, w, h int, p Panel) ([]byte, error) {
+	perByte := 8 / p.depth
+	stride := (w + perByte - 1) / perByte
 	raw := make([]byte, h*(1+stride))
 	for y := range h {
 		row := raw[y*(1+stride)+1 : (y+1)*(1+stride)] // leading byte: filter type 0
 		for x := range w {
-			row[x/4] |= levels[y*w+x] << (6 - 2*(x%4))
+			row[x/perByte] |= p.grays[levels[y*w+x]] << (8 - p.depth*(x%perByte+1))
 		}
 	}
 	var idat bytes.Buffer
@@ -130,7 +138,7 @@ func encodeGray2(levels []uint8, w, h int) ([]byte, error) {
 	ihdr := make([]byte, 13)
 	binary.BigEndian.PutUint32(ihdr[0:], uint32(w))
 	binary.BigEndian.PutUint32(ihdr[4:], uint32(h))
-	ihdr[8], ihdr[9] = 2, 0 // bit depth 2, color type gray
+	ihdr[8], ihdr[9] = uint8(p.depth), 0 // color type gray
 	writeChunk(&out, "IHDR", ihdr)
 	writeChunk(&out, "IDAT", idat.Bytes())
 	writeChunk(&out, "IEND", nil)

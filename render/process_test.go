@@ -453,7 +453,7 @@ func TestBunRenderer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	out, err := render.Finish(raw, 90)
+	out, err := render.Finish(raw, 90, panel)
 	if err != nil {
 		t.Fatalf("Finish: %v", err)
 	}

@@ -211,7 +211,8 @@ func (p *Pipeline) Render(ctx context.Context, t screen.Target, page string) (im
 	if err != nil {
 		return screen.Image{}, err
 	}
-	png, err := Finish(raw, t.Rotation)
+	panel, _ := PanelFor(t.Model) // known: Props checked it
+	png, err := Finish(raw, t.Rotation, panel)
 	if err != nil {
 		return screen.Image{}, err
 	}
