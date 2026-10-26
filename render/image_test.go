@@ -58,7 +58,7 @@ func TestFinish(t *testing.T) {
 	edges := image.NewGray(image.Rect(0, 0, 2, 1))
 	edges.Pix = []uint8{128, 220}
 
-	// Odd width: the last 4-bit row byte is half used.
+	// Odd width: the last row byte is partly used.
 	odd := image.NewGray(image.Rect(0, 0, 3, 1))
 	odd.Pix = []uint8{0, 85, 255}
 	e1001, _ := render.PanelFor("reterminal_e1001")
@@ -76,6 +76,7 @@ func TestFinish(t *testing.T) {
 		{"turned", levels, 180, e1001, 2, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
 		{"gray input", gray, 0, e1001, 2, [][]uint8{{0, 170}}},
 		{"edges round darker", edges, 0, e1001, 2, [][]uint8{{85, 170}}},
+		{"odd width", odd, 0, e1001, 2, [][]uint8{{0, 85, 255}}},
 		// 4-bit 3 and 7 of 15, darker than the 5 and 10 the firmware expands 2-bit to.
 		{"e1003 levels", levels, 0, e1003, 4, [][]uint8{{0, 51, 119, 255}, {255, 119, 119, 119}}},
 		{"e1003 odd width", odd, 0, e1003, 4, [][]uint8{{0, 51, 255}}},
