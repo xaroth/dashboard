@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+const deleteCharacter = `-- name: DeleteCharacter :execrows
+DELETE FROM eveonline_esi_characters WHERE character_id = ?
+`
+
+func (q *Queries) DeleteCharacter(ctx context.Context, characterID int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteCharacter, characterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getCharacter = `-- name: GetCharacter :one
 SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error, auth_error_code FROM eveonline_esi_characters WHERE character_id = ?
 `

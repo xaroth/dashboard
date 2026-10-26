@@ -259,9 +259,18 @@ func (*skills) queue(ctx context.Context, q module.Query, p queueParams) ([]Char
 	if _, err := q.LoadSnapshot(ctx, &snap); err != nil {
 		return nil, err
 	}
+	// A character removed since the update is left out: with none left the
+	// module is disabled and the snapshot is not replaced.
+	chars, err := esi.Shared.Get(q).Characters(ctx, q, scopes)
+	if err != nil {
+		return nil, err
+	}
 	now := q.Now()
 	out := make([]Character, 0, len(snap.Characters))
 	for _, s := range snap.Characters {
+		if !slices.ContainsFunc(chars, func(c esi.Character) bool { return c.ID == s.ID }) {
+			continue
+		}
 		sp := make(map[int64]int64, len(s.Data.Skills))
 		for _, k := range s.Data.Skills {
 			sp[k.ID] = k.SP

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -33,7 +34,7 @@ var pageHTML string
 var pageTmpl = template.Must(template.New("page").Parse(pageHTML))
 
 // ServeAdmin serves the characters page, the SSO login and its callback,
-// under /eveonline_esi/ on the admin listener.
+// and removing a character, under /eveonline_esi/ on the admin listener.
 func (c *Client) ServeAdmin(w http.ResponseWriter, r *http.Request, q module.Query) {
 	switch r.URL.Path {
 	case "/":
@@ -42,6 +43,13 @@ func (c *Client) ServeAdmin(w http.ResponseWriter, r *http.Request, q module.Que
 		c.login(w, r, q)
 	case "/callback":
 		c.callback(w, r, q)
+	case "/remove":
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			return
+		}
+		c.remove(w, r, q)
 	default:
 		http.NotFound(w, r)
 	}
@@ -147,6 +155,53 @@ func (c *Client) callback(w http.ResponseWriter, r *http.Request, q module.Query
 	http.Redirect(w, r, "/eveonline_esi/", http.StatusSeeOther)
 }
 
+// remove deletes a character and its tokens, then revokes its refresh token
+// at SSO. A failed revoke is only logged: the token is gone from here
+// either way, and the owner can revoke the app in game.
+func (c *Client) remove(w http.ResponseWriter, r *http.Request, q module.Query) {
+	ctx := r.Context()
+	id, err := strconv.ParseInt(r.PostFormValue("character_id"), 10, 64)
+	if err != nil {
+		c.fail(w, r, q, http.StatusBadRequest, errors.New("character_id must be a character ID"))
+		return
+	}
+	row, err := c.deleteCharacter(ctx, q, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.fail(w, r, q, http.StatusNotFound, fmt.Errorf("character %d is not logged in", id))
+		return
+	}
+	if err != nil {
+		c.fail(w, r, q, http.StatusInternalServerError, fmt.Errorf("removing character %d: %w", id, err))
+		return
+	}
+	q.Log.Info("character removed", "character", row.Name, "id", id)
+	if c.cfg.ClientID != "" {
+		if err := c.revoke(ctx, row.RefreshToken); err != nil {
+			q.Log.Warn("revoking removed character's token", "character", row.Name, "id", id, "err", err)
+		}
+	}
+	http.Redirect(w, r, "/eveonline_esi/", http.StatusSeeOther)
+}
+
+// deleteCharacter deletes the character and returns it as it was. It holds
+// the character's refresh lock, so the refresh token returned is the last
+// one SSO issued.
+func (c *Client) deleteCharacter(ctx context.Context, q module.Query, id int64) (EveonlineEsiCharacter, error) {
+	lock := c.refreshLock(id)
+	lock.Lock()
+	defer lock.Unlock()
+	db := New(q.DB)
+	row, err := db.GetCharacter(ctx, id)
+	if err != nil {
+		return row, err
+	}
+	n, err := db.DeleteCharacter(ctx, id)
+	if err == nil && n == 0 {
+		err = sql.ErrNoRows
+	}
+	return row, err
+}
+
 func (c *Client) fail(w http.ResponseWriter, r *http.Request, q module.Query, code int, err error) {
 	q.Log.Warn("eveonline page", "path", r.URL.Path, "err", err)
 	http.Error(w, err.Error(), code)
@@ -217,6 +272,27 @@ func (c *Client) requestToken(ctx context.Context, form url.Values) (tokenRespon
 		return tok, errors.New("SSO token: response has no access or refresh token")
 	}
 	return tok, nil
+}
+
+// revoke revokes a refresh token at SSO.
+func (c *Client) revoke(ctx context.Context, refreshToken string) error {
+	form := url.Values{"token_type_hint": {"refresh_token"}, "token": {refreshToken}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ssoURL+"/v2/oauth/revoke", strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(c.cfg.ClientID, c.cfg.ClientSecret)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.sso.Do(req)
+	if err != nil {
+		return fmt.Errorf("SSO revoke: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		return fmt.Errorf("SSO revoke: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 type accessClaims struct {

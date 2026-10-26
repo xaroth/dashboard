@@ -21,7 +21,7 @@
 <p>Scopes the modules need: {{range .Scopes}}<code>{{.}}</code> {{else}}none{{end}}</p>
 {{with .Characters}}
 <table>
-  <tr><th>Character</th><th>ID</th><th>Missing scopes</th><th>Token expires</th><th>Error</th></tr>
+  <tr><th>Character</th><th>ID</th><th>Missing scopes</th><th>Token expires</th><th>Error</th><th></th></tr>
   {{range .}}
   <tr>
     <td>{{.Name}}</td>
@@ -29,6 +29,7 @@
     <td>{{range .Missing}}<code>{{.}}</code><br>{{else}}-{{end}}</td>
     <td>{{.ExpiresAt.Local.Format "01-02 15:04:05"}}</td>
     <td class="error">{{.AuthError}}</td>
+    <td><form method="post" action="/eveonline_esi/remove"><input type="hidden" name="character_id" value="{{.ID}}"><button>Remove</button></form></td>
   </tr>
   {{end}}
 </table>

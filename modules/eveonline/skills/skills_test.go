@@ -272,6 +272,41 @@ func TestQueueNames(t *testing.T) {
 	})
 }
 
+func TestQueueRemoved(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEVE{queues: map[string]string{"1": "[]", "2": "[]"}}
+		set := load(t, fake)
+		login(t, set, "alice")
+		login(t, set, "bob")
+		if err := set.Update(t.Context(), "eveonline_skills"); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		mux := http.NewServeMux()
+		set.RegisterAdmin(mux)
+		remove := func(id string) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/eveonline_esi/remove", strings.NewReader("character_id="+id))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("remove %s: got %d %s, want 303", id, rec.Code, rec.Body)
+			}
+		}
+
+		// Left out before the next update.
+		remove("1")
+		if got := queue(t, set, nil); len(got) != 1 || got[0].Name != "Bob" {
+			t.Errorf("got %+v, want only Bob", got)
+		}
+		// With none left the module is disabled and keeps its snapshot.
+		remove("2")
+		if got := queue(t, set, nil); len(got) != 0 {
+			t.Errorf("got %+v, want no characters", got)
+		}
+	})
+}
+
 func TestQueueAuth(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
