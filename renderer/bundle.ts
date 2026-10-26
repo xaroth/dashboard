@@ -11,8 +11,10 @@ export type RenderProps = Props<Record<string, Result<unknown>>>;
 
 export type Page = {
   name: string;
-  /** From shared/: laid out for 800x480 and scaled up to larger panels. */
+  /** From shared/. */
   shared: boolean;
+  /** Laid out for 800x480 and scaled up to larger panels: shared pages, and layout pages that export `scaled = true`. */
+  scaled: boolean;
   data: Record<string, Query>;
   component: ComponentType<RenderProps>;
   css: string;
@@ -38,15 +40,27 @@ export async function bundlePages(dir: string): Promise<Map<string, Page>> {
       const name = out.slice((shared ? "shared/" : "layouts/").length);
       const js = join(outdir, `${out}.js`);
       const cssFile = Bun.file(join(outdir, `${out}.css`));
-      const css = (await cssFile.exists()) ? await cssFile.text() : "";
+      const css = (await cssFile.exists()) ? await cssFile.text() : await cssAlone(join(dir, file), dir);
 
       // A fresh path per build, so a rebuild is not served from the module cache.
       const mod = await import(`${js}?v=${Date.now()}`);
       if (typeof mod.default !== "function") throw new Error(`${name}: default export is not a component`);
-      pages.set(name, { name, shared, data: mod.data ?? {}, component: mod.default, css });
+      pages.set(name, { name, shared, scaled: shared || mod.scaled === true, data: mod.data ?? {}, component: mod.default, css });
     }
     return pages;
   } finally {
     await rm(outdir, { recursive: true, force: true });
   }
+}
+
+/**
+ * The CSS of one page, built on its own. Bun writes one CSS file for entries
+ * that import the same CSS modules, named after the first, so the others get
+ * none in a build of every page.
+ */
+async function cssAlone(entry: string, root: string): Promise<string> {
+  const result = await Bun.build({ entrypoints: [entry], root, target: "bun", throw: false });
+  if (!result.success) throw new Error(result.logs.map(String).join("\n"));
+  const css = result.outputs.find((o) => o.path.endsWith(".css"));
+  return css ? await css.text() : "";
 }

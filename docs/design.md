@@ -550,7 +550,7 @@ A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for 
 
 Layouts `e1001` and `e1003` hold only `logo`, the setup image (see [Protocol](#protocol)), sized for their panel: the mark is centered above the bottom third, where the firmware draws its messages. Every other page is shared.
 
-Shared pages are written in px for the E1001, 800x480 (480x800 in portrait). The renderer scales them by the factor that fits 800x480 into the panel and lays them out in the panel's size divided by it (E1003: scale 2.34, 800x600 landscape, 600x800 portrait), drawn at the panel's resolution with takumi's `devicePixelRatio`; the page's `viewport` prop is that layout size. On the E1001 the scale is 1. Layout pages get the panel's own size, unscaled. takumi resolves `em` against the parent but `rem` against a fixed 16px, not the root element, which is why sizes scale this way rather than through a root font size.
+Shared pages are written in px for the E1001, 800x480 (480x800 in portrait). The renderer scales them by the factor that fits 800x480 into the panel and lays them out in the panel's size divided by it (E1003: scale 2.34, 800x600 landscape, 600x800 portrait), drawn at the panel's resolution with takumi's `devicePixelRatio`; the page's `viewport` prop is that layout size. On the E1001 the scale is 1. Layout pages get the panel's own size, unscaled, unless they export `scaled = true`: then they are laid out and scaled like shared pages. takumi resolves `em` against the parent but `rem` against a fixed 16px, not the root element, which is why sizes scale this way rather than through a root font size.
 
 Device names and layouts may contain letters, digits, `-` and `_`; `page` is reserved as a device name (it is taken by the admin route `/preview/page/...`). MACs must be unique.
 
@@ -675,9 +675,9 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
 - The skill queue row picks among characters with data (`sortQueues`); characters with an update error are counted in its detail.
 - A device picks the feed with `home.news: {feed: ...}`.
 
-### E1001 home page
+### Layout home pages
 
-`e1001/home` (`pages/layouts/e1001/home.tsx`) overrides `home` on the E1001: values as pictures, text only for the values themselves and for headlines. In landscape:
+`e1001/home` and `e1003/home` override `home` on their panels. Both are `HomeScreen` (`pages/components/HomeScreen.tsx`), laid out 800 px wide; `e1003/home` exports `scaled = true` and leaves out the skill queues (its data is `homeData`; `e1001/home` adds `homeSkills`). They show values as pictures, text only for the values themselves and for headlines. values as pictures, text only for the values themselves and for headlines. In landscape:
 
 | Block | Shows | Queries |
 | --- | --- | --- |
@@ -691,6 +691,8 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
 - After sunset today's card shows the temperature now instead of the day's range. Under 10 W of solar is idle: the roof box turns gray, with a moon once the sun is down.
 - Without a car (`car.vehicle` empty without error) the car is left out. A device picks the car with `home.car: {id: ...}` and the feed with `home.news: {feed: ...}`.
 - In portrait the house goes above the headlines and the bottom shows three days.
+- The day cards take the height left under the top block, so their event rows follow the panel: 6 at 800x480, 13 at 800x600 (the E1003, scaled).
+- Without skill queues (`e1003/home`) the headlines take the whole left column.
 
 ### Queries
 
@@ -723,7 +725,7 @@ func (m *weather) forecast(ctx context.Context, q module.Query, p forecastParams
 
 A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run in `renderer.dir`), started on the first request and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
 
-- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` and `pages/shared/<page>.tsx` with `Bun.build` into JS plus CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle, and a watcher error is logged and ends rebuilding.
+- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` and `pages/shared/<page>.tsx` with `Bun.build` into JS plus CSS. Bun writes one CSS file for entries that import the same CSS modules, so a page left without one is built again on its own for its CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle, and a watcher error is logged and ends rebuilding.
 - **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
 
 | Request | Response |
@@ -756,7 +758,7 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 ### Shared code
 
 - `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, ages, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks, today's kWh from a power series), `weather.ts` (weather code labels and icons, wind direction), `eveonline.ts` (skill levels, skill queues by urgency), `car.ts` (car names, levels, range, charge target and end, open part and warning labels, key expiry, last seen), `calendar.ts` (agenda days, rows that fit, day labels, event times, events per day, short dates, weekends), `device.ts` (Wi-Fi quality from RSSI, battery charge from its voltage), `home.ts` (combined row status, the cars row, the most urgent skill queue, the next event; for the E1001 home: skill queues running out and their bar, what the house scene shows of a car). Pure functions; layouts keep derivation here so it is tested.
-- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time), `CarSeen` (when a car was last seen, marked only when its result is stale), `HouseScene` (house and car with solar, energy and charge values, as SVG with the values over it), `WeatherIcon` (weather icons as SVG, inverted for a black background), `StaleMark` (the "!" on stale or missing data, placed or inline), `DeviceStatus` (update time, Wi-Fi and battery in small text), `SummaryRow` (a label, a value and a detail line for one source, `verouderd` with the fetch time when stale, `Geen ...` with the error when missing; the label beside the value, or above it with `stacked` for portrait; `prose` for text values such as headlines and lists, smaller and clamped to one line, two when stacked).
+- `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time), `CarSeen` (when a car was last seen, marked only when its result is stale), `HouseScene` (house and car with solar, energy and charge values, as SVG with the values over it), `WeatherIcon` (weather icons as SVG, inverted for a black background), `StaleMark` (the "!" on stale or missing data, placed or inline), `HomeScreen` (the layout home pages: house scene, skill queues when given, headlines and day cards, sized to the viewport), `DeviceStatus` (update time, Wi-Fi and battery in small text), `SummaryRow` (a label, a value and a detail line for one source, `verouderd` with the fetch time when stale, `Geen ...` with the error when missing; the label beside the value, or above it with `stacked` for portrait; `prose` for text values such as headlines and lists, smaller and clamped to one line, two when stacked).
 
 Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
 

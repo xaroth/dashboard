@@ -10,11 +10,12 @@ type Viewport = RenderProps["viewport"];
 
 /**
  * The viewport page lays out in, and the scale from it to viewport. Shared
- * pages are written for the E1001's 800x480 and scaled to fit the panel, so
- * one set of px sizes works on both panels; layout pages get the panel as is.
+ * pages, and layout pages that export `scaled = true`, are written for the
+ * E1001's 800x480 and scaled to fit the panel, so one set of px sizes works on
+ * both panels; other layout pages get the panel as is.
  */
 export function layout(page: Page, viewport: Viewport): { viewport: Viewport; scale: number } {
-  if (!page.shared) return { viewport, scale: 1 };
+  if (!page.scaled) return { viewport, scale: 1 };
   const [w, h] = viewport.portrait ? [480, 800] : [800, 480];
   const scale = Math.min(viewport.width / w, viewport.height / h);
   return {
