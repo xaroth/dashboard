@@ -31,8 +31,6 @@ describe("every page renders", () => {
 
 // Lowest scores of the current pages are ~0.36 (e1001/home's "!" unscaled on the E1003) and ~0.42.
 const legible = 0.35;
-// HouseScene's solar label, white on black: rounding toward the darker level erodes it.
-const illegible = new Set(["vandaag 6,9 kWh"]);
 
 const panels = [
   { model: "reterminal_e1001", width: 800, height: 480 },
@@ -54,7 +52,6 @@ describe("text stays legible after the reduction to 4 grays", () => {
         const [data, tree] = await Promise.all([render(element, { ...options, format: "raw" }), measure(element, options)]);
         const img = { data: new Uint8Array(data), width: panel.width, height: panel.height };
         const failing = textRuns(tree)
-          .filter((run) => !illegible.has(run.text))
           .map((run) => ({ text: run.text, score: score(img, run) }))
           .filter((run) => run.score !== null && run.score < legible)
           .map((run) => `${JSON.stringify(run.text)} ${run.score!.toFixed(2)}`);
