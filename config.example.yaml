@@ -22,6 +22,7 @@ devices:
     # power: usb   # auto (default) follows USB-Connected, which the reTerminals do not send, and assumes battery
     # params:   # query param overrides, <page>.<data key>
     #   rss.feed: {feed: tech}   # the rss page shows the first feed by name unless set
+    #   car.car: {id: ioniq}   # the car page's car, by short name or VIN; the first car without it
 
 renderer:
   watch: true   # rebuild pages on change; reload the browser to see them

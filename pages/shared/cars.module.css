@@ -1,0 +1,43 @@
+.car {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 2px solid #000;
+  border-radius: 8px;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 16px;
+  font-size: 20px;
+  color: #555;
+}
+
+.name {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 28px;
+  font-weight: 700;
+  color: #000;
+}
+
+.model {
+  font-size: 20px;
+  font-weight: 400;
+  color: #555;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 24px;
+  font-size: 22px;
+}
+
+.value {
+  font-weight: 700;
+}
