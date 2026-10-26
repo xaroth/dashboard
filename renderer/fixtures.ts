@@ -138,7 +138,7 @@ export const fixtures: { [K in QueryName]: NonNullable<Queries[K]["result"]> } =
       weatherCode: 61,
     })),
     daily: ["2026-10-16", "2026-10-17", "2026-10-18"].map((date, i) => ({
-      date,
+      date: `${date}T00:00:00+02:00`,
       weatherCode: [3, 61, 0][i]!,
       temperatureMax: 14 + i,
       temperatureMin: 6 + i,

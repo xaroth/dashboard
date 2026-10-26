@@ -9,7 +9,7 @@ import { skillLevel } from "../lib/eveonline";
 import { formatAge, formatDayShort, formatDuration, formatMillimeters, formatTemperature } from "../lib/format";
 import { carStatus, skillWarnings, weekFraction } from "../lib/home";
 import { query, type PageProps } from "../lib/page";
-import { weatherIcon } from "../lib/weather";
+import { forecastDay, weatherIcon } from "../lib/weather";
 import styles from "./HomeScreen.module.css";
 
 /** What every home screen shows; a layout page exports these as its data, with homeSkills to add the skill queues. */
@@ -168,7 +168,7 @@ function Days({ forecast, weatherStale, agenda, agendaStale, count, eventRows, n
     <div className={styles.days}>
       {Array.from({ length: count }, (_, i) => {
         const date = addDays(today, i);
-        const day = forecast?.daily.find((d) => d.date === date);
+        const day = forecastDay(forecast, date);
         // After sunset the rest of today is the evening: the temperature now says more than the day's range.
         const evening = i === 0 && afterSunset && forecast != null;
         const { shown, more } = fit(agenda ? dayEvents(agenda.events, date, now, timezone) : [], eventRows);
