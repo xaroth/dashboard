@@ -85,10 +85,6 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		shutdownGrace:   shutdownGrace,
 		requestDuration: newRequestDuration(),
 	}
-	loc, err := time.LoadLocation(cfg.Timezone)
-	if err != nil {
-		return nil, fmt.Errorf("loading timezone: %w", err)
-	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -124,7 +120,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		HTTPClient:    &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		Dialer:        &net.Dialer{},
 		Now:           time.Now,
-		Location:      loc,
+		Location:      cfg.Location,
 		Metrics:       s.metrics,
 		Tracing:       tracing,
 	})
@@ -141,8 +137,8 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 
 	pipeline, err := render.NewPipeline(render.PipelineOptions{
 		Renderer: s.renderer,
-		Resolver: resolver{set: s.modules, loc: loc},
-		Location: loc,
+		Resolver: resolver{set: s.modules, loc: cfg.Location},
+		Location: cfg.Location,
 		Now:      time.Now,
 		Metrics:  s.metrics,
 		Tracing:  tracing,
@@ -160,8 +156,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	s.admin.Handle("GET /metrics", promhttp.HandlerFor(s.gatherer, promhttp.HandlerOpts{}))
 	var configs []device.Config
 	for name, d := range cfg.Devices {
-		mac, _ := device.NormalizeMAC(d.MAC) // validated with the config
-		configs = append(configs, device.Config{Name: name, MAC: mac, Rotation: d.Rotation, Pages: d.pages(), Power: device.Power(d.Power), Params: d.params()})
+		configs = append(configs, device.Config{Name: name, MAC: d.MAC, Rotation: d.Rotation, Pages: d.pages(), Power: d.Power, Params: d.params()})
 	}
 	deviceOpts := device.Options{
 		Devices:   configs,
@@ -170,7 +165,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		DB:        s.db.Writer,
 		Migrator:  s.db,
 		PublicURL: cfg.PublicURL,
-		Schedule:  cfg.Schedule.device(loc),
+		Schedule:  cfg.Schedule,
 		Log:       log.With("component", "device"),
 		Now:       time.Now,
 		Metrics:   s.metrics,
