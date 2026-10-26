@@ -176,7 +176,10 @@ func (c *Client) remove(w http.ResponseWriter, r *http.Request, q module.Query) 
 	}
 	q.Log.Info("character removed", "character", row.Name, "id", id)
 	if c.cfg.ClientID != "" {
-		if err := c.revoke(ctx, row.RefreshToken); err != nil {
+		// The character is gone already; a client leaving must not skip the revoke.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), saveTimeout)
+		defer cancel()
+		if err := c.revoke(rctx, row.RefreshToken); err != nil {
 			q.Log.Warn("revoking removed character's token", "character", row.Name, "id", id, "err", err)
 		}
 	}
