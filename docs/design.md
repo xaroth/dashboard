@@ -338,7 +338,7 @@ The EVE Online modules share two values, each in a subpackage of `modules/eveonl
 
 #### ESI
 
-`esi.Shared` (`*esi.Client`, package `modules/eveonline/esi`) sends requests through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls. The transport includes `lib-esi-go`'s in-memory rate limiter: a request waits while its rate limit group is over 75% used. `*Client` is the sender for `lib-esi-go` requests. Its version in the admin UI is the ESI compatibility date requests are sent with (`lib-esi-go`'s `CompatibilityDate`). Config keys under `modules.eveonline_esi`:
+`esi.Shared` (`*esi.Client`, package `modules/eveonline/esi`) sends requests through `lib-esi-go`'s transport on top of the service's HTTP client transport, so ESI calls are traced like other calls. The transport includes `lib-esi-go`'s in-memory rate limiter: a request waits while its rate limit group is over 75% used. A 429 or 420 response fails its request with `*esi.RateLimitError` and stops all ESI requests of the client until the limit resets (`Retry-After` for 429, `X-Esi-Error-Limit-Reset` for 420, a minute without the header): a request in that time waits for the reset, or fails with `*esi.RateLimitError` without being sent when its deadline comes first. `*Client` is the sender for `lib-esi-go` requests. Its version in the admin UI is the ESI compatibility date requests are sent with (`lib-esi-go`'s `CompatibilityDate`). Config keys under `modules.eveonline_esi`:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -350,8 +350,9 @@ Characters:
 
 - Modules declare the scopes they need: `module.WithShared(esi.Shared, esi.Scopes{...})`. A login asks for every declared scope.
 - `/eveonline_esi/` on the admin listener lists the characters with the declared scopes they have not granted, their token expiry and a rejected refresh. "Log in a character" goes to EVE SSO; the callback stores the character, its granted scopes and tokens in `eveonline_esi_characters`. Logging in a character again replaces its tokens and scopes and clears its error. Pending logins live in memory for 10 minutes.
-- `Client.Characters(ctx, q, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, u, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it takes `*module.Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token. A refresh saves only if the stored refresh token is still the one it used; otherwise a login replaced it meanwhile, and the token reloads the login's.
-- A rejected refresh (`invalid_grant`, `invalid_client`) is recorded on the character and fails the update with `module.ErrAuth`. After logging in again, Update now on each affected module resumes it.
+- `Client.Characters(ctx, q, scopes)` returns the characters that granted all of `scopes`; a module is typically enabled when there is one. `Client.Token(ctx, u, id)` returns the character's token for `authentication.WithToken`. It refreshes itself a minute before expiry and stores the result, so it takes `*module.Update`. Refreshes are serialized per character, as a refresh may rotate the refresh token. A refresh saves only if the stored refresh token is still the one it used; otherwise a login replaced it meanwhile, and the token reloads the login's. The result is saved with its own 30 s timeout rather than the request's, since SSO has already spent the old refresh token.
+- A rejected refresh (`invalid_grant`) is recorded on the character, message and error code, and fails the update with `module.ErrAuth`. From then on `Client.Token` fails with `module.ErrAuth` without asking SSO, until the character logs in again. After logging in again, Update now on each affected module resumes it.
+- A rejected application (`invalid_client`: wrong `client_id` or `client_secret`) fails the update with `esi.ErrClientRejected` and `module.ErrAuth`, and is not recorded on the character.
 - The access token's claims (character ID, name, scopes) are read without checking the signature: the token comes straight from the token endpoint over TLS, authenticated with the client secret.
 
 #### Static data
@@ -394,7 +395,7 @@ device/sql/queries.sql
 modules/weather/sql/migrations/00001_locations.sql
 modules/weather/sql/queries.sql
 modules/eveonline/status/sql/migrations/00002_drop_samples.sql
-modules/eveonline/esi/sql/migrations/00001_characters.sql
+modules/eveonline/esi/sql/migrations/00002_auth_error_code.sql
 modules/eveonline/esi/sql/queries.sql
 modules/eveonline/sde/sql/migrations/00001_sde.sql
 modules/eveonline/sde/sql/queries.sql

@@ -11,7 +11,7 @@ import (
 )
 
 const getCharacter = `-- name: GetCharacter :one
-SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error FROM eveonline_esi_characters WHERE character_id = ?
+SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error, auth_error_code FROM eveonline_esi_characters WHERE character_id = ?
 `
 
 func (q *Queries) GetCharacter(ctx context.Context, characterID int64) (EveonlineEsiCharacter, error) {
@@ -25,12 +25,13 @@ func (q *Queries) GetCharacter(ctx context.Context, characterID int64) (Eveonlin
 		&i.AccessToken,
 		&i.ExpiresAt,
 		&i.AuthError,
+		&i.AuthErrorCode,
 	)
 	return i, err
 }
 
 const listCharacters = `-- name: ListCharacters :many
-SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error FROM eveonline_esi_characters ORDER BY name
+SELECT character_id, name, scopes, refresh_token, access_token, expires_at, auth_error, auth_error_code FROM eveonline_esi_characters ORDER BY name
 `
 
 func (q *Queries) ListCharacters(ctx context.Context) ([]EveonlineEsiCharacter, error) {
@@ -50,6 +51,7 @@ func (q *Queries) ListCharacters(ctx context.Context) ([]EveonlineEsiCharacter, 
 			&i.AccessToken,
 			&i.ExpiresAt,
 			&i.AuthError,
+			&i.AuthErrorCode,
 		); err != nil {
 			return nil, err
 		}
@@ -65,29 +67,31 @@ func (q *Queries) ListCharacters(ctx context.Context) ([]EveonlineEsiCharacter, 
 }
 
 const saveAuthError = `-- name: SaveAuthError :exec
-UPDATE eveonline_esi_characters SET auth_error = ? WHERE character_id = ?
+UPDATE eveonline_esi_characters SET auth_error = ?, auth_error_code = ? WHERE character_id = ?
 `
 
 type SaveAuthErrorParams struct {
-	AuthError   *string `json:"authError"`
-	CharacterID int64   `json:"characterId"`
+	AuthError     *string `json:"authError"`
+	AuthErrorCode *string `json:"authErrorCode"`
+	CharacterID   int64   `json:"characterId"`
 }
 
 func (q *Queries) SaveAuthError(ctx context.Context, arg SaveAuthErrorParams) error {
-	_, err := q.db.ExecContext(ctx, saveAuthError, arg.AuthError, arg.CharacterID)
+	_, err := q.db.ExecContext(ctx, saveAuthError, arg.AuthError, arg.AuthErrorCode, arg.CharacterID)
 	return err
 }
 
 const saveLogin = `-- name: SaveLogin :exec
-INSERT INTO eveonline_esi_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error)
-VALUES (?, ?, ?, ?, ?, ?, NULL)
+INSERT INTO eveonline_esi_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error, auth_error_code)
+VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
 ON CONFLICT (character_id) DO UPDATE SET
-    name          = excluded.name,
-    scopes        = excluded.scopes,
-    refresh_token = excluded.refresh_token,
-    access_token  = excluded.access_token,
-    expires_at    = excluded.expires_at,
-    auth_error    = NULL
+    name            = excluded.name,
+    scopes          = excluded.scopes,
+    refresh_token   = excluded.refresh_token,
+    access_token    = excluded.access_token,
+    expires_at      = excluded.expires_at,
+    auth_error      = NULL,
+    auth_error_code = NULL
 `
 
 type SaveLoginParams struct {
@@ -114,7 +118,7 @@ func (q *Queries) SaveLogin(ctx context.Context, arg SaveLoginParams) error {
 const saveRefresh = `-- name: SaveRefresh :execrows
 UPDATE eveonline_esi_characters
 SET refresh_token = ?1, access_token = ?2,
-    expires_at = ?3, auth_error = NULL
+    expires_at = ?3, auth_error = NULL, auth_error_code = NULL
 WHERE character_id = ?4 AND refresh_token = ?5
 `
 

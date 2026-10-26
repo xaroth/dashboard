@@ -1,6 +1,7 @@
 package esi_test
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/xaroth/dashboard/module"
+	"github.com/xaroth/dashboard/module/moduletest"
 	"github.com/xaroth/dashboard/modules/eveonline/esi"
 )
 
@@ -172,6 +174,14 @@ func TestRefreshRejected(t *testing.T) {
 		if page := get(t, mux, "/eveonline_esi/").Body.String(); !strings.Contains(page, "Invalid refresh token.") {
 			t.Errorf("page lacks the refresh error:\n%s", page)
 		}
+		// The dead refresh token is not sent again.
+		sent := len(fake.Forms())
+		if err := set.Update(t.Context(), "probe"); !errors.Is(err, module.ErrAuth) {
+			t.Errorf("second Update: got %v, want ErrAuth", err)
+		}
+		if got := len(fake.Forms()); got != sent {
+			t.Errorf("got %d token requests after the rejection, want none", got-sent)
+		}
 		// Logging in again clears it.
 		login(t, set, "skills")
 		if page := get(t, mux, "/eveonline_esi/").Body.String(); strings.Contains(page, "Invalid refresh token.") {
@@ -179,6 +189,83 @@ func TestRefreshRejected(t *testing.T) {
 		}
 		if err := set.Update(t.Context(), "probe"); err != nil {
 			t.Errorf("Update after logging in again: %v", err)
+		}
+	})
+}
+
+func TestClientRejected(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fake := newFake(t)
+		db := moduletest.DB(t, t.TempDir())
+		opts := module.Options{Registrations: []module.Registration{probeRegistration("probe", skillsScope)}, HTTPClient: moduletest.HTTPClient(fake)}
+		set := moduletest.Load(t, db, esi.FakeSSOConfig, opts)
+		login(t, set, "skills")
+		wrong := moduletest.Load(t, db, strings.Replace(esi.FakeSSOConfig, "shh", "wrong", 1), opts)
+		time.Sleep(20 * time.Minute)
+
+		err := wrong.Update(t.Context(), "probe")
+		if !errors.Is(err, esi.ErrClientRejected) || !errors.Is(err, module.ErrAuth) {
+			t.Fatalf("got %v, want ErrClientRejected and ErrAuth", err)
+		}
+		// A config error is not the character's: with the right secret its
+		// token still works.
+		mux := http.NewServeMux()
+		set.RegisterAdmin(mux)
+		if page := get(t, mux, "/eveonline_esi/").Body.String(); strings.Contains(page, "Client authentication failed.") {
+			t.Errorf("page shows the client error on the character:\n%s", page)
+		}
+		// One recorded before error codes were stored does not block either.
+		if _, err := db.Writer.ExecContext(t.Context(), `UPDATE eveonline_esi_characters SET auth_error = 'SSO token: 401 Unauthorized: Client authentication failed.: authentication rejected'`); err != nil {
+			t.Fatalf("recording a legacy error: %v", err)
+		}
+		if err := set.Update(t.Context(), "probe"); err != nil {
+			t.Errorf("Update with the right secret: %v", err)
+		}
+	})
+}
+
+func TestRefreshSavedAfterDeadline(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		fake := newFake(t)
+		db := moduletest.DB(t, t.TempDir())
+		set := moduletest.Load(t, db, esi.FakeSSOConfig, module.Options{
+			Registrations: []module.Registration{probeRegistration("probe", skillsScope)},
+			HTTPClient:    moduletest.HTTPClient(fake),
+		})
+		login(t, set, "skills")
+		time.Sleep(20 * time.Minute)
+		// SSO answers while another transaction holds the writer past the
+		// request's 10 s timeout.
+		fake.Set(t, esi.ExpectRefresh_Interleaved(func() {
+			conn, err := db.Writer.Conn(context.Background())
+			if err != nil {
+				t.Errorf("holding the writer: %v", err)
+				return
+			}
+			go func() {
+				time.Sleep(15 * time.Second)
+				conn.Close()
+			}()
+		}))
+
+		if err := set.Update(t.Context(), "probe"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Update: got %v, want the request's deadline", err)
+		}
+		// The rotated token was stored all the same.
+		if err := set.Update(t.Context(), "probe"); err != nil {
+			t.Fatalf("Update after the deadline: %v", err)
+		}
+		wantForms := []url.Values{
+			{"grant_type": {"authorization_code"}, "code": {"skills"}},
+			{"grant_type": {"refresh_token"}, "refresh_token": {"refresh-1"}},
+		}
+		if diff := cmp.Diff(wantForms, fake.Forms()); diff != "" {
+			t.Errorf("token requests (-want +got):\n%s", diff)
+		}
+		if got := fake.accessTokens(); len(got) == 0 || got[len(got)-1] != "sig-2" {
+			t.Errorf("got access tokens %v, want the refreshed sig-2 last", got)
 		}
 	})
 }

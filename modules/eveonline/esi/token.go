@@ -18,6 +18,12 @@ import (
 // not expire in flight.
 const refreshMargin = time.Minute
 
+// saveTimeout bounds storing a refresh's result, which outlives the request
+// that asked for it.
+const saveTimeout = 30 * time.Second
+
+const invalidGrant = "invalid_grant"
+
 // Character is a character logged in through SSO.
 type Character struct {
 	ID   int64
@@ -43,7 +49,8 @@ func (c *Client) Characters(ctx context.Context, q module.Query, need Scopes) ([
 // Token returns the character's token, for authentication.WithToken. It
 // refreshes itself before a request when it is about to expire and stores
 // the result, so it takes Update's writer. A rejected refresh fails the
-// request with module.ErrAuth.
+// request with module.ErrAuth, and so does Token from then on, without
+// asking SSO again, until the character logs in again.
 func (c *Client) Token(ctx context.Context, u *module.Update, characterID int64) (*Token, error) {
 	row, err := New(u.DB).GetCharacter(ctx, characterID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -51,6 +58,9 @@ func (c *Client) Token(ctx context.Context, u *module.Update, characterID int64)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading character %d: %w", characterID, err)
+	}
+	if err := rejected(row); err != nil {
+		return nil, err
 	}
 	t := &Token{c: c, db: u.DB, now: u.Now, log: u.Log, id: characterID}
 	t.set(row)
@@ -110,11 +120,19 @@ func (t *Token) RefreshIfNeeded(ctx context.Context) error {
 		t.set(row)
 		return nil
 	}
+	if err := rejected(row); err != nil {
+		return err
+	}
 	old := row.RefreshToken
 	tok, err := t.c.requestToken(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {old}})
-	if errors.Is(err, module.ErrAuth) {
+	// ctx is the request's, which may end any moment: what SSO answered must
+	// be stored, as SSO has spent the old refresh token.
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), saveTimeout)
+	defer cancel()
+	// invalid_client is the config's, not the character's: not recorded.
+	if oerr, ok := errors.AsType[*oauthError](err); ok && oerr.code == invalidGrant {
 		msg := err.Error()
-		if serr := q.SaveAuthError(ctx, SaveAuthErrorParams{AuthError: &msg, CharacterID: t.id}); serr != nil {
+		if serr := q.SaveAuthError(sctx, SaveAuthErrorParams{AuthError: &msg, AuthErrorCode: &oerr.code, CharacterID: t.id}); serr != nil {
 			t.log.Error("recording rejected refresh", "character", row.Name, "err", serr)
 		}
 	}
@@ -122,7 +140,7 @@ func (t *Token) RefreshIfNeeded(ctx context.Context) error {
 		return fmt.Errorf("refreshing token of %s: %w", row.Name, err)
 	}
 	row.AccessToken, row.RefreshToken, row.ExpiresAt = tok.AccessToken, tok.RefreshToken, tok.expiresAt(t.now())
-	n, err := q.SaveRefresh(ctx, SaveRefreshParams{
+	n, err := q.SaveRefresh(sctx, SaveRefreshParams{
 		RefreshToken: row.RefreshToken, AccessToken: row.AccessToken, ExpiresAt: row.ExpiresAt,
 		CharacterID: t.id, OldRefreshToken: old,
 	})
@@ -132,10 +150,20 @@ func (t *Token) RefreshIfNeeded(ctx context.Context) error {
 	if n == 0 {
 		// A login saved newer tokens, possibly with more scopes, while this
 		// refresh was in flight: keep those.
-		return t.reload(ctx, q)
+		return t.reload(sctx, q)
 	}
 	t.set(row)
 	return nil
+}
+
+// rejected is module.ErrAuth when the character's last refresh was
+// rejected with invalid_grant: its refresh token is dead, and SSO asks not to
+// repeat it.
+func rejected(row EveonlineEsiCharacter) error {
+	if row.AuthErrorCode == nil || *row.AuthErrorCode != invalidGrant {
+		return nil
+	}
+	return fmt.Errorf("token of %s was rejected; log in again: %w", row.Name, module.ErrAuth)
 }
 
 func (t *Token) reload(ctx context.Context, q *Queries) error {

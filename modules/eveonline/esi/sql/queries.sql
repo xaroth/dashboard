@@ -5,21 +5,22 @@ SELECT * FROM eveonline_esi_characters ORDER BY name;
 SELECT * FROM eveonline_esi_characters WHERE character_id = ?;
 
 -- name: SaveLogin :exec
-INSERT INTO eveonline_esi_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error)
-VALUES (?, ?, ?, ?, ?, ?, NULL)
+INSERT INTO eveonline_esi_characters (character_id, name, scopes, refresh_token, access_token, expires_at, auth_error, auth_error_code)
+VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
 ON CONFLICT (character_id) DO UPDATE SET
-    name          = excluded.name,
-    scopes        = excluded.scopes,
-    refresh_token = excluded.refresh_token,
-    access_token  = excluded.access_token,
-    expires_at    = excluded.expires_at,
-    auth_error    = NULL;
+    name            = excluded.name,
+    scopes          = excluded.scopes,
+    refresh_token   = excluded.refresh_token,
+    access_token    = excluded.access_token,
+    expires_at      = excluded.expires_at,
+    auth_error      = NULL,
+    auth_error_code = NULL;
 
 -- name: SaveRefresh :execrows
 UPDATE eveonline_esi_characters
 SET refresh_token = sqlc.arg(refresh_token), access_token = sqlc.arg(access_token),
-    expires_at = sqlc.arg(expires_at), auth_error = NULL
+    expires_at = sqlc.arg(expires_at), auth_error = NULL, auth_error_code = NULL
 WHERE character_id = sqlc.arg(character_id) AND refresh_token = sqlc.arg(old_refresh_token);
 
 -- name: SaveAuthError :exec
-UPDATE eveonline_esi_characters SET auth_error = ? WHERE character_id = ?;
+UPDATE eveonline_esi_characters SET auth_error = ?, auth_error_code = ? WHERE character_id = ?;

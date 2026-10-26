@@ -2,6 +2,7 @@ package esi_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -135,6 +136,63 @@ func TestRateLimit(t *testing.T) {
 			t.Errorf("got %v between requests, want at least 1s: the second waits for the bucket to drain below 75%%", gap)
 		}
 	})
+}
+
+func TestRateLimited(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name   string
+		status int
+		header string
+		value  string
+		reset  time.Duration
+	}{
+		{"429", http.StatusTooManyRequests, "Retry-After", "50", 50 * time.Second},
+		{"420", 420, "X-Esi-Error-Limit-Reset", "40", 40 * time.Second},
+		{"no reset header", 420, "", "", time.Minute},
+		// Longer than an update's timeout: the next update fails unsent.
+		{"long reset", http.StatusTooManyRequests, "Retry-After", "300", 5 * time.Minute},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var sent []time.Time
+				set := load(t, "eveonline_esi: {contact: [x]}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					sent = append(sent, time.Now())
+					if len(sent) == 1 {
+						if testCase.header != "" {
+							w.Header().Set(testCase.header, testCase.value)
+						}
+						w.WriteHeader(testCase.status)
+						fmt.Fprint(w, `{"error":"limited"}`)
+						return
+					}
+					fmt.Fprint(w, `{}`)
+				}))
+				start := time.Now()
+				err := set.Update(t.Context(), "probe")
+				rl, ok := errors.AsType[*esi.RateLimitError](err)
+				if !ok || !rl.Until.Equal(start.Add(testCase.reset)) {
+					t.Fatalf("got %v, want a RateLimitError until %v", err, start.Add(testCase.reset))
+				}
+				err = set.Update(t.Context(), "probe")
+				if testCase.reset > 2*time.Minute {
+					if rl, ok := errors.AsType[*esi.RateLimitError](err); !ok || rl.Status != "" || len(sent) != 1 {
+						t.Fatalf("got %v after %d requests, want an unsent RateLimitError", err, len(sent))
+					}
+					time.Sleep(testCase.reset)
+					err = set.Update(t.Context(), "probe")
+				}
+				if err != nil {
+					t.Fatalf("Update after the limit: %v", err)
+				}
+				if len(sent) != 2 || sent[1].Sub(sent[0]) < testCase.reset {
+					t.Errorf("got requests at %v, want 2 at least %v apart", sent, testCase.reset)
+				}
+			})
+		})
+	}
 }
 
 func TestVersion(t *testing.T) {

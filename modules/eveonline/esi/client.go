@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -65,6 +66,7 @@ type Client struct {
 	cfg *config
 	// scopes is every scope a module declared, sorted; logins ask for all.
 	scopes []string
+	now    func() time.Time
 
 	mu sync.Mutex
 	// states are the pending logins' OAuth states, to when they expire.
@@ -72,6 +74,9 @@ type Client struct {
 	// refreshing serializes refreshes per character: a refresh may rotate
 	// the refresh token, so two at once would lose one.
 	refreshing map[int64]*sync.Mutex
+	// limitedUntil is when the last 429 or 420 lifts; no request is sent
+	// before then.
+	limitedUntil time.Time
 }
 
 func newClient(_ context.Context, cfg *config, decls []Scopes, env module.Env) (*Client, error) {
@@ -97,6 +102,7 @@ func newClient(_ context.Context, cfg *config, decls []Scopes, env module.Env) (
 		scopes:     slices.Compact(scopes),
 		states:     map[string]time.Time{},
 		refreshing: map[int64]*sync.Mutex{},
+		now:        env.Now,
 	}, nil
 }
 
@@ -120,9 +126,88 @@ func (c *Client) Version(context.Context, module.Query) (string, error) {
 	return "compatibility date " + defaults.CompatibilityDate, nil
 }
 
+// defaultLimitReset is the pause after a 429 or 420 without a reset header.
+const defaultLimitReset = time.Minute
+
+// statusErrorLimited is ESI's legacy error limit response.
+const statusErrorLimited = 420
+
+// RateLimitError is a request ESI refused with 429 or 420, or one not sent
+// because the limit of an earlier one has not reset yet.
+type RateLimitError struct {
+	// Status is the refused response's status; empty when not sent.
+	Status string
+	// Until is when requests may be sent again.
+	Until time.Time
+}
+
+func (e *RateLimitError) Error() string {
+	if e.Status == "" {
+		return "ESI rate limited until " + e.Until.Format(time.RFC3339)
+	}
+	return fmt.Sprintf("ESI %s: rate limited until %s", e.Status, e.Until.Format(time.RFC3339))
+}
+
 // Do sends an ESI request; Client is the sender for lib-esi-go requests.
+// After a 429 or 420 ESI wants all traffic stopped until the limit resets:
+// later requests wait for that, or fail with a RateLimitError when their
+// deadline comes first.
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	return c.esi.Do(req)
+	if err := c.waitLimit(req.Context()); err != nil {
+		return nil, err
+	}
+	resp, err := c.esi.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != statusErrorLimited {
+		return resp, nil
+	}
+	resp.Body.Close()
+	until := c.now().Add(limitReset(resp))
+	c.mu.Lock()
+	if until.After(c.limitedUntil) {
+		c.limitedUntil = until
+	}
+	c.mu.Unlock()
+	return nil, &RateLimitError{Status: resp.Status, Until: until}
+}
+
+// waitLimit waits until no limit applies; a 429 or 420 meanwhile extends it.
+func (c *Client) waitLimit(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		until := c.limitedUntil
+		c.mu.Unlock()
+		d := until.Sub(c.now())
+		if d <= 0 {
+			return nil
+		}
+		if dl, ok := ctx.Deadline(); ok && dl.Before(until) {
+			return &RateLimitError{Until: until}
+		}
+		t := time.NewTimer(d)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+// limitReset is how long a 429 (Retry-After) or 420
+// (X-Esi-Error-Limit-Reset) asks to wait. ESI sends seconds, so an HTTP-date
+// Retry-After is not parsed and gets the default.
+func limitReset(resp *http.Response) time.Duration {
+	h := "Retry-After"
+	if resp.StatusCode == statusErrorLimited {
+		h = "X-Esi-Error-Limit-Reset"
+	}
+	if s, err := strconv.Atoi(resp.Header.Get(h)); err == nil && s > 0 {
+		return time.Duration(s) * time.Second
+	}
+	return defaultLimitReset
 }
 
 func version() string {
