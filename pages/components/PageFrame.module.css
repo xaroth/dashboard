@@ -3,7 +3,7 @@
   flex-direction: column;
   width: 100%;
   height: 100%;
-  padding: 20px 32px; /* PAD_Y PAD_X */
+  padding: 10px 16px; /* PAD_Y PAD_X */
   background: #fff;
   color: #000;
 }
