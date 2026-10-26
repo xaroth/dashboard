@@ -1,5 +1,5 @@
 import { LineChart } from "../../components/LineChart";
-import { Missing, PAD_X, PageFrame, Updated } from "../../components/PageFrame";
+import { Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../../components/PageFrame";
 import { formatDayShort, formatMillimeters, formatTemperature, formatTime } from "../../lib/format";
 import { query, type PageProps } from "../../lib/page";
 import { weatherLabel, windDirection } from "../../lib/weather";
@@ -21,8 +21,8 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
     );
   }
   const chartWidth = viewport.width - 2 * PAD_X;
-  // Everything but the chart takes about 390 px; the chart fills the rest.
-  const chartHeight = Math.max(80, viewport.height - 390);
+  // Everything but the chart and padding takes about 350 px; the chart fills the rest.
+  const chartHeight = Math.max(80, viewport.height - 2 * PAD_Y - 350);
   // Daily dates are midnights where the forecast is, not where the screen is.
   const placeZone = f.location.timezone;
   const hourLabels = f.hourly.filter((_, i) => i % 6 === 0);

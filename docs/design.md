@@ -558,7 +558,7 @@ Pages are React components in TSX, styled with CSS modules, rendered by Takumi t
 ```tsx
 // pages/layouts/e1001/weather.tsx (abridged)
 import { LineChart } from "../../components/LineChart";
-import { Missing, PageFrame, Updated } from "../../components/PageFrame";
+import { Missing, PAD_X, PageFrame, Updated } from "../../components/PageFrame";
 import { query, type PageProps } from "../../lib/page";
 
 export const data = {
@@ -572,7 +572,7 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
   if (!f) return <PageFrame><Missing what="weerbericht" error={error} /></PageFrame>;
   return (
     <PageFrame title={f.location.name} status={<Updated result={data.weather} timezone={timezone} />} gap={12}>
-      <LineChart values={f.hourly.map((h) => h.temperature)} width={viewport.width - 64} height={120} />
+      <LineChart values={f.hourly.map((h) => h.temperature)} width={viewport.width - 2 * PAD_X} height={120} />
     </PageFrame>
   );
 }

@@ -1,5 +1,5 @@
 import { EnergyChart } from "../../components/EnergyChart";
-import { Missing, PAD_X, PageFrame, Updated } from "../../components/PageFrame";
+import { Missing, PAD_X, PAD_Y, PageFrame, Updated } from "../../components/PageFrame";
 import { linear } from "../../lib/chart";
 import { chartDomain, formatKwAxis, hourTicks } from "../../lib/energy";
 import { formatTime } from "../../lib/format";
@@ -29,7 +29,7 @@ export default function EnergyDay({ data, viewport, timezone }: PageProps<Data>)
   }
   const { start, end, min, max } = domain;
   const width = viewport.width - 2 * PAD_X - AXIS;
-  const height = Math.max(120, viewport.height - 160);
+  const height = Math.max(120, viewport.height - 2 * PAD_Y - 120);
   const x = linear(start, end, 0, width);
   // One status for both: the flow's, unless only solar was fetched.
   const updated = { ...data.flow, stale: data.flow.stale || data.solar.stale, fetchedAt: data.flow.fetchedAt ?? data.solar.fetchedAt };
