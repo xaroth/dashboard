@@ -58,27 +58,38 @@ func TestFinish(t *testing.T) {
 	edges := image.NewGray(image.Rect(0, 0, 2, 1))
 	edges.Pix = []uint8{128, 220}
 
+	// Odd width: the last 4-bit row byte is half used.
+	odd := image.NewGray(image.Rect(0, 0, 3, 1))
+	odd.Pix = []uint8{0, 85, 255}
+	e1001, _ := render.PanelFor("reterminal_e1001")
+	e1003, _ := render.PanelFor("reterminal_e1003")
+
 	testCases := []struct {
 		name     string
 		src      image.Image
 		rotation int
+		panel    render.Panel
+		depth    uint8
 		want     [][]uint8
 	}{
-		{"levels", levels, 0, [][]uint8{{0, 85, 170, 255}, {255, 170, 170, 170}}},
-		{"turned", levels, 180, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
-		{"gray input", gray, 0, [][]uint8{{0, 170}}},
-		{"edges round darker", edges, 0, [][]uint8{{85, 170}}},
+		{"levels", levels, 0, e1001, 2, [][]uint8{{0, 85, 170, 255}, {255, 170, 170, 170}}},
+		{"turned", levels, 180, e1001, 2, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
+		{"gray input", gray, 0, e1001, 2, [][]uint8{{0, 170}}},
+		{"edges round darker", edges, 0, e1001, 2, [][]uint8{{85, 170}}},
+		// 4-bit 3 and 7 of 15, darker than the 5 and 10 the firmware expands 2-bit to.
+		{"e1003 levels", levels, 0, e1003, 4, [][]uint8{{0, 51, 119, 255}, {255, 119, 119, 119}}},
+		{"e1003 odd width", odd, 0, e1003, 4, [][]uint8{{0, 51, 255}}},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			out, err := render.Finish(encodePNG(t, testCase.src), testCase.rotation)
+			out, err := render.Finish(encodePNG(t, testCase.src), testCase.rotation, testCase.panel)
 			if err != nil {
 				t.Fatalf("got error %v, want nil", err)
 			}
-			// IHDR bit depth and color type: 2-bit grayscale.
-			if out[24] != 2 || out[25] != 0 {
-				t.Errorf("got bit depth %d, color type %d, want 2, 0", out[24], out[25])
+			// IHDR bit depth and color type: grayscale.
+			if out[24] != testCase.depth || out[25] != 0 {
+				t.Errorf("got bit depth %d, color type %d, want %d, 0", out[24], out[25], testCase.depth)
 			}
 			if diff := cmp.Diff(testCase.want, grays(t, out)); diff != "" {
 				t.Errorf("pixels (-want +got):\n%s", diff)
@@ -103,10 +114,11 @@ func TestFinishErrors(t *testing.T) {
 		{"over the firmware limit", encodePNG(t, noise)},
 		{"not a png", []byte("nope")},
 	}
+	panel, _ := render.PanelFor("reterminal_e1001")
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := render.Finish(testCase.in, 0); err == nil {
+			if _, err := render.Finish(testCase.in, 0, panel); err == nil {
 				t.Error("got nil error, want one")
 			}
 		})
@@ -168,7 +180,7 @@ func BenchmarkFinishE1003(b *testing.B) {
 	}
 	in := encodePNG(b, img)
 	for b.Loop() {
-		if _, err := render.Finish(in, 0); err != nil {
+		if _, err := render.Finish(in, 0, panel); err != nil {
 			b.Fatal(err)
 		}
 	}
