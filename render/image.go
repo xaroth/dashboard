@@ -70,8 +70,11 @@ func Finish(rendered []byte, rotation int) ([]byte, error) {
 	return out, nil
 }
 
-// reduce maps every pixel to the nearest of 4 gray levels (0-3) without
-// dithering, which keeps text edges sharp. Transparent areas become paper.
+// reduce maps every pixel to one of 4 gray levels (0-3) without dithering,
+// which keeps text edges sharp. A pixel rounds to the darker level unless it
+// is within a quarter step of the lighter one: stems of small text are
+// thinner than a pixel, and nearest rounding turns them a level too light.
+// Exact levels map to themselves. Transparent areas become paper.
 func reduce(img image.Image, turn bool) []uint8 {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -95,7 +98,7 @@ func reduce(img image.Image, turn bool) []uint8 {
 			if turn {
 				ox, oy = w-1-x, h-1-y
 			}
-			out[oy*w+ox] = uint8((lum*3 + 0x7fff) / 0xffff)
+			out[oy*w+ox] = uint8((lum*3 + 0xffff/4) / 0xffff)
 		}
 	}
 	return out

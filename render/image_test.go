@@ -54,6 +54,9 @@ func TestFinish(t *testing.T) {
 	// png.Decode returns *image.Gray here, which takes the generic pixel path.
 	gray := image.NewGray(image.Rect(0, 0, 2, 1))
 	gray.Pix = []uint8{40, 200}
+	// Nearest would give 170 and 255; partly covered pixels round darker.
+	edges := image.NewGray(image.Rect(0, 0, 2, 1))
+	edges.Pix = []uint8{128, 220}
 
 	testCases := []struct {
 		name     string
@@ -64,6 +67,7 @@ func TestFinish(t *testing.T) {
 		{"levels", levels, 0, [][]uint8{{0, 85, 170, 255}, {255, 170, 170, 170}}},
 		{"turned", levels, 180, [][]uint8{{170, 170, 170, 255}, {255, 170, 85, 0}}},
 		{"gray input", gray, 0, [][]uint8{{0, 170}}},
+		{"edges round darker", edges, 0, [][]uint8{{85, 170}}},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
