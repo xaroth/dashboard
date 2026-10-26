@@ -1,3 +1,6 @@
+import type { WeatherDay, WeatherForecast } from "../generated/queries";
+import { localDate } from "./calendar";
+
 // WMO weather interpretation codes, as Open-Meteo reports them.
 const labels: Record<number, string> = {
   0: "Onbewolkt",
@@ -53,4 +56,9 @@ export function weatherIcon(code: number, isDay = true): WeatherIconName {
   if (code >= 95) return "thunder";
   if (code >= 51) return "rain";
   return "cloud";
+}
+
+/** The forecast for date, YYYY-MM-DD; each day's date is local midnight at the forecast location, with its offset. */
+export function forecastDay(forecast: WeatherForecast | null, date: string): WeatherDay | undefined {
+  return forecast?.daily.find((d) => localDate(d.date, forecast.location.timezone) === date);
 }

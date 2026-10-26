@@ -5,7 +5,7 @@ import type { DayEvent } from "../lib/calendar";
 import { addDays, dayEvents, fit, isWeekend, localDate, shortDate } from "../lib/calendar";
 import { formatDayShort, formatTemperature } from "../lib/format";
 import { query, type PageProps } from "../lib/page";
-import { weatherIcon } from "../lib/weather";
+import { forecastDay, weatherIcon } from "../lib/weather";
 import styles from "./calendar.module.css";
 
 export const data = {
@@ -42,7 +42,6 @@ export default function Calendar({ data, viewport, now, timezone }: PageProps<Da
   const dates = Array.from({ length: columns * rows }, (_, i) => addDays(today, i));
   const muted = new Set(agenda.calendars.filter((c) => c.muted).map((c) => c.name));
   const failed = agenda.calendars.some((c) => c.error);
-  const daily = data.weather.value?.daily ?? [];
   return (
     <PageFrame
       title={
@@ -62,7 +61,7 @@ export default function Calendar({ data, viewport, now, timezone }: PageProps<Da
     >
       <div className={styles.grid} style={{ gridTemplateColumns: `repeat(${columns}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
         {dates.map((date, i) => {
-          const weather = daily.find((d) => d.date === date);
+          const weather = forecastDay(data.weather.value, date);
           const { shown, more } = fit(dayEvents(agenda.events, date, now, timezone), eventRows);
           return (
             <div key={date} className={styles.cell}>
