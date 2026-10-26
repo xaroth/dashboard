@@ -101,6 +101,8 @@ export interface P1Usage {
   takenKwh: number;
   returnedKwh: number;
   gasM3: number | null;
+  gasFrom: string | null;
+  gasTo: string | null;
 }
 
 export interface SeriesHistoryParams {

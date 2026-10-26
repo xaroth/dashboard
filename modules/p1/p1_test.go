@@ -45,7 +45,7 @@ func actual(tb testing.TB, set *module.Set) *p1.Actual {
 	return res.Value.(*p1.Actual)
 }
 
-func ptr(v float64) *float64 { return &v }
+func ptr[T any](v T) *T { return &v }
 
 func TestActualFixture(t *testing.T) {
 	t.Parallel()
@@ -64,11 +64,15 @@ func TestActualFixture(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 	at := time.Date(2026, 10, 25, 13, 14, 15, 0, time.UTC)
+	gasAt := time.Date(2026, 10, 25, 13, 10, 8, 0, time.UTC)
 	want := &p1.Actual{
 		MeasuredAt: at,
 		Voltage:    p1.Phases{L1: ptr(234.9), L2: ptr(231.5), L3: ptr(234.3)},
 		FlowKw:     -0.007,
-		Today:      &p1.Usage{From: at, To: at, TakenKwh: 0, ReturnedKwh: 0, GasM3: ptr(0)},
+		Today: &p1.Usage{
+			From: at, To: at, TakenKwh: 0, ReturnedKwh: 0,
+			GasM3: ptr(0.0), GasFrom: &gasAt, GasTo: &gasAt,
+		},
 	}
 	got := actual(t, set)
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -105,11 +109,17 @@ func TestDays(t *testing.T) {
 
 	want := &p1.Actual{
 		MeasuredAt: utc(25, 13, 0),
-		Voltage:    p1.Phases{L1: ptr(230)},
+		Voltage:    p1.Phases{L1: ptr(230.0)},
 		FlowKw:     -2.25,
-		Today:      &p1.Usage{From: utc(24, 22, 0), To: utc(25, 13, 0), TakenKwh: 1, ReturnedKwh: 2, GasM3: ptr(0.5)},
+		Today: &p1.Usage{
+			From: utc(24, 22, 0), To: utc(25, 13, 0), TakenKwh: 1, ReturnedKwh: 2,
+			GasM3: ptr(0.5), GasFrom: ptr(utc(24, 22, 0)), GasTo: ptr(utc(25, 13, 0)),
+		},
 		// From the 00:30 reading: the first of the 24th.
-		Yesterday: &p1.Usage{From: utc(23, 22, 30), To: utc(24, 22, 0), TakenKwh: 3.5, ReturnedKwh: 4, GasM3: ptr(1.75)},
+		Yesterday: &p1.Usage{
+			From: utc(23, 22, 30), To: utc(24, 22, 0), TakenKwh: 3.5, ReturnedKwh: 4,
+			GasM3: ptr(1.75), GasFrom: ptr(utc(23, 22, 30)), GasTo: ptr(utc(24, 22, 0)),
+		},
 	}
 	if diff := cmp.Diff(want, actual(t, set)); diff != "" {
 		t.Errorf("actual (-want +got):\n%s", diff)
@@ -188,7 +198,8 @@ func TestGasLate(t *testing.T) {
 	}
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 24, h, m, 0, 0, time.UTC) }
 	// Electricity counts from the first reading, gas from the first with gas.
-	want := &p1.Usage{From: at(23, 1), To: at(11, 0).AddDate(0, 0, 1), TakenKwh: 2, GasM3: ptr(2)}
+	to := at(11, 0).AddDate(0, 0, 1)
+	want := &p1.Usage{From: at(23, 1), To: to, TakenKwh: 2, GasM3: ptr(2.0), GasFrom: ptr(at(23, 6)), GasTo: &to}
 	if diff := cmp.Diff(want, actual(t, set).Today); diff != "" {
 		t.Errorf("today (-want +got):\n%s", diff)
 	}
@@ -233,6 +244,47 @@ func TestGasTimestamp(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, rows); diff != "" {
 		t.Errorf("gas samples (-want +got):\n%s", diff)
+	}
+}
+
+// A DSMR 4 gas meter's reading at midnight is from 23:00: gas days start at
+// the gas meter's first reading of the day, not the electricity meter's.
+func TestGasDayStart(t *testing.T) {
+	t.Parallel()
+	fake := p1.NewFake(t)
+	set := load(t, fake, fake.Now)
+	update := func(ts, gasAt string, d1, gas float64) {
+		t.Helper()
+		fake.Set(t, p1.ExpectTelegram(ts, d1, 0, 0, 0, 0, 0, gas), p1.ExpectGasTimestamp(gasAt))
+		if err := set.Update(t.Context(), "p1"); err != nil {
+			t.Fatalf("Update %s: %v", ts, err)
+		}
+	}
+	utc := func(d, h, m int) time.Time { return time.Date(2026, 10, d, h, m, 0, 0, time.UTC) }
+
+	update("261026230500W", "261026230000W", 100, 10)
+	update("261027000000W", "261026230000W", 101, 10)
+	// The gas meter has not read on the 27th yet.
+	if got := actual(t, set); got.Today.GasM3 != nil || got.Yesterday.GasM3 != nil {
+		t.Errorf("got gas today %v, yesterday %v, want null before the gas day starts", got.Today.GasM3, got.Yesterday.GasM3)
+	}
+	update("261027000500W", "261027000000W", 101.1, 10.5)
+	update("261027120000W", "261027110000W", 103, 12)
+
+	want := &p1.Actual{
+		MeasuredAt: utc(27, 11, 0),
+		Voltage:    p1.Phases{L1: ptr(230.0)},
+		Today: &p1.Usage{
+			From: utc(26, 23, 0), To: utc(27, 11, 0), TakenKwh: 2,
+			GasM3: ptr(1.5), GasFrom: ptr(utc(26, 23, 0)), GasTo: ptr(utc(27, 10, 0)),
+		},
+		Yesterday: &p1.Usage{
+			From: utc(26, 22, 5), To: utc(26, 23, 0), TakenKwh: 1,
+			GasM3: ptr(0.5), GasFrom: ptr(utc(26, 22, 0)), GasTo: ptr(utc(26, 23, 0)),
+		},
+	}
+	if diff := cmp.Diff(want, actual(t, set)); diff != "" {
+		t.Errorf("actual (-want +got):\n%s", diff)
 	}
 }
 
