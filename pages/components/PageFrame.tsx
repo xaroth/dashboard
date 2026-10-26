@@ -4,8 +4,8 @@ import type { Result } from "../lib/page";
 import styles from "./PageFrame.module.css";
 
 // In px; they match PageFrame.module.css. The header is one line high unless it wraps.
-export const PAD_X = 32;
-export const PAD_Y = 20;
+export const PAD_X = 16;
+export const PAD_Y = 10;
 export const HEADER_HEIGHT = 28;
 
 export type PageFrameProps = {
