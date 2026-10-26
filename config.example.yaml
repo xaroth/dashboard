@@ -18,11 +18,16 @@ devices:
     mac: "AA:BB:CC:DD:EE:01"
     rotation: 0   # 0, 90, 180 or 270
     layout: e1001   # pages/layouts/e1001/; pages not in it come from pages/shared/
-    pages: [weather, energy, energy_day, calendar, eveonline, eveonline_skills, rss, hello]   # the first is the main page; a button press shows the next
+    pages: [home, weather, energy, energy_day, calendar, eveonline, eveonline_skills, rss, hello]   # the first is the main page; a button press shows the next
     # power: usb   # auto (default) follows USB-Connected, which the reTerminals do not send, and assumes battery
     # params:   # query param overrides, <page>.<data key>
     #   rss.feed: {feed: tech}   # the rss page shows the first feed by name unless set
     #   car.car: {id: ioniq}   # the car page's car, by short name or VIN; the first car without it
+    #   home.news: {feed: tech}   # the news row on home, like rss.feed
+  living_room:
+    mac: "AA:BB:CC:DD:EE:02"
+    layout: e1003   # 1872x1404; shared pages are scaled up to fill it
+    pages: [home, calendar, weather, energy, eveonline_skills]
 
 renderer:
   watch: true   # rebuild pages on change; reload the browser to see them
