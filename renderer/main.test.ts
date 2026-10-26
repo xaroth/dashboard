@@ -16,7 +16,7 @@ test("process answers describe and render over frames", async () => {
   proc.stdin.flush();
   const desc = await reader.next();
   expect(desc!.header.id).toBe(1);
-  expect(desc!.header.pages).toContainEqual({ name: "e1001/hello", data: {} });
+  expect(desc!.header.pages).toContainEqual({ name: "hello", data: {} });
 
   const props = {
     data: {},
@@ -30,7 +30,7 @@ test("process answers describe and render over frames", async () => {
   proc.stdin.flush();
   expect((await reader.next())!.header).toMatchObject({ id: 2, error: "unknown page nope" });
 
-  proc.stdin.write(encodeFrame({ id: 3, op: "render", page: "e1001/hello", props }));
+  proc.stdin.write(encodeFrame({ id: 3, op: "render", page: "hello", props }));
   proc.stdin.flush();
   const png = await reader.next();
   expect(png!.header.id).toBe(3);

@@ -61,9 +61,9 @@ func (h *adminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /simulate/{device}", h.simulatePage)
 	mux.HandleFunc("POST /simulate/{device}/wake", h.simulateWake)
 	mux.Handle("GET /images/{file}", h.Simulator)
-	mux.HandleFunc("GET /preview/page/{layout}/{file}", h.previewPage)
-	mux.HandleFunc("GET /preview/{device}/{layout}/{file}", h.previewDevice)
-	mux.HandleFunc("GET /preview/{device}/{layout}/{page}/props.json", h.previewProps)
+	// A page name is "<layout>/<page>" or a shared "<page>".
+	mux.HandleFunc("GET /preview/page/{path...}", h.previewPage)
+	mux.HandleFunc("GET /preview/{device}/{path...}", h.previewDevice)
 }
 
 //go:embed index.html
@@ -175,13 +175,18 @@ func (h *adminHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 	h.servePNG(w, r, t, page)
 }
 
+// previewDevice serves {page}.png and {page}/props.json for the device.
 func (h *adminHandler) previewDevice(w http.ResponseWriter, r *http.Request) {
-	page, ok := pngPage(r)
+	t, ok := h.target(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	t, ok := h.target(r)
+	if page, ok := strings.CutSuffix(r.PathValue("path"), "/props.json"); ok {
+		h.serveProps(w, r, t, page)
+		return
+	}
+	page, ok := pngPage(r)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -189,13 +194,8 @@ func (h *adminHandler) previewDevice(w http.ResponseWriter, r *http.Request) {
 	h.servePNG(w, r, t, page)
 }
 
-func (h *adminHandler) previewProps(w http.ResponseWriter, r *http.Request) {
-	t, ok := h.target(r)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	props, err := h.Pipeline.Props(r.Context(), t, r.PathValue("layout")+"/"+r.PathValue("page"))
+func (h *adminHandler) serveProps(w http.ResponseWriter, r *http.Request, t screen.Target, page string) {
+	props, err := h.Pipeline.Props(r.Context(), t, page)
 	if err != nil {
 		h.fail(w, err)
 		return
@@ -206,10 +206,9 @@ func (h *adminHandler) previewProps(w http.ResponseWriter, r *http.Request) {
 	enc.Encode(props)
 }
 
-// pngPage is the page name from a {layout}/{file} path ending in .png.
+// pngPage is the page name from a {path} ending in .png.
 func pngPage(r *http.Request) (string, bool) {
-	file, ok := strings.CutSuffix(r.PathValue("file"), ".png")
-	return r.PathValue("layout") + "/" + file, ok
+	return strings.CutSuffix(r.PathValue("path"), ".png")
 }
 
 // target resolves the device in the path; ?model= overrides its model.

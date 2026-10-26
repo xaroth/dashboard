@@ -159,7 +159,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	s.admin.Handle("GET /metrics", promhttp.HandlerFor(s.gatherer, promhttp.HandlerOpts{}))
 	var configs []device.Config
 	for name, d := range cfg.Devices {
-		c := device.Config{Name: name, MAC: d.MAC, Rotation: d.Rotation, Pages: d.pages(), Power: d.Power, Params: d.params()}
+		c := device.Config{Name: name, MAC: d.MAC, Rotation: d.Rotation, Pages: d.pages(pages), Power: d.Power, Params: d.params(pages)}
 		logo := d.Layout + "/" + logoPage
 		if _, ok := pages[logo]; ok {
 			c.Logo = logo
@@ -257,19 +257,24 @@ func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) (ma
 	}
 	for name, d := range s.cfg.Devices {
 		for _, page := range d.Pages {
-			if _, ok := pages[d.Layout+"/"+page]; !ok {
+			if _, ok := d.resolve(pages, page); !ok {
 				var have []string
 				for _, n := range names {
 					if p, ok := strings.CutPrefix(n, d.Layout+"/"); ok {
 						have = append(have, p)
+					} else if !strings.Contains(n, "/") {
+						have = append(have, n)
 					}
 				}
-				return nil, fmt.Errorf("devices.%s: page %q does not exist in layout %s (have %v)", name, page, d.Layout, have)
+				slices.Sort(have)
+				have = slices.Compact(have)
+				return nil, fmt.Errorf("devices.%s: page %q is in neither layout %s nor shared (have %v)", name, page, d.Layout, have)
 			}
 		}
 		for ref, override := range d.Params {
 			page, key, _ := strings.Cut(ref, ".")
-			q, ok := pages[d.Layout+"/"+page].Data[key]
+			resolved, _ := d.resolve(pages, page)
+			q, ok := pages[resolved].Data[key]
 			if !ok {
 				return nil, fmt.Errorf("devices.%s.params: %q is not a page data key (page.key)", name, ref)
 			}

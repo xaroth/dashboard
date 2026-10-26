@@ -28,7 +28,7 @@ func TestRendererContract(t *testing.T) {
 			p, _ := newFake(tb, "ok", nil)
 			return p
 		}},
-		{"bun", "e1001/hello", func(tb testing.TB) renderer { return newBun(tb) }},
+		{"bun", "hello", func(tb testing.TB) renderer { return newBun(tb) }},
 	}
 	props := render.Props{
 		Data:     map[string]render.Result{},

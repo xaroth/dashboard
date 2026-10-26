@@ -43,8 +43,9 @@ modules/<group>/<name>/    a group's shared values and modules, each named
                            eveonline/sde (static data), eveonline/status (a module)
 module/moduletest/         helpers for module tests
 renderer/                  Bun process: bundles pages, renders with takumi-js
+pages/shared/              TSX pages and their CSS modules, for any layout
 pages/layouts/<layout>/    TSX pages and their CSS modules, one folder per layout
-pages/components/, lib/    shared by all layouts
+pages/components/, lib/    shared by all pages
 pages/generated/           TypeScript types generated from Go query results and props
 tools/                     standalone scripts (dtu_read.py: read-only Modbus check)
 ```
@@ -473,13 +474,15 @@ devices:
     mac: "AA:BB:CC:DD:EE:FF"
     rotation: 0          # 0, 90, 180, 270
     layout: e1001        # folder under pages/layouts/
-    pages: [weather, hello]
+    pages: [weather, hello]    # from the layout, else pages/shared/
     power: auto                # auto (USB-Connected, else battery), usb or battery
     params:              # optional query param overrides, <page>.<data key>
       weather.weather: {days: 5}
 ```
 
-A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for one panel size; a page is named `<layout>/<page>`. Each device uses one layout and lists pages from it; the first page is the main page. A page missing from the layout stops startup. Components and helpers shared by layouts live in `pages/components/` and `pages/lib/`.
+A layout is a folder of pages, `pages/layouts/<layout>/<page>.tsx`, written for one panel size; a page is named `<layout>/<page>`. Shared pages, `pages/shared/<page>.tsx`, are named `<page>` and work on any layout. Each device uses one layout and lists its pages by file name; the first page is the main page. A name resolves to the layout's page first, then the shared one, so a layout can override a shared page for its panel. A page in neither stops startup. Components and helpers live in `pages/components/` and `pages/lib/`.
+
+Shared pages are written in px for the E1001, 800x480 (480x800 in portrait). The renderer scales them by the factor that fits 800x480 into the panel and lays them out in the panel's size divided by it (E1003: scale 2.34, 800x600 landscape, 600x800 portrait), drawn at the panel's resolution with takumi's `devicePixelRatio`; the page's `viewport` prop is that layout size. On the E1001 the scale is 1. Layout pages get the panel's own size, unscaled. takumi resolves `em` against the parent but `rem` against a fixed 16px, not the root element, which is why sizes scale this way rather than through a root font size.
 
 Device names and layouts may contain letters, digits, `-` and `_`; `page` is reserved as a device name (it is taken by the admin route `/preview/page/...`). MACs must be unique.
 
@@ -556,10 +559,10 @@ Power (`usb`, with `powerSource`) comes from the device's `power` setting: `usb`
 Pages are React components in TSX, styled with CSS modules, rendered by Takumi through `takumi-js` (no browser). A page exports the data it needs and a default component that receives the results as props:
 
 ```tsx
-// pages/layouts/e1001/weather.tsx (abridged)
-import { LineChart } from "../../components/LineChart";
-import { Missing, PAD_X, PageFrame, Updated } from "../../components/PageFrame";
-import { query, type PageProps } from "../../lib/page";
+// pages/shared/weather.tsx (abridged)
+import { LineChart } from "../components/LineChart";
+import { Missing, PAD_X, PageFrame, Updated } from "../components/PageFrame";
+import { query, type PageProps } from "../lib/page";
 
 export const data = {
   weather: query("weather.forecast", { hours: 24, days: 3 }),
@@ -616,13 +619,13 @@ func (m *weather) forecast(ctx context.Context, q module.Query, p forecastParams
 
 A long-running Bun process (`bun renderer/main.ts --pages pages [--watch]`, run in `renderer.dir`), started on the first request and supervised by the Go service. Per-render process start would cost 50-100 ms; a resident process renders in ~20 ms (measured, 800x480).
 
-- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` with `Bun.build` into JS plus CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle, and a watcher error is logged and ends rebuilding.
+- **Bundling**: at start the renderer bundles every `pages/layouts/<layout>/<page>.tsx` and `pages/shared/<page>.tsx` with `Bun.build` into JS plus CSS. With `renderer.watch` on, for development, it rebuilds on file changes; a failed rebuild keeps the previous bundle, and a watcher error is logged and ends rebuilding.
 - **Protocol**: length-prefixed frames over stdin/stdout, one request at a time. Each frame is a 4-byte big-endian length, then a JSON header, then for render responses the raw PNG bytes (header carries the PNG length). No base64, no line-length limits. Covered by tests on both sides.
 
 | Request | Response |
 | --- | --- |
-| `{"id":1,"op":"describe"}` | `{"id":1,"pages":[{"name":"e1001/weather","data":{...}}]}` |
-| `{"id":2,"op":"render","page":"e1001/weather","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
+| `{"id":1,"op":"describe"}` | `{"id":1,"pages":[{"name":"weather","data":{...}}]}` |
+| `{"id":2,"op":"render","page":"weather","props":{...}}` | header `{"id":2,"png":<bytes>}` + PNG, or `{"id":2,"error":"..."}` |
 
 - **Logging**: stdout is reserved for frames; the renderer redirects `console.log` to stderr at start, and Go logs stderr lines. A failed render logs the page and stack there; the error frame carries only the message.
 - **Requests**: a type guard checks each request header (`id`, `op`, and for render `page` and `props` with `viewport` and `data`); an invalid one gets an error frame.
@@ -680,9 +683,9 @@ On a separate admin listener. No authentication; access is restricted at the net
 | --- | --- |
 | `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), shared values with their version, devices with their last wake and page previews, pending devices, every page on one panel. `?panel=<model>-<rotation>` (e.g. `reterminal_e1001-90`) picks it from a select of each model at 0 and 90, so it survives a reload; it defaults to the first device's model and rotation, else `reterminal_e1001` at 0. Without JavaScript a button submits the select |
 | `POST /modules/{module}/update` | Run one update of the module now, then redirect to `/` |
-| `GET /preview/{device}/{layout}/{page}.png` | Exactly what the device gets; `?model=` overrides the device's model |
-| `GET /preview/{device}/{layout}/{page}/props.json` | The props the page receives; `?model=` as above |
-| `GET /preview/page/{layout}/{page}.png?model=...&rotation=...` | A page on a panel without a device; model defaults to `reterminal_e1001`, rotation to 0 |
+| `GET /preview/{device}/{name}.png` | Exactly what the device gets; `{name}` is a page name, `<layout>/<page>` or a shared `<page>`; `?model=` overrides the device's model |
+| `GET /preview/{device}/{name}/props.json` | The props the page receives; `?model=` as above |
+| `GET /preview/page/{name}.png?model=...&rotation=...` | A page on a panel without a device; model defaults to `reterminal_e1001`, rotation to 0 |
 | `GET /simulate/{device}` | Simulator page for a device |
 | `POST /simulate/{device}/wake?source=timer\|button&model=...` | Plays a device wake (setup if no key yet, then display) through the device protocol in-process; returns the requests and responses as JSON |
 | `GET /images/{filename}.png` | Images rendered for simulated wakes |

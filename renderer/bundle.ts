@@ -11,36 +11,39 @@ export type RenderProps = Props<Record<string, Result<unknown>>>;
 
 export type Page = {
   name: string;
+  /** From shared/: laid out for 800x480 and scaled up to larger panels. */
+  shared: boolean;
   data: Record<string, Query>;
   component: ComponentType<RenderProps>;
   css: string;
 };
 
 /**
- * Bundles every `layouts/<layout>/<page>.tsx` under dir into its own entry and
- * loads it, named `<layout>/<page>`.
+ * Bundles every page under dir into its own entry and loads it: a layout's
+ * `layouts/<layout>/<page>.tsx` named `<layout>/<page>`, a shared
+ * `shared/<page>.tsx` named `<page>`.
  */
 export async function bundlePages(dir: string): Promise<Map<string, Page>> {
-  const names = [...new Glob("layouts/*/*.tsx").scanSync({ cwd: dir })]
-    .map((file) => file.slice("layouts/".length, -".tsx".length))
-    .sort();
-  const entrypoints = names.map((name) => join(dir, "layouts", `${name}.tsx`));
+  const files = ["layouts/*/*.tsx", "shared/*.tsx"].flatMap((p) => [...new Glob(p).scanSync({ cwd: dir })]).sort();
+  const entrypoints = files.map((file) => join(dir, file));
   const outdir = await mkdtemp(join(tmpdir(), "dashboard-pages-"));
   try {
-    const root = join(dir, "layouts");
-    const result = await Bun.build({ entrypoints, outdir, root, target: "bun", naming: "[dir]/[name].[ext]", throw: false });
+    const result = await Bun.build({ entrypoints, outdir, root: dir, target: "bun", naming: "[dir]/[name].[ext]", throw: false });
     if (!result.success) throw new Error(result.logs.map(String).join("\n"));
 
     const pages = new Map<string, Page>();
-    for (const name of names) {
-      const js = join(outdir, `${name}.js`);
-      const cssFile = Bun.file(join(outdir, `${name}.css`));
+    for (const file of files) {
+      const out = file.slice(0, -".tsx".length);
+      const shared = file.startsWith("shared/");
+      const name = out.slice((shared ? "shared/" : "layouts/").length);
+      const js = join(outdir, `${out}.js`);
+      const cssFile = Bun.file(join(outdir, `${out}.css`));
       const css = (await cssFile.exists()) ? await cssFile.text() : "";
 
       // A fresh path per build, so a rebuild is not served from the module cache.
       const mod = await import(`${js}?v=${Date.now()}`);
       if (typeof mod.default !== "function") throw new Error(`${name}: default export is not a component`);
-      pages.set(name, { name, data: mod.data ?? {}, component: mod.default, css });
+      pages.set(name, { name, shared, data: mod.data ?? {}, component: mod.default, css });
     }
     return pages;
   } finally {

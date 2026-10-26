@@ -1,6 +1,6 @@
-import { Missing, PageFrame, Updated } from "../../components/PageFrame";
-import { formatCount, formatDuration, formatTime } from "../../lib/format";
-import { query, type PageProps } from "../../lib/page";
+import { Missing, PageFrame, Updated } from "../components/PageFrame";
+import { formatCount, formatDuration, formatTime } from "../lib/format";
+import { query, type PageProps } from "../lib/page";
 import styles from "./eveonline.module.css";
 
 export const data = {

@@ -69,7 +69,7 @@ func TestNewErrors(t *testing.T) {
 	}{
 		{"unknown page", func(_ testing.TB, cfg *Config) {
 			cfg.Devices["hallway"] = Device{MAC: "AA:BB:CC:DD:EE:FF", Layout: "e1001", Pages: []string{"hello", "nope"}}
-		}, `checking pages: devices.hallway: page "nope" does not exist`},
+		}, `checking pages: devices.hallway: page "nope" is in neither layout e1001 nor shared (have [hello])`},
 		{"unusable data dir", func(tb testing.TB, cfg *Config) {
 			// A file where the data directory should be.
 			cfg.DataDir = filepath.Join(tb.TempDir(), "file")

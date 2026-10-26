@@ -1,8 +1,8 @@
-import { Missing, PageFrame, Updated } from "../../components/PageFrame";
-import { flowDirection, formatFlow, formatGas, formatKwh, formatVolt, formatWatt, panelLabel, startedLate } from "../../lib/energy";
-import { formatTime } from "../../lib/format";
-import { query, type PageProps } from "../../lib/page";
-import type { P1Usage } from "../../generated/queries";
+import { Missing, PageFrame, Updated } from "../components/PageFrame";
+import { flowDirection, formatFlow, formatGas, formatKwh, formatVolt, formatWatt, panelLabel, startedLate } from "../lib/energy";
+import { formatTime } from "../lib/format";
+import { query, type PageProps } from "../lib/page";
+import type { P1Usage } from "../generated/queries";
 import styles from "./energy.module.css";
 
 export const data = {

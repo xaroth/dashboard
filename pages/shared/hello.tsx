@@ -1,5 +1,5 @@
-import { formatDateTime } from "../../lib/format";
-import type { PageProps } from "../../lib/page";
+import { formatDateTime } from "../lib/format";
+import type { PageProps } from "../lib/page";
 import styles from "./hello.module.css";
 
 export const data = {};
