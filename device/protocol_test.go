@@ -206,6 +206,36 @@ func TestSetup(t *testing.T) {
 	}
 }
 
+func TestSetupLogo(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t, func(o *device.Options) { o.Devices[0].Logo = "detail" })
+	code, body := e.do(t, http.MethodGet, "/api/setup", map[string]string{"ID": mac, "Model": "reterminal_e1003"})
+	url, _ := body["image_url"].(string)
+	file, ok := strings.CutPrefix(url, "http://dash:8080/images/")
+	if code != http.StatusOK || !ok {
+		t.Fatalf("got %d with image_url %q, want 200 with an image under http://dash:8080/images/", code, url)
+	}
+
+	// Served at the panel size of the model setup reported.
+	rec := httptest.NewRecorder()
+	e.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/images/"+file, nil))
+	cfg, err := png.DecodeConfig(rec.Body)
+	if rec.Code != http.StatusOK || err != nil || cfg.Width != 1872 || cfg.Height != 1404 {
+		t.Errorf("image: got %d %dx%d (%v), want 200 1872x1404", rec.Code, cfg.Width, cfg.Height, err)
+	}
+}
+
+func TestSetupLogoRenderFailure(t *testing.T) {
+	t.Parallel()
+	// The fake fails unknown pages.
+	e := newEnv(t, func(o *device.Options) { o.Devices[0].Logo = "missing" })
+	// The key matters more than the image: setup still succeeds.
+	_, body := e.do(t, http.MethodGet, "/api/setup", map[string]string{"ID": mac})
+	if _, ok := body["image_url"]; ok || body["status"] != float64(200) || body["api_key"] == nil {
+		t.Errorf("got %v, want status 200 with api_key and no image_url", body)
+	}
+}
+
 func TestSetupKeepsKey(t *testing.T) {
 	t.Parallel()
 	e := newEnv(t)

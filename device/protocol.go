@@ -45,6 +45,10 @@ func (d *Devices) setup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": 404, "message": "MAC not registered"})
 		return
 	}
+	if model := r.Header.Get("Model"); d.pipeline.KnownModel(model) {
+		s.model = model
+	}
+	target := s.target()
 	d.mu.Unlock()
 	key, err := d.apiKey(r.Context(), s)
 	if err != nil {
@@ -54,12 +58,31 @@ func (d *Devices) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.log.Info("device setup", "device", s.cfg.Name, "model", r.Header.Get("Model"))
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"status":      200,
 		"api_key":     key,
 		"friendly_id": friendlyID(mac),
 		"message":     "Registered as " + s.cfg.Name,
-	})
+	}
+	if filename, ok := d.renderLogo(r.Context(), s.cfg.Logo, target); ok {
+		resp["image_url"] = d.publicURL + "/images/" + filename + ".png"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// renderLogo renders and stores the setup image. Without one the firmware
+// logs a download error and keeps its previous logo; the key is saved either way.
+func (d *Devices) renderLogo(ctx context.Context, page string, target screen.Target) (string, bool) {
+	if page == "" {
+		return "", false
+	}
+	img, err := d.pipeline.Render(ctx, target, page)
+	if err != nil {
+		d.log.Error("rendering logo", "device", target.Name, "page", page, "err", err)
+		return "", false
+	}
+	d.store.Put(img.Filename, img.PNG)
+	return img.Filename, true
 }
 
 func (d *Devices) display(w http.ResponseWriter, r *http.Request) {

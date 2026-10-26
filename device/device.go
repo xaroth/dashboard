@@ -36,7 +36,10 @@ type Config struct {
 	MAC      string // normalized: upper case with colons
 	Rotation int
 	Pages    []string
-	Power    Power
+	// Logo is the page setup renders; the firmware keeps it as its boot and
+	// message screen background. Empty sends no image.
+	Logo  string
+	Power Power
 	// Params overrides query params by "page.key".
 	Params map[string]map[string]any
 }

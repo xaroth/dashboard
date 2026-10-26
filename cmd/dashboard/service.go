@@ -148,7 +148,8 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPages(ctx, pipeline); err != nil {
+	pages, err := s.checkPages(ctx, pipeline)
+	if err != nil {
 		return nil, fmt.Errorf("checking pages: %w", err)
 	}
 
@@ -158,7 +159,12 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 	s.admin.Handle("GET /metrics", promhttp.HandlerFor(s.gatherer, promhttp.HandlerOpts{}))
 	var configs []device.Config
 	for name, d := range cfg.Devices {
-		configs = append(configs, device.Config{Name: name, MAC: d.MAC, Rotation: d.Rotation, Pages: d.pages(), Power: d.Power, Params: d.params()})
+		c := device.Config{Name: name, MAC: d.MAC, Rotation: d.Rotation, Pages: d.pages(), Power: d.Power, Params: d.params()}
+		logo := d.Layout + "/" + logoPage
+		if _, ok := pages[logo]; ok {
+			c.Logo = logo
+		}
+		configs = append(configs, c)
 	}
 	deviceOpts := device.Options{
 		Devices:   configs,
@@ -234,17 +240,18 @@ func (s *Service) Run(ctx context.Context) error {
 
 // checkPages validates what pages and devices ask for: pages exist, every
 // declared query exists and its params decode, also with each device's
-// overrides. Mistakes stop startup instead of showing up at render.
-func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) error {
+// overrides. Mistakes stop startup instead of showing up at render. It
+// returns the pages by name.
+func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) (map[string]render.PageInfo, error) {
 	pages, err := pipeline.PageInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("reading pages: %w", err)
+		return nil, fmt.Errorf("reading pages: %w", err)
 	}
 	names := slices.Sorted(maps.Keys(pages))
 	for _, page := range names {
 		for key, q := range pages[page].Data {
 			if err := s.modules.Check(q.Module, q.Query, q.Params); err != nil {
-				return fmt.Errorf("page %s, data %s: %w", page, key, err)
+				return nil, fmt.Errorf("page %s, data %s: %w", page, key, err)
 			}
 		}
 	}
@@ -257,21 +264,21 @@ func (s *Service) checkPages(ctx context.Context, pipeline *render.Pipeline) err
 						have = append(have, p)
 					}
 				}
-				return fmt.Errorf("devices.%s: page %q does not exist in layout %s (have %v)", name, page, d.Layout, have)
+				return nil, fmt.Errorf("devices.%s: page %q does not exist in layout %s (have %v)", name, page, d.Layout, have)
 			}
 		}
 		for ref, override := range d.Params {
 			page, key, _ := strings.Cut(ref, ".")
 			q, ok := pages[d.Layout+"/"+page].Data[key]
 			if !ok {
-				return fmt.Errorf("devices.%s.params: %q is not a page data key (page.key)", name, ref)
+				return nil, fmt.Errorf("devices.%s.params: %q is not a page data key (page.key)", name, ref)
 			}
 			if err := s.modules.Check(q.Module, q.Query, render.MergeParams(q.Params, override)); err != nil {
-				return fmt.Errorf("devices.%s.params.%s: %w", name, ref, err)
+				return nil, fmt.Errorf("devices.%s.params.%s: %w", name, ref, err)
 			}
 		}
 	}
-	return nil
+	return pages, nil
 }
 
 // resolver runs page queries on the module set and shapes the results for pages.

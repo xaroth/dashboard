@@ -20,6 +20,9 @@ type Device struct {
 	Params map[string]map[string]any `yaml:"params"`
 }
 
+// logoPage is the page setup renders, when the layout has one.
+const logoPage = "logo"
+
 // Device and layout names appear in URL paths.
 var deviceName = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
