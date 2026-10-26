@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,12 +76,57 @@ type panelView struct {
 	Rotation int
 }
 
+// Value is the panel as ?panel= takes it, e.g. reterminal_e1001-90.
+func (p panelView) Value() string { return p.Model + "-" + strconv.Itoa(p.Rotation) }
+
+func (p panelView) Orientation() string {
+	switch p.Rotation {
+	case 90:
+		return "portrait"
+	case 180:
+		return "landscape, upside down"
+	case 270:
+		return "portrait, other direction"
+	}
+	return "landscape"
+}
+
+// parsePanel reads a panelView.Value; the model must be known.
+func parsePanel(s string) (panelView, bool) {
+	i := strings.LastIndexByte(s, '-')
+	if i < 0 || !slices.Contains(render.Models(), s[:i]) {
+		return panelView{}, false
+	}
+	rot, err := strconv.Atoi(s[i+1:])
+	if err != nil || !validRotation(rot) {
+		return panelView{}, false
+	}
+	return panelView{s[:i], rot}, true
+}
+
+func validRotation(rot int) bool { return rot == 0 || rot == 90 || rot == 180 || rot == 270 }
+
+// index previews pages on one panel, picked with ?panel=, since every
+// preview is a render. It defaults to the first device's panel.
 func (h *adminHandler) index(w http.ResponseWriter, r *http.Request) {
+	devices := h.Devices.Statuses()
 	var panels []panelView
 	for _, m := range render.Models() {
 		for _, rot := range []int{0, 90} {
 			panels = append(panels, panelView{m, rot})
 		}
+	}
+	panel, ok := parsePanel(r.URL.Query().Get("panel"))
+	if !ok {
+		panel = panelView{device.DefaultModel, 0}
+		if len(devices) > 0 {
+			panel = panelView{devices[0].Model, devices[0].Rotation}
+		}
+	}
+	// A device at 180 or 270 defaults to a panel not listed; list it so the
+	// select shows what the pages render on.
+	if !slices.Contains(panels, panel) {
+		panels = append(panels, panel)
 	}
 	pages, err := h.Pipeline.Pages(r.Context())
 	if err != nil {
@@ -94,12 +140,13 @@ func (h *adminHandler) index(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	err = indexTmpl.Execute(w, map[string]any{
-		"Devices": h.Devices.Statuses(),
+		"Devices": devices,
 		"Pending": h.Devices.Pending(),
 		"Modules": mods,
 		"Shared":  h.Modules.Shared(r.Context()),
 		"Pages":   pages,
 		"Panels":  panels,
+		"Panel":   panel,
 	})
 	if err != nil {
 		h.Log.Error("rendering index", "err", err)
@@ -119,7 +166,7 @@ func (h *adminHandler) previewPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if s := q.Get("rotation"); s != "" {
 		rot, err := strconv.Atoi(s)
-		if err != nil || (rot != 0 && rot != 90 && rot != 180 && rot != 270) {
+		if err != nil || !validRotation(rot) {
 			http.Error(w, "rotation must be 0, 90, 180 or 270", http.StatusBadRequest)
 			return
 		}

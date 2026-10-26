@@ -678,7 +678,7 @@ On a separate admin listener. No authentication; access is restricted at the net
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), shared values with their version, devices with their last wake and page previews, pending devices, every page on every panel at rotations 0 and 90 |
+| `GET /` | Module status (phase, interval, last fetch and attempt, next run, error, Update now), shared values with their version, devices with their last wake and page previews, pending devices, every page on one panel. `?panel=<model>-<rotation>` (e.g. `reterminal_e1001-90`) picks it from a select of each model at 0 and 90, so it survives a reload; it defaults to the first device's model and rotation, else `reterminal_e1001` at 0. Without JavaScript a button submits the select |
 | `POST /modules/{module}/update` | Run one update of the module now, then redirect to `/` |
 | `GET /preview/{device}/{layout}/{page}.png` | Exactly what the device gets; `?model=` overrides the device's model |
 | `GET /preview/{device}/{layout}/{page}/props.json` | The props the page receives; `?model=` as above |

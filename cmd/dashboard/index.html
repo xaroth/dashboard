@@ -76,16 +76,21 @@
 {{end}}
 
 <h2>Pages</h2>
-{{range $page := .Pages}}
-<h3>{{$page}}</h3>
+<form method="get" action="/">
+  <label>Panel
+    <select name="panel" onchange="this.form.submit()">
+      {{range .Panels}}<option value="{{.Value}}"{{if eq .Value $.Panel.Value}} selected{{end}}>{{.Model}} {{.Orientation}}</option>{{end}}
+    </select>
+  </label>
+  <noscript><button>Show</button></noscript>
+</form>
 <div class="row">
-  {{range $.Panels}}
+  {{range .Pages}}
   <figure>
-    <a href="/preview/page/{{$page}}.png?model={{.Model}}&rotation={{.Rotation}}"><img src="/preview/page/{{$page}}.png?model={{.Model}}&rotation={{.Rotation}}" alt="{{$page}}"></a>
-    <figcaption>{{.Model}}, rotation {{.Rotation}}</figcaption>
+    <a href="/preview/page/{{.}}.png?model={{$.Panel.Model}}&rotation={{$.Panel.Rotation}}"><img src="/preview/page/{{.}}.png?model={{$.Panel.Model}}&rotation={{$.Panel.Rotation}}" alt="{{.}}"></a>
+    <figcaption>{{.}}</figcaption>
   </figure>
   {{end}}
 </div>
-{{end}}
 </body>
 </html>
