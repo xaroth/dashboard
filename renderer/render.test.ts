@@ -34,6 +34,12 @@ test("pages with the same name in two layouts and shared stay apart", async () =
   expect([...pages.values()].map((p) => p.shared)).toEqual([false, false, true]);
 });
 
+test("pages importing the same CSS modules each get the CSS", async () => {
+  const pages = await bundlePages(join(import.meta.dir, "testdata/shared-css"));
+  expect(pages.get("a/home")!.css).toContain("4px");
+  expect(pages.get("b/home")!.css).toContain("4px");
+});
+
 test("shared pages lay out at 800x480 and scale to the panel", async () => {
   const pages = await bundlePages(join(import.meta.dir, "testdata/same-name"));
   const e1003 = { width: 1872, height: 1404, portrait: false };
@@ -44,6 +50,7 @@ test("shared pages lay out at 800x480 and scale to the panel", async () => {
   });
   expect(layout(pages.get("home")!, { width: 800, height: 480, portrait: false }).scale).toBe(1);
   expect(layout(pages.get("large/home")!, e1003)).toEqual({ viewport: e1003, scale: 1 });
+  expect(layout({ ...pages.get("large/home")!, scaled: true }, e1003).scale).toBe(2.34);
 
   const png = await renderPage(new Renderer(), pages.get("home")!, {
     data: {},
