@@ -55,6 +55,9 @@ const (
 	maxPendingPerSeries = 24 * 60
 )
 
+// ShutdownFlushTimeout bounds the flush at shutdown.
+const ShutdownFlushTimeout = 5 * time.Second
+
 type level struct {
 	res time.Duration
 	// keep is the retention; zero keeps forever.
@@ -175,7 +178,7 @@ func (s *Store) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ShutdownFlushTimeout)
 			defer cancel()
 			if err := s.Flush(ctx); err != nil {
 				s.log.Error("flushing series at shutdown", "err", err)
@@ -207,15 +210,41 @@ func (s *Store) Flush(ctx context.Context) error {
 		if err := s.write(ctx, batch); err != nil {
 			s.mu.Lock()
 			s.pending = append(batch, s.pending...)
-			if over := len(s.pending) - maxPendingPerSeries*len(s.series); over > 0 {
-				s.pending = s.pending[over:]
-				s.log.Warn("series buffer full, dropping oldest samples", "dropped", over)
-			}
+			s.trim()
 			s.mu.Unlock()
 			return err
 		}
 	}
 	return s.rollup(ctx)
+}
+
+// trim drops the oldest buffered samples of each series beyond
+// maxPendingPerSeries. It is called with s.mu held.
+func (s *Store) trim() {
+	over := map[*def]int{}
+	for _, smp := range s.pending {
+		over[smp.def]++
+	}
+	for d, n := range over {
+		if n <= maxPendingPerSeries {
+			delete(over, d)
+			continue
+		}
+		over[d] = n - maxPendingPerSeries
+		s.log.Warn("series buffer full, dropping oldest samples", "series", d.name, "dropped", over[d])
+	}
+	if len(over) == 0 {
+		return
+	}
+	kept := s.pending[:0]
+	for _, smp := range s.pending {
+		if over[smp.def] > 0 {
+			over[smp.def]--
+			continue
+		}
+		kept = append(kept, smp)
+	}
+	s.pending = kept
 }
 
 func (s *Store) write(ctx context.Context, batch []sample) error {

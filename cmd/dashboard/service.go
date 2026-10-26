@@ -26,6 +26,7 @@ import (
 	"github.com/xaroth/dashboard/module/yamlconfig"
 	"github.com/xaroth/dashboard/modules"
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -220,7 +221,15 @@ func (s *Service) Run(ctx context.Context) error {
 	})
 	s.serve(ctx, g, "device", s.cfg.Listen.Device, s.instrument("device", s.device))
 	s.serve(ctx, g, "admin", s.cfg.Listen.Admin, s.instrument("admin", s.admin))
-	return errors.Join(g.Wait(), s.close())
+	err := g.Wait()
+	// Manual updates in the admin drain add samples after the series loop's
+	// final flush.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), series.ShutdownFlushTimeout)
+	defer cancel()
+	if ferr := s.modules.FlushSeries(fctx); ferr != nil {
+		s.log.Error("flushing series at shutdown", "err", ferr)
+	}
+	return errors.Join(err, s.close())
 }
 
 // checkPages validates what pages and devices ask for: pages exist, every
