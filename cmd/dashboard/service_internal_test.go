@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"image/png"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/xaroth/dashboard/module"
 	"github.com/xaroth/dashboard/render"
+	"github.com/xaroth/dashboard/series"
 	"github.com/xaroth/dashboard/storage"
 )
 
@@ -280,6 +282,98 @@ func TestRunCancelsRequestsAfterDrain(t *testing.T) {
 	}
 	if !r.Closed() {
 		t.Error("got renderer open after Run, want it closed")
+	}
+}
+
+// drainConfig carries the test's channels, so each test has its own.
+type drainConfig struct{ started, release chan struct{} }
+
+// drainModule's update adds a sample, blocks until release, then adds
+// another. Its schedule never updates.
+type drainModule struct{ cfg *drainConfig }
+
+func (m *drainModule) Initialize(_ context.Context, cfg *drainConfig, _ module.Env) error {
+	m.cfg = cfg
+	return nil
+}
+
+func (*drainModule) Enabled(context.Context, module.Query) (bool, error) { return false, nil }
+
+func (m *drainModule) Update(_ context.Context, u *module.Update) error {
+	if err := u.AddSample("power", u.Now().Add(-time.Minute), 1); err != nil {
+		return err
+	}
+	close(m.cfg.started)
+	<-m.cfg.release
+	return u.AddSample("power", u.Now(), 2)
+}
+
+func countSamples(tb testing.TB, db *sql.DB) int {
+	tb.Helper()
+	var n int
+	if err := db.QueryRowContext(tb.Context(), "SELECT count(*) FROM series_raw").Scan(&n); err != nil {
+		tb.Fatalf("counting samples: %v", err)
+	}
+	return n
+}
+
+func TestRunFlushesSeriesAfterDrain(t *testing.T) {
+	t.Parallel()
+	admin := freeAddr(t)
+	cfg := testConfig(t, freeAddr(t), admin)
+	drain := &drainConfig{started: make(chan struct{}), release: make(chan struct{})}
+	stub := render.NewFakeRenderer(t, render.ExpectPages(render.PageInfo{Name: "e1001/hello"}))
+	s, err := New(t.Context(), cfg, slog.New(slog.DiscardHandler), WithRenderer(stub),
+		WithRegistrations(module.Define[drainModule, drainConfig]("meter", func() *drainConfig { return drain },
+			module.WithSeries("power", series.Rate))))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// Polls the listener until it is up; the update then blocks.
+	go func() {
+		for ctx.Err() == nil {
+			resp, err := http.Post("http://"+admin+"/modules/meter/update", "", nil)
+			if err == nil {
+				resp.Body.Close()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	select {
+	case <-drain.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("update never started")
+	}
+	cancel()
+	// The series loop's final flush stores the first sample; the second
+	// comes after it.
+	for deadline := time.Now().Add(10 * time.Second); countSamples(t, s.db.Reader) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the series loop never flushed")
+		}
+	}
+	close(drain.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+
+	db, err := storage.Open(t.Context(), cfg.DataDir)
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	defer db.Close()
+	if n := countSamples(t, db.Reader); n != 2 {
+		t.Errorf("got %d samples stored, want both of the drained update's", n)
 	}
 }
 
