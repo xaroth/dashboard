@@ -101,6 +101,37 @@ func TestNewErrors(t *testing.T) {
 	}
 }
 
+func TestSetupSendsLayoutLogo(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name  string
+		pages []render.PageInfo
+		want  bool
+	}{
+		{"layout with logo", []render.PageInfo{{Name: "e1001/hello"}, {Name: "e1001/logo"}}, true},
+		{"layout without logo", []render.PageInfo{{Name: "e1001/hello"}}, false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			stub := render.NewFakeRenderer(t, render.ExpectPages(testCase.pages...))
+			s, err := New(t.Context(), testConfig(t, "", ""), slog.New(slog.DiscardHandler), WithRenderer(stub))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			t.Cleanup(func() { s.close() })
+			rec := serve(s.device, http.MethodGet, "/api/setup", map[string]string{"ID": "AA:BB:CC:DD:EE:FF"})
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("setup: %v", err)
+			}
+			if _, got := body["image_url"]; got != testCase.want {
+				t.Errorf("got image_url %v in %v, want %v", got, body, testCase.want)
+			}
+		})
+	}
+}
+
 func TestNewRejectsReservedAdminPage(t *testing.T) {
 	t.Parallel()
 	images := module.DefineShared("images", func() *struct{} { return &struct{}{} },

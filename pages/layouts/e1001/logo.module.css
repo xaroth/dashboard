@@ -1,0 +1,15 @@
+.screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding-bottom: 160px;
+  background: #fff;
+  color: #000;
+}
+
+.mark {
+  font-size: 72px;
+  font-weight: 700;
+}
