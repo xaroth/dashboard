@@ -49,6 +49,8 @@ func fetch(ctx context.Context, c *http.Client, s *stored) error {
 	if err != nil {
 		return err
 	}
+	// Some hosts reject Go's default User-Agent.
+	req.Header.Set("User-Agent", "dashboard (+https://github.com/xaroth/dashboard)")
 	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/feed+json, application/xml;q=0.9, */*;q=0.8")
 	if s.ETag != "" {
 		req.Header.Set("If-None-Match", s.ETag)
@@ -70,7 +72,8 @@ func fetch(ctx context.Context, c *http.Client, s *stored) error {
 	case http.StatusOK:
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+		// Error pages are often HTML; the page shows this as text.
+		return fmt.Errorf("%s: %s", resp.Status, summarize(string(body)))
 	}
 	f, err := gofeed.NewParser().Parse(http.MaxBytesReader(nil, resp.Body, maxBody))
 	if err != nil {
