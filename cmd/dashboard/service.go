@@ -17,7 +17,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
@@ -119,7 +118,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger, opts ...Option) (_ *
 		Writer:        s.db.Writer,
 		Reader:        s.db.Reader,
 		Log:           log,
-		HTTPClient:    &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		HTTPClient:    sourceClient(),
 		Dialer:        &net.Dialer{},
 		Now:           time.Now,
 		Location:      cfg.Location,

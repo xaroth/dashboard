@@ -18,7 +18,7 @@ devices:
     mac: "AA:BB:CC:DD:EE:01"
     rotation: 0   # 0, 90, 180 or 270
     layout: e1001   # pages/layouts/e1001/; pages not in it come from pages/shared/
-    pages: [weather, energy, energy_day, eveonline, eveonline_skills, rss, hello]   # the first is the main page; a button press shows the next
+    pages: [weather, energy, energy_day, calendar, eveonline, eveonline_skills, rss, hello]   # the first is the main page; a button press shows the next
     # power: usb   # auto (default) follows USB-Connected, which the reTerminals do not send, and assumes battery
     # params:   # query param overrides, <page>.<data key>
     #   rss.feed: {feed: tech}   # the rss page shows the first feed by name unless set
@@ -36,6 +36,10 @@ modules:
     # client_id: ...
     # client_secret: ...
     # callback_url: http://127.0.0.1:8081/eveonline_esi/callback   # must match the application's callback
+  calendar:   # iCal feeds by name, e.g. Google Calendar's secret address in iCal format
+    # calendars:   # empty disables the module
+    #   family: {url: "${CALENDAR_FAMILY_ICAL}"}   # the URL is a credential: keep it in the environment
+    #   work: {url: "${CALENDAR_WORK_ICAL}"}
   car:   # Pleos Vehicle Data API; enter keys on /car/ on the admin listener
     # active_interval: 15m   # while a car is on, charging or moving
     # max_interval: 12h      # a parked car is polled every quarter of its idle time, up to this

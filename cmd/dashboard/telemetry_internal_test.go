@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/xaroth/dashboard/module"
 )
 
 // spans records every span of the package's tests. Only telemetry tests
@@ -99,4 +102,33 @@ func TestInstrumentTraces(t *testing.T) {
 		}
 	}
 	t.Error("got no render span under the display request")
+}
+
+func TestSourceClientSecretURL(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	c := sourceClient()
+	for _, ctx := range []context.Context{t.Context(), module.WithSecretURL(t.Context())} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/private-secret/basic.ics", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	var traced int
+	for _, span := range spans.Ended() {
+		for _, a := range span.Attributes() {
+			if strings.Contains(a.Value.Emit(), "private-secret") {
+				traced++
+			}
+		}
+	}
+	if traced != 1 {
+		t.Errorf("got %d span attributes with the URL, want 1: the plain request's", traced)
+	}
 }

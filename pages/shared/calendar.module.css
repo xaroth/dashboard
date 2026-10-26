@@ -1,0 +1,67 @@
+.agenda {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.day {
+  display: flex;
+  flex-direction: column;
+}
+
+.date,
+.event {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 38px; /* ROW */
+  gap: 16px;
+  white-space: nowrap;
+}
+
+.date {
+  font-size: 24px;
+  font-weight: 700;
+  border-bottom: 2px solid #000;
+}
+
+.event {
+  font-size: 22px;
+}
+
+.time {
+  flex-shrink: 0;
+  width: 150px;
+  color: #555;
+}
+
+.title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+}
+
+.location {
+  font-size: 18px;
+  font-weight: 400;
+  color: #555;
+}
+
+.calendar {
+  flex-shrink: 0;
+  font-size: 18px;
+  color: #555;
+}
+
+.errors {
+  height: 26px; /* ERROR_ROW */
+  font-size: 18px;
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+}

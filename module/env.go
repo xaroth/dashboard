@@ -23,6 +23,23 @@ type Env struct {
 	// Dialer opens connections to sources that are not HTTP.
 	Dialer ContextDialer
 	Now    func() time.Time
+	// Location is the configured time zone.
+	Location *time.Location
+}
+
+type secretURLKey struct{}
+
+// WithSecretURL marks HTTP requests made with ctx as going to a URL that is
+// itself a credential, such as a calendar's secret address. HTTP does not
+// trace them: a client span records the full URL.
+func WithSecretURL(ctx context.Context) context.Context {
+	return context.WithValue(ctx, secretURLKey{}, true)
+}
+
+// SecretURL reports whether ctx was marked with WithSecretURL.
+func SecretURL(ctx context.Context) bool {
+	v, _ := ctx.Value(secretURLKey{}).(bool)
+	return v
 }
 
 // ContextDialer opens connections; *net.Dialer is one.

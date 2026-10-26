@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus"
@@ -16,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/xaroth/dashboard/module"
 )
 
 func newRequestDuration() *prometheus.HistogramVec {
@@ -43,6 +46,13 @@ func (s *Service) instrument(listener string, h http.Handler) http.Handler {
 	})
 	return otelhttp.NewHandler(measured, listener,
 		otelhttp.WithFilter(func(r *http.Request) bool { return !untraced[r.URL.Path] }))
+}
+
+// sourceClient is the modules' HTTP client. It traces each call, except
+// those to a secret URL, which the span would record.
+func sourceClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second, Transport: otelhttp.NewTransport(http.DefaultTransport,
+		otelhttp.WithFilter(func(r *http.Request) bool { return !module.SecretURL(r.Context()) }))}
 }
 
 // setupTracing installs the global tracer provider and propagator. Spans are
