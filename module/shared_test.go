@@ -172,6 +172,15 @@ func TestSharedFailures(t *testing.T) {
 			wantLoad: "shared greeting: defined twice",
 		},
 		{
+			name: "reserved name",
+			regs: []module.Registration{
+				greeterRegistration("a", module.WithShared(module.DefineShared("series",
+					func() *greetingConfig { return &greetingConfig{} },
+					func(context.Context, *greetingConfig, []string, module.Env) (int, error) { return 0, nil }))),
+			},
+			wantLoad: `shared name "series" is reserved`,
+		},
+		{
 			name:       "build fails",
 			yaml:       "greeting: {fail: true}",
 			regs:       []module.Registration{greeterRegistration("a", module.WithShared(greetingShared))},
@@ -198,6 +207,10 @@ func TestSharedFailures(t *testing.T) {
 			}
 			if diff := cmp.Diff(testCase.wantShared, set.Shared(t.Context())); diff != "" {
 				t.Errorf("shared (-want +got):\n%s", diff)
+			}
+			// The query is not run with a missing shared value.
+			if res := set.Resolve(t.Context(), "a", "greeting", nil); res.Value != nil || res.Error != testCase.wantInit {
+				t.Errorf("got query %v %q, want no value and %q", res.Value, res.Error, testCase.wantInit)
 			}
 		})
 	}

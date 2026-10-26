@@ -264,9 +264,9 @@ Update and queries are split so a slow or failing source never blocks a screen: 
 
 ### Configuration and lifecycle
 
-- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys, decode errors and a section for an unknown module stop startup: they are operator errors. `module` does not know the file format: `Options.Configs` holds a `module.Config` per section, decode functions that `cmd/dashboard` builds with `module/yamlconfig`.
+- Every registered module is initialized with its defaults, overlaid with its `modules.<name>` section if present. Unknown keys, decode errors and a section for an unknown module stop startup: they are operator errors. So do a module registered twice and a module or shared value named after a migration owner outside `module` (`storage`, `series`, and the `Options.Reserved` `cmd/dashboard` passes: `device`), which would share its goose version table. `module` does not know the file format: `Options.Configs` holds a `module.Config` per section, decode functions that `cmd/dashboard` builds with `module/yamlconfig`.
 - The scheduler asks `Enabled` before each update, with a 30 s timeout, never concurrently with an update. A disabled module skips the update and shows as disabled (not failed) in the admin UI; its queries still serve stored data, marked stale once older than `stale_after`. Because it is asked every time, a module can enable itself later, e.g. once a token appears in its table.
-- Timing overrides live under a reserved `schedule` key that the service strips before decoding:
+- Timing overrides live under a reserved `schedule` key that the service strips before decoding; `update_interval` is at least 1 minute:
 
 ```yaml
 modules:
@@ -276,7 +276,7 @@ modules:
       stale_after: 3h
 ```
 
-- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call. A successful `Update` is recorded even if its context is canceled as it returns (shutdown, or a manual update's request going away), so module state matches the tables it wrote.
+- A source being offline never stops the service: network work happens in `Update`, whose errors mark the module failed and are retried with backoff. Each update has a 2-minute timeout. If `Initialize` returns an error, the module is marked failed and stays off until restart; its queries return that error without running. A panic in `Initialize`, `Enabled`, `Update` or a query is recovered and handled as an error from that call. A successful `Update` is recorded even if its context is canceled as it returns (shutdown, or a manual update's request going away), so module state matches the tables it wrote.
 - Start: each schedule starts after a random delay of up to 30 s (or the interval, if shorter).
 - Retries: exponential backoff from 30 s, doubling to at most 6 hours, not capped at the interval. A module returns `module.ErrAuth` (wrapped) for rejected credentials; that stops retries until a manual update (Update now in the admin UI) succeeds or the service restarts. The error is recorded in module state, so pages see it in the result envelope. A manual update does not ask `Enabled`; when it succeeds it resets the backoff, and the next scheduled update is an interval (or the delay set with `NextUpdate`) after it. A scheduled update that fires while a manual one runs waits for it and is skipped if it succeeded, so a rate-limited source is not called twice in a row.
 
@@ -322,7 +322,7 @@ func (*skills) Update(ctx context.Context, u *module.Update) error {
 - `SharedMigrations` gives a shared value tables, migrated like a module's with the shared value's name as owner. Its methods reach them through the `DB` of the `Query` or `*Update` they are passed: the writer in a module's or its own `Update`, the read-only pool in queries and `Version`. A method that writes takes `*module.Update`, as `esi.Client.Token` does.
 - A shared value that is a `module.AdminHandler` is served on the admin listener under `/<name>/` (the prefix stripped), with a `Query` on the writer, without shared values, and linked from the admin index under Shared. This is how logins work.
 - The config section follows the module rules (defaults, unknown keys stop startup); it has a `schedule` key only when the value has a schedule (below). A section for a shared value no module declares is an unknown module.
-- A build error turns off every module that declares the value, as an `Initialize` error does; the error is prefixed with the shared value's name.
+- A build error turns off every module that declares the value, as an `Initialize` error does; the error is prefixed with the shared value's name, and their queries return it without running.
 - `Get` in a module that did not declare the value panics, which surfaces as an error from that call. A shared value's name may not be a module's name.
 - A shared value that implements `module.Versioned` reports the version of the source it serves (`Version(ctx, q)`, `q` on the read-only pool); the admin UI lists every shared value with its version and build error under Shared.
 - Shared values have no snapshot or queries.
@@ -403,7 +403,7 @@ modules/p1/sql/queries.sql
 sqlc.yaml                       one entry per owner
 ```
 
-- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then `series.Open` the series migrations (owner `series`), then each shared value's, then each module's, before any `Initialize`. `device.Load` validates its options (positive intervals, pages per device, a known power) and runs the API key migrations (owner `device`). A failing migration stops startup.
+- **Migrations** are goose files (`-- +goose Up`), embedded with `go:embed`. Each owner has its own sequence and its own version table (`goose_storage`, `goose_device`, `goose_weather`), run through a goose `Provider` per owner, so modules number their migrations independently. `module.Load` runs the module state migrations (owner `storage`), then `series.Open` the series migrations (owner `series`), then each shared value's, then each module's, before any `Initialize`. `device.Load` checks its required options, validates the rest (positive intervals, pages per device, a known power) and runs the API key migrations (owner `device`). A failing migration stops startup.
 - **Queries** are written in `queries.sql` and turned into Go by sqlc. `sqlc.yaml` at the repository root has one entry per owner whose schema is that owner's migrations; adding a module adds an entry. Generated files are committed; CI checks they are up to date (`go tool sqlc diff`); sqlc is tracked with the `tool` directive in `go.mod`.
 - **Tables** are prefixed with their owner (`weather_locations`, `device_keys`); module state is `module_state`. An owner never reads or writes another owner's tables. Shared data goes through service APIs: module state through `Update.SaveSnapshot` and `Query.LoadSnapshot`.
 - **Module tables are for low-rate data**: caches, tokens, geocoding, snapshots. They are written directly by `Update`. Module state (`attempted_at`, `fetched_at`) is written directly on each update; at intervals of a minute or more that is accepted.

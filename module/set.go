@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"slices"
 	"sync"
@@ -59,12 +60,15 @@ type Options struct {
 	Registrations []Registration
 	Configs       map[string]Config
 	Migrator      Migrator
+	// Reserved are the migration owners of other packages, such as
+	// device; no module or shared value may take their name.
+	Reserved []string
 	// Writer is the only connection that writes; Reader is read-only.
 	Writer     *sql.DB
 	Reader     *sql.DB
-	Log        *slog.Logger // nil discards
-	HTTPClient *http.Client
-	Dialer     ContextDialer
+	Log        *slog.Logger     // nil discards
+	HTTPClient *http.Client     // nil is a client with a 30 s timeout
+	Dialer     ContextDialer    // nil is a net.Dialer
 	Now        func() time.Time // nil is time.Now
 	// Location aligns series buckets of an hour or longer; nil is UTC.
 	Location *time.Location
@@ -142,6 +146,12 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	if o.Migrator == nil || o.Writer == nil || o.Reader == nil {
 		return nil, errors.New("module: Options need a Migrator, Writer and Reader")
 	}
+	if o.HTTPClient == nil {
+		o.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+	}
+	if o.Dialer == nil {
+		o.Dialer = &net.Dialer{}
+	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
@@ -149,10 +159,17 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		o.Now = time.Now
 	}
 	regs := slices.SortedFunc(slices.Values(o.Registrations), func(a, b Registration) int { return cmp.Compare(a.name, b.name) })
+	reserved := map[string]bool{stateOwner: true, seriesOwner: true}
+	for _, owner := range o.Reserved {
+		reserved[owner] = true
+	}
 	known := map[string]bool{}
 	for _, r := range regs {
-		if r.name == stateOwner || r.name == seriesOwner {
+		if reserved[r.name] {
 			return nil, fmt.Errorf("module name %q is reserved", r.name)
+		}
+		if known[r.name] {
+			return nil, fmt.Errorf("module %s: registered twice", r.name)
 		}
 		known[r.name] = true
 	}
@@ -161,6 +178,9 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		return nil, err
 	}
 	for _, d := range shared {
+		if reserved[d.sharedName()] {
+			return nil, fmt.Errorf("shared name %q is reserved", d.sharedName())
+		}
 		known[d.sharedName()] = true
 	}
 	for name := range o.Configs {
@@ -336,6 +356,9 @@ func declarations(regs []Registration, d sharedDef) []any {
 	return out
 }
 
+// minUpdateInterval keeps an override from hammering a rate-limited source.
+const minUpdateInterval = time.Minute
+
 // decodeConfig overlays c on the defaults in cfg and returns its schedule.
 // Without scheduled, a schedule key is an error.
 func decodeConfig(c Config, cfg any, scheduled bool) (Schedule, error) {
@@ -349,6 +372,9 @@ func decodeConfig(c Config, cfg any, scheduled bool) (Schedule, error) {
 		}
 		if sched.UpdateInterval < 0 || sched.StaleAfter < 0 {
 			return sched, errors.New("schedule: durations must be positive")
+		}
+		if sched.UpdateInterval != 0 && sched.UpdateInterval < minUpdateInterval {
+			return sched, fmt.Errorf("schedule: update_interval must be at least %v", minUpdateInterval)
 		}
 	}
 	if c.Decode == nil {
@@ -372,11 +398,14 @@ func (s *Set) env(log *slog.Logger) Env {
 	return Env{Log: log, HTTP: s.httpClient, Dialer: s.dialer, Now: s.now}
 }
 
-// query returns inst's Query on db, with the shared values inst declares.
+// query returns inst's Query on db, with the shared values inst declares
+// that were built.
 func (s *Set) query(inst *instance, db *sql.DB) Query {
 	shared := make(map[sharedDef]any, len(inst.reg.shared))
 	for _, u := range inst.reg.shared {
-		shared[u.def] = s.shared[u.def].value
+		if b := s.shared[u.def]; b.err == nil {
+			shared[u.def] = b.value
+		}
 	}
 	return Query{Env: s.env(inst.log), DB: db, name: inst.reg.name, series: s.series, shared: shared}
 }
