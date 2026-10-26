@@ -3,6 +3,7 @@ package render
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	"image/png"
 	"slices"
@@ -11,7 +12,9 @@ import (
 )
 
 // FakeRenderer stands in for the Bun process: it describes the pages it was
-// given and renders blank images of the requested viewport.
+// given and renders blank images of the requested viewport. Like Process, it
+// fails unknown pages and calls after Close; TestRendererContract holds both
+// to that.
 type FakeRenderer struct {
 	mu          sync.Mutex
 	pages       []PageInfo
@@ -52,15 +55,24 @@ func ExpectRender_Error(err error) FakeRendererOption {
 func (f *FakeRenderer) Describe(context.Context) ([]PageInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.closed {
+		return nil, ErrClosed
+	}
 	if f.describeErr != nil {
 		return nil, f.describeErr
 	}
 	return slices.Clone(f.pages), nil
 }
 
-func (f *FakeRenderer) Render(_ context.Context, _ string, props Props) ([]byte, error) {
+func (f *FakeRenderer) Render(_ context.Context, page string, props Props) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.closed {
+		return nil, ErrClosed
+	}
+	if !slices.ContainsFunc(f.pages, func(p PageInfo) bool { return p.Name == page }) {
+		return nil, fmt.Errorf("renderer: unknown page %s", page)
+	}
 	if f.renderErr != nil {
 		return nil, f.renderErr
 	}
