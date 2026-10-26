@@ -628,6 +628,53 @@ func TestNormalizeMAC(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresOptions(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name   string
+		adjust func(*device.Options)
+	}{
+		{"no pipeline", func(o *device.Options) { o.Pipeline = nil }},
+		{"no store", func(o *device.Options) { o.Store = nil }},
+		{"no db", func(o *device.Options) { o.DB = nil }},
+		{"no migrator", func(o *device.Options) { o.Migrator = nil }},
+		{"no location", func(o *device.Options) { o.Schedule.Location = nil }},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			db, err := storage.Open(t.Context(), t.TempDir())
+			if err != nil {
+				t.Fatalf("storage: %v", err)
+			}
+			t.Cleanup(func() { db.Close() })
+			_, o := envOptions(t, db, hourly(time.UTC), testCase.adjust)
+			if _, err := device.Load(t.Context(), o); err == nil {
+				t.Error("got no error, want one")
+			}
+		})
+	}
+}
+
+func TestLoadDefaultsLogAndNow(t *testing.T) {
+	t.Parallel()
+	db, err := storage.Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	e, o := envOptions(t, db, hourly(time.UTC), func(o *device.Options) { o.Log, o.Now = nil, nil })
+	devices, err := device.Load(t.Context(), o)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	devices.Register(e.mux)
+	// Setup from an unknown MAC logs and reads the clock.
+	if code, body := e.do(t, http.MethodGet, "/api/setup", map[string]string{"ID": "00:00:00:00:00:01"}); code != http.StatusOK || body["status"] != float64(404) {
+		t.Errorf("got %d %v, want 200 with status 404", code, body)
+	}
+}
+
 func BenchmarkDisplay(b *testing.B) {
 	e := newEnv(b)
 	key := e.setup(b)

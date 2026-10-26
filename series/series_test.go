@@ -50,6 +50,37 @@ func open(tb testing.TB, c *clock) *series.Store {
 	return s
 }
 
+func TestOpenOptions(t *testing.T) {
+	t.Parallel()
+	db, err := storage.Open(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	o := series.Options{Migrator: db, Writer: db.Writer, Reader: db.Reader, Series: map[string]series.Kind{"power": series.Rate}}
+	if _, err := series.Open(t.Context(), o); err != nil {
+		t.Fatalf("Open without Location, Now and Log: %v", err)
+	}
+	testCases := []struct {
+		name   string
+		adjust func(*series.Options)
+	}{
+		{"no migrator", func(o *series.Options) { o.Migrator = nil }},
+		{"no writer", func(o *series.Options) { o.Writer = nil }},
+		{"no reader", func(o *series.Options) { o.Reader = nil }},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			o := o
+			testCase.adjust(&o)
+			if _, err := series.Open(t.Context(), o); err == nil {
+				t.Error("got no error, want one")
+			}
+		})
+	}
+}
+
 func add(tb testing.TB, s *series.Store, name string, t time.Time, v float64) {
 	tb.Helper()
 	if err := s.Add(name, t, v); err != nil {

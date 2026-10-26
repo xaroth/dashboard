@@ -220,12 +220,34 @@ func TestPipelineRenderTelemetry(t *testing.T) {
 
 func TestNewPipelineMetricsRegistered(t *testing.T) {
 	t.Parallel()
-	reg := prometheus.NewRegistry()
-	if _, err := render.NewPipeline(render.PipelineOptions{Metrics: reg}); err != nil {
+	o := render.PipelineOptions{Renderer: render.NewFakeRenderer(t), Resolver: render.NewFakeResolver(t), Location: time.UTC, Metrics: prometheus.NewRegistry()}
+	if _, err := render.NewPipeline(o); err != nil {
 		t.Fatalf("first NewPipeline: %v", err)
 	}
-	if _, err := render.NewPipeline(render.PipelineOptions{Metrics: reg}); err == nil {
+	if _, err := render.NewPipeline(o); err == nil {
 		t.Error("got no error registering the render metrics twice, want one")
+	}
+}
+
+func TestNewPipelineRequiresOptions(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name   string
+		adjust func(*render.PipelineOptions)
+	}{
+		{"no renderer", func(o *render.PipelineOptions) { o.Renderer = nil }},
+		{"no resolver", func(o *render.PipelineOptions) { o.Resolver = nil }},
+		{"no location", func(o *render.PipelineOptions) { o.Location = nil }},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			o := render.PipelineOptions{Renderer: render.NewFakeRenderer(t), Resolver: render.NewFakeResolver(t), Location: time.UTC}
+			testCase.adjust(&o)
+			if _, err := render.NewPipeline(o); err == nil {
+				t.Error("got no error, want one")
+			}
+		})
 	}
 }
 

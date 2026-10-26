@@ -123,6 +123,13 @@ func (s *Set) Resolve(ctx context.Context, module, name string, params map[strin
 		span.SetStatus(codes.Error, err.Error())
 		res.Stale, res.Error = true, fmt.Sprintf("reading module state: %v", err)
 	}
+	// The module is off: Initialize or a shared value it declares failed.
+	if err := inst.initErr; err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		res.Error = err.Error()
+		return res
+	}
 	raw, err := json.Marshal(params)
 	if err == nil {
 		res.Value, err = q.call(ctx, inst.module, s.query(inst, s.reader), raw)

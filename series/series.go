@@ -69,14 +69,15 @@ var levels = []level{
 
 // Options are what Open needs.
 type Options struct {
-	// Migrator creates the series tables on Writer.
+	// Migrator creates the series tables on Writer. Migrator, Writer and
+	// Reader are required.
 	Migrator Migrator
 	Writer   *sql.DB
 	Reader   *sql.DB
-	// Location aligns buckets of an hour or longer.
+	// Location aligns buckets of an hour or longer; nil is UTC.
 	Location *time.Location
-	Now      func() time.Time
-	Log      *slog.Logger
+	Now      func() time.Time // nil is time.Now
+	Log      *slog.Logger     // nil discards
 	// Series are the names that may be written, with their kind.
 	Series map[string]Kind
 }
@@ -110,6 +111,18 @@ type sample struct {
 
 // Open runs the series migrations and registers the series names.
 func Open(ctx context.Context, o Options) (*Store, error) {
+	if o.Migrator == nil || o.Writer == nil || o.Reader == nil {
+		return nil, errors.New("series: Options need a Migrator, Writer and Reader")
+	}
+	if o.Location == nil {
+		o.Location = time.UTC
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Log == nil {
+		o.Log = slog.New(slog.DiscardHandler)
+	}
 	if err := o.Migrator.Migrate(ctx, "series", migrations, "sql/migrations"); err != nil {
 		return nil, fmt.Errorf("series migrations: %w", err)
 	}
