@@ -47,4 +47,7 @@ test("renders a page as an HTML document of the viewport's size", async () => {
   expect(html).toContain("width: 480px; height: 800px;");
   expect(html).toContain(hello.css);
   expect(html).toContain("test (reterminal_e1001)");
+  // Takumi's font, inlined: the document needs no network.
+  expect(html).toContain("src: url(data:font/woff2;base64,");
+  expect(html).not.toMatch(/https?:\/\//);
 });
