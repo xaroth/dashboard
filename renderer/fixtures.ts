@@ -21,6 +21,24 @@ const skill = (id: number, level: number, finish: string | null) => ({ id, name:
 
 // A populated result for every query: a new query fails to type-check until it has one.
 export const fixtures: { [K in QueryName]: NonNullable<Queries[K]["result"]> } = {
+  "calendar.upcoming": {
+    events: [
+      { calendar: "family", title: "Herfstvakantie", start: "2026-10-10T00:00:00+02:00", end: "2026-10-19T00:00:00+02:00", allDay: true, location: "" },
+      { calendar: "work", title: "Standup", start: "2026-10-16T09:30:00+02:00", end: "2026-10-16T09:45:00+02:00", allDay: false, location: "Microsoft Teams" },
+      { calendar: "family", title: "Tandarts", start: "2026-10-16T14:00:00+02:00", end: "2026-10-16T14:45:00+02:00", allDay: false, location: "Hoofdstraat 1, Utrecht" },
+      { calendar: "family", title: "Zwemles (diploma)", start: "2026-10-17T11:30:00+02:00", end: "2026-10-17T12:15:00+02:00", allDay: false, location: "Mirandabad" },
+      { calendar: "family", title: "Verjaardag oma", start: "2026-10-18T00:00:00+02:00", end: "2026-10-19T00:00:00+02:00", allDay: true, location: "" },
+      { calendar: "family", title: "Etentje", start: "2026-10-18T19:00:00+02:00", end: "2026-10-18T22:00:00+02:00", allDay: false, location: "" },
+      { calendar: "work", title: "Standup", start: "2026-10-19T09:30:00+02:00", end: "2026-10-19T09:45:00+02:00", allDay: false, location: "Microsoft Teams" },
+      { calendar: "work", title: "Sprint review", start: "2026-10-19T15:00:00+02:00", end: "2026-10-19T16:00:00+02:00", allDay: false, location: "" },
+      { calendar: "work", title: "Nachtdienst", start: "2026-10-20T22:00:00+02:00", end: "2026-10-21T07:00:00+02:00", allDay: false, location: "" },
+      { calendar: "work", title: "Standup", start: "2026-10-21T09:30:00+02:00", end: "2026-10-21T09:45:00+02:00", allDay: false, location: "Microsoft Teams" },
+    ],
+    calendars: [
+      { name: "family", fetchedAt, error: "" },
+      { name: "work", fetchedAt: "2026-10-16T09:10:00+02:00", error: "feed: 500 Internal Server Error" },
+    ],
+  },
   "car.vehicle": {
     vin: "KMH0000000000000",
     shortName: "Ioniq",

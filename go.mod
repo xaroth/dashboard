@@ -3,6 +3,7 @@ module github.com/xaroth/dashboard
 go 1.27.1
 
 require (
+	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
 	github.com/eve-online-tools/lib-esi-go v1.0.1-0.20261017122905-6145d15c8771
 	github.com/felixge/httpsnoop v1.1.0
 	github.com/google/go-cmp v0.7.0
@@ -10,6 +11,7 @@ require (
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
+	github.com/teambition/rrule-go v1.8.2
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0

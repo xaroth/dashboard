@@ -70,7 +70,8 @@ type Options struct {
 	HTTPClient *http.Client     // nil is a client with a 30 s timeout
 	Dialer     ContextDialer    // nil is a net.Dialer
 	Now        func() time.Time // nil is time.Now
-	// Location aligns series buckets of an hour or longer; nil is UTC.
+	// Location is the configured time zone, in Env.Location; series buckets
+	// of an hour or longer align to it. nil is UTC.
 	Location *time.Location
 	// Metrics registers the update metrics; nil records them nowhere.
 	Metrics prometheus.Registerer
@@ -86,6 +87,7 @@ type Set struct {
 	httpClient *http.Client
 	dialer     ContextDialer
 	now        func() time.Time
+	location   *time.Location
 	metrics    *metrics
 	tracer     trace.Tracer
 	instances  []*instance
@@ -158,6 +160,9 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Location == nil {
+		o.Location = time.UTC
+	}
 	regs := slices.SortedFunc(slices.Values(o.Registrations), func(a, b Registration) int { return cmp.Compare(a.name, b.name) })
 	reserved := map[string]bool{stateOwner: true, seriesOwner: true}
 	for _, owner := range o.Reserved {
@@ -193,7 +198,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 	if err != nil {
 		return nil, fmt.Errorf("module metrics: %w", err)
 	}
-	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, dialer: o.Dialer, now: o.Now, metrics: m, tracer: newTracer(o.Tracing), shared: map[sharedDef]built{}, sharedOrder: shared}
+	s := &Set{writer: o.Writer, reader: o.Reader, log: o.Log, httpClient: o.HTTPClient, dialer: o.Dialer, now: o.Now, location: o.Location, metrics: m, tracer: newTracer(o.Tracing), shared: map[sharedDef]built{}, sharedOrder: shared}
 	// Three passes, so a config error stops startup before any migration, and
 	// every module's tables exist before any Initialize.
 	sharedConfigs := make([]any, len(shared))
@@ -238,7 +243,7 @@ func Load(ctx context.Context, o Options) (*Set, error) {
 		Migrator: o.Migrator,
 		Writer:   o.Writer,
 		Reader:   o.Reader,
-		Location: cmp.Or(o.Location, time.UTC),
+		Location: o.Location,
 		Now:      o.Now,
 		Log:      o.Log.With("component", "series"),
 		Series:   declared,
@@ -395,7 +400,7 @@ func (s *Set) sharedErr(inst *instance) error {
 
 // env returns the Env with log.
 func (s *Set) env(log *slog.Logger) Env {
-	return Env{Log: log, HTTP: s.httpClient, Dialer: s.dialer, Now: s.now}
+	return Env{Log: log, HTTP: s.httpClient, Dialer: s.dialer, Now: s.now, Location: s.location}
 }
 
 // query returns inst's Query on db, with the shared values inst declares

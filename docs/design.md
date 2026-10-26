@@ -74,6 +74,7 @@ render         -> screen
 | `eveonline_status` | ESI `/status` (EVE Online, Tranquility) | snapshot (online, players, server version, start time) in module state; player count in a series while online |
 | `p1` | Smartstuff P1 dongle (DSMR-API firmware), local HTTP `/api/v2/sm/actual` | snapshot (latest reading) in module state; first reading of each day in `p1_days`, first gas reading of each day in `p1_gas_days` |
 | `solar` | Hoymiles DTU-Pro-S, Modbus TCP | snapshot (DTU serial and every inverter input) in module state |
+| `calendar` | iCalendar (`.ics`) feeds by URL, e.g. Google Calendar's secret address in iCal format | snapshot (each calendar's events for the next 32 days, recurrences expanded) in module state |
 | `rss` | RSS 1.0, RSS 2.0, Atom and JSON Feed URLs | snapshot (per feed: title, newest items, HTTP validators) in module state |
 | `car` | Pleos Vehicle Data API (Hyundai, Kia, Genesis; private My Vehicle API keys) | snapshot (per vehicle: SoC, range, charging, locks, position, odometer) in module state; keys, listed vehicles and polling state in `car_keys` and `car_vehicles` |
 | `weather` | Open-Meteo forecast and geocoding APIs | snapshot (current, hourly, daily) in module state; geocoded location cached in `weather_locations` |
@@ -143,6 +144,35 @@ Each update also writes [series](#time-series) at the service's clock (the DTU r
 Query `solar.power` takes [history params](#time-series) and returns the average power in W per step up to now, as series points. At night updates come every `night_interval`, so steps shorter than it have gaps.
 
 The DTU is dialed through `Update`'s `u.Dialer`. `solar.NewFake(tb, opts...)` (in `dtu_fake.go`) is a dialer for `module.Options` that serves FC03 at `solar.FakeHost` in-process over `net.Pipe`, so tests run inside a synctest bubble; `ExpectWrongByteCount`, `ExpectException` and `ExpectHang` make it send wrong byte counts, an exception, or hang.
+
+### Calendar
+
+Reads named iCalendar feeds. Google Calendar's "secret address in iCal format" is one, so no Google API or OAuth is needed. Config keys under `modules.calendar`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `calendars` | empty | Calendars by name (lowercase letters, digits, `-`, `_`), each with a `url` (`http`, `https`, or `webcal`, fetched as `https`). Empty disables the module. |
+
+```yaml
+modules:
+  calendar:
+    calendars:
+      family: { url: "${CALENDAR_FAMILY_ICAL}" }
+      work:   { url: "${CALENDAR_WORK_ICAL}" }
+```
+
+A feed URL is a credential: it comes from an environment variable and is never logged, stored or shown. Config errors name the calendar, not the URL; fetch errors drop it (Go's `*url.Error` quotes it); requests are made with `module.WithSecretURL`, which keeps them out of traces, since a client span records the full URL.
+
+`Update` runs every 15 minutes; data is stale after 2 hours. It fetches every calendar at once (at most 32 MB each), and expands its events from the start of today to 32 days later, in the configured `timezone`. A calendar that fails keeps its previous events with the error; the update fails only when all do, with `module.ErrAuth` when every feed answered 401 or 403. An event that fails to parse is skipped and logged with the calendar's name.
+
+- Parsing is `github.com/emersion/go-ical`, recurrence `github.com/teambition/rrule-go` (RFC 5545 RRULE with BYSETPOS, BYDAY offsets and the rest). `github.com/apognu/gocal` parses and expands in one, but its own RRULE code handles a subset (`BYDAY=1MO` and `BYMONTHDAY` are wrong or ignored) and its time zone mapping is global state.
+- Expansion: DTSTART is the first occurrence; RDATE adds, EXDATE removes (lists, any zone, or a date for a whole day). An event with a RECURRENCE-ID replaces the master's occurrence at that time, wherever it moves; a cancelled one only removes it. `RANGE=THISANDFUTURE` is treated as a single override. Cancelled events are left out. One event expands to at most 100,000 occurrences from its start; more skips it.
+- Times: a TZID is an IANA name, a name with a prefix (`/freeassociation.sourceforge.net/Europe/Amsterdam`), or one the feed's VTIMEZONE maps with `X-LIC-LOCATION`; anything else (Outlook's Windows names) and floating times are in the configured `timezone`. Recurrences keep the wall clock across DST.
+- All-day events are dates: they start at midnight on the first day and end at midnight after the last, in the configured `timezone`. A missing DTEND, or one not after DTSTART, is one day; for a timed event it is no duration.
+
+Query `calendar.upcoming` takes `calendars` (names; empty is every calendar, an unknown one is an error), `days` (from today, today included; default 7, at most 31) and `limit` (default 10, at most 100). It returns `events`, every event that has not ended and starts before the end of the last day, by start with all-day events first: `calendar`, `title`, `start`, `end`, `allDay`, `location`. `calendars` has each calendar's `name`, `fetchedAt` and `error`.
+
+`calendar.NewFake(tb, opts...)` serves a Google-style and an Exchange-style feed from `modules/calendar/testdata` at `FakeFamilyURL` and `FakeWorkURL`; `ExpectFeed` and `ExpectStatus` set others up, and it counts requests not marked with `module.WithSecretURL`.
 
 ### Car
 
@@ -308,7 +338,7 @@ modules:
 
 Dependencies are typed arguments, one type per access level, so a call can only do what its path allows and a missing dependency is a compile error. `ctx` carries only cancellation and the trace.
 
-- `module.Env` (`Initialize`, shared value builds): `Log`, `HTTP` (30 s timeout; calls are traced as children of the update or query), `Dialer` (for sources that are not HTTP), `Now`.
+- `module.Env` (`Initialize`, shared value builds): `Log`, `HTTP` (30 s timeout; calls are traced as children of the update or query, except those whose context is marked with `module.WithSecretURL`), `Dialer` (for sources that are not HTTP), `Now`, `Location` (the configured `timezone`).
 - `module.Query` (queries, `Enabled`, admin pages, `Versioned.Version`): `Env` plus `DB`, `LoadSnapshot(ctx, &v)`, `QuerySeries` and the module's shared values. `DB` is the read-only pool, except on admin pages, which get the writer to store settings.
 - `*module.Update` (`Update`): `Query` on the writer plus the writes, `SaveSnapshot(v)`, `NextUpdate(d)` and `AddSample`. Helpers that only read take `u.Query`.
 
@@ -674,7 +704,7 @@ Pages declare `type Data = typeof data` and use `PageProps<Data>`: destructuring
 
 ### Shared code
 
-- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency). Pure functions; layouts keep derivation here so it is tested.
+- `pages/lib/`: `page.ts` (`query`, `PageProps`, prop types), `format.ts` (Dutch dates, times, short day names, numbers, temperatures and millimeters with a decimal comma; date formats are built once per timezone), `chart.ts` (scales, SVG points, padded ranges, series runs broken at gaps), `energy.ts` (energy units, flow direction, late day starts, the energy chart's domain and local hour ticks), `weather.ts` (weather code labels, wind direction), `eveonline.ts` (skill levels, skill queues by urgency), `calendar.ts` (agenda days, rows that fit, day labels, event times). Pure functions; layouts keep derivation here so it is tested.
 - `pages/components/`: `PageFrame` (the screen padding and a header with a title and `Updated`, which shows when data was fetched and marks it stale; `Missing` for "Geen ..." states; one shared CSS module), `LineChart` (a line over optional bars, as inline SVG), `EnergyChart` (solar as an area and net flow as a line over a `ChartDomain`), `SkillQueues` (each character's skill queue, most urgent first, in the width and height it is given: skill points and as many upcoming skills per character as fit, none when only the queue ends fit, more columns when the rows do not; narrow columns show how long a queue lasts without its end time).
 
 Time: the config's `timezone` is the single source. Go loads it with `time/tzdata` embedded, computes everything in it, and passes `now` and all timestamps to pages as ISO 8601 strings with offset, plus `timezone` in props. Formatting uses `Intl` with `nl-NL`; a `bun test` asserts the runtime's ICU data formats Dutch dates as expected.
@@ -685,7 +715,7 @@ Each step has its own test with no network:
 
 | What | Tool | How |
 | --- | --- | --- |
-| Module `Update` and queries | `go test` | `moduletest.Load` loads modules on a temp database; `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble). Fakes live in `<name>_fake.go` with `NewFake(tb, opts...)` and `Expect<Thing>` options: `weather.NewFake` (Open-Meteo, fixtures in `modules/weather/testdata`), `p1.NewFake`, `car.NewFake`, `rss.NewFake`, `solar.NewFake`, `esi.NewFake` (SSO), `status.NewFake`, `sde.NewFake`. Assertions on the query results |
+| Module `Update` and queries | `go test` | `moduletest.Load` loads modules on a temp database; `moduletest.HTTPClient(handler)` serves every request in-process (works inside a synctest bubble). Fakes live in `<name>_fake.go` with `NewFake(tb, opts...)` and `Expect<Thing>` options: `weather.NewFake` (Open-Meteo, fixtures in `modules/weather/testdata`), `p1.NewFake`, `calendar.NewFake`, `car.NewFake`, `rss.NewFake`, `solar.NewFake`, `esi.NewFake` (SSO), `status.NewFake`, `sde.NewFake`. Assertions on the query results |
 | Module loading, scheduler | `go test` | fake modules: config errors, panics, backoff, auth pause, manual updates, snapshots |
 | Storage | `go test` | pragmas and page size, reader cannot write, per-owner migrations |
 | Device protocol | `go test` | setup, keys surviving a restart, auth, page selection, refresh rate (including DST), render failure, image store |

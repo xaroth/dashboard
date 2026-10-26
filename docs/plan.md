@@ -4,19 +4,7 @@ Specification of the parts of the service that are designed but not built. The b
 
 ## Modules
 
-| Module | Source | Data |
-| --- | --- | --- |
-| `calendar` | Google Calendar secret iCal URL | snapshot (upcoming events) |
-
-Further candidates: Plex recently added, waste collection, public transport.
-
-Configuration:
-
-```yaml
-modules:
-  calendar:
-    ical_url: ${CALENDAR_ICAL_URL}
-```
+Candidates: Plex recently added, waste collection, public transport.
 
 ### Implementation order
 
