@@ -70,7 +70,9 @@ type FakePleos struct {
 	// failing is the VINs whose data calls fail upstream.
 	failing map[string]bool
 	// expire is how many data calls reject their token as expired.
-	expire   int
+	expire int
+	// forbid is how many data calls reject their token as the gateway does.
+	forbid   int
 	requests []string
 }
 
@@ -157,6 +159,14 @@ func (f *FakePleos) ExpireTokens(n int) {
 	f.expire = n
 }
 
+// ForbidTokens makes the next n data calls reject their token with the
+// gateway's bare 403, as it does once a token expired.
+func (f *FakePleos) ForbidTokens(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forbid = n
+}
+
 // ExpectUnits_Imperial makes the Hyundai car report imperial units and
 // invalid ignition and doors.
 func ExpectUnits_Imperial(_ testing.TB, f *FakePleos) { f.cars[FakeVIN].Imperial = true }
@@ -213,6 +223,12 @@ func (f *FakePleos) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok || f.expire > 0 {
 		f.expire--
 		fakeError(w, http.StatusBadRequest, codeTokenExpired)
+		return
+	}
+	if f.forbid > 0 {
+		f.forbid--
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"error":{"code":403,"message":"Forbidden"}}`)
 		return
 	}
 	key := f.keys[clientID]

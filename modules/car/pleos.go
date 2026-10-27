@@ -92,17 +92,24 @@ func (p *pleos) get(ctx context.Context, path string, out any) error {
 		}
 	}
 	err := p.send(ctx, http.MethodGet, path, nil, p.token, out)
-	if e, ok := asAPIError(err); !ok || !(e.status == http.StatusUnauthorized || e.is(codeTokenExpired, codeTokenInvalid, codeBadToken)) {
+	if !rejectsToken(err) {
 		return err
 	}
 	if err := p.issueToken(ctx); err != nil {
 		return err
 	}
 	err = p.send(ctx, http.MethodGet, path, nil, p.token, out)
-	if e, ok := asAPIError(err); ok && (e.status == http.StatusUnauthorized || e.is(codeTokenExpired, codeTokenInvalid, codeBadToken)) {
+	if rejectsToken(err) {
 		return fmt.Errorf("%w: %w", err, module.ErrAuth)
 	}
 	return err
+}
+
+// rejectsToken reports whether err is the API refusing the access token.
+// The gateway answers an expired token with a bare 403.
+func rejectsToken(err error) bool {
+	e, ok := asAPIError(err)
+	return ok && (e.status == http.StatusUnauthorized || e.status == http.StatusForbidden || e.is(codeTokenExpired, codeTokenInvalid, codeBadToken))
 }
 
 func (p *pleos) send(ctx context.Context, method, path string, body []byte, token string, out any) error {

@@ -249,6 +249,8 @@ func TestUpdateErrors(t *testing.T) {
 		{name: "token rate limited", after: func(f *car.FakePleos) { f.TokenFails(http.StatusTooManyRequests) }, want: "42901", tokens: 1},
 		{name: "token expired", after: func(f *car.FakePleos) { f.ExpireTokens(1) }, tokens: 3},
 		{name: "new token rejected", after: func(f *car.FakePleos) { f.ExpireTokens(1 << 30) }, want: "40003", wantAuth: true, tokens: 3},
+		{name: "token forbidden", after: func(f *car.FakePleos) { f.ForbidTokens(1) }, tokens: 3},
+		{name: "new token forbidden", after: func(f *car.FakePleos) { f.ForbidTokens(1 << 30) }, want: "code 403", wantAuth: true, tokens: 3},
 		{name: "unknown vehicle", opts: []car.FakeOption{car.ExpectVehicle_Unknown}, want: "4101", tokens: 2},
 	}
 	for _, testCase := range testCases {
