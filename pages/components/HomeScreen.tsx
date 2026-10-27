@@ -21,8 +21,8 @@ export const homeData = {
   solarDay: query("solar.power", { hours: 24, stepMinutes: 15 }),
   // The first car; a device picks another with home.car: {id: ...}.
   car: query("car.vehicle"),
-  // A device picks the feed with home.news: {feed: ...}.
-  news: query("rss.items", { limit: 10 }),
+  // A device picks the feed with home.news: {feed: ...}. At least the 14 rows that fit on the E1003.
+  news: query("rss.items", { limit: 15 }),
   agenda: query("calendar.upcoming", { days: 5, limit: 60 }),
 };
 
@@ -44,6 +44,8 @@ const MAX_SKILLS = 3;
 // A day card without its events: borders, heading, weather and padding; then each event row with its gap.
 const DAY_CHROME = 75;
 const EVENT_HEIGHT = 17;
+// Height past this many event rows goes to the headlines and the house instead.
+const MAX_EVENT_ROWS = 8;
 const SCREEN_PAD_Y = 8;
 const GAP = 8;
 
@@ -69,12 +71,14 @@ export function HomeScreen({ data, device, viewport, now, timezone }: HomeScreen
   const warnings = skillWarnings(queues, now).slice(0, MAX_SKILLS);
   const failedChars = queues.some((c) => c.error);
   // The headlines take what the skill queues leave beside the house, or under it in portrait.
-  const topHeight = portrait ? 300 : SCENE_HEIGHT;
+  const minTop = portrait ? SCENE_HEIGHT + GAP + 300 : SCENE_HEIGHT;
+  const rowsLeft = Math.floor((viewport.height - 2 * SCREEN_PAD_Y - minTop - GAP - DAY_CHROME + 2) / EVENT_HEIGHT);
+  const eventRows = Math.max(1, Math.min(MAX_EVENT_ROWS, rowsLeft));
+  const extra = Math.max(0, rowsLeft - MAX_EVENT_ROWS) * EVENT_HEIGHT;
+  const topHeight = (portrait ? 300 : SCENE_HEIGHT) + extra;
+  const sceneHeight = portrait ? SCENE_HEIGHT : topHeight;
   const skillsHeight = warnings.length ? warnings.length * SKILL_HEIGHT + 16 : 0;
   const newsRows = Math.max(0, Math.floor((topHeight - skillsHeight - 20) / NEWS_HEIGHT));
-  const top = portrait ? SCENE_HEIGHT + GAP + topHeight : SCENE_HEIGHT;
-  const daysHeight = viewport.height - 2 * SCREEN_PAD_Y - top - GAP;
-  const eventRows = Math.max(1, Math.floor((daysHeight - DAY_CHROME + 2) / EVENT_HEIGHT));
 
   return (
     <div className={styles.screen}>
@@ -85,6 +89,7 @@ export function HomeScreen({ data, device, viewport, now, timezone }: HomeScreen
           <News feed={data.news.value} stale={data.news.stale} rows={newsRows} now={now} />
         </div>
         <HouseScene
+          height={sceneHeight}
           solarW={s?.powerW ?? null}
           solarKwh={kwhToday(data.solarDay.value ?? [], now, timezone)}
           night={night}

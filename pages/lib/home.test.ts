@@ -13,7 +13,7 @@ test("combined status: stale if any is, oldest fetch, first error", () => {
 
 const car = (v: Partial<CarVehicle>): CarVehicle => ({
   vin: "VIN1", shortName: null, brand: "kia", nickname: "", keyExpiresAt: "", model: "EV6", modelCode: "", type: "EV",
-  updatedAt: null, activeAt: null, ignitionOn: null, odometerKm: null, location: null, stateOfCharge: null, fuelLevel: null,
+  updatedAt: null, activeAt: null, ignitionOn: null, odometerKm: null, location: null, atHome: null, stateOfCharge: null, fuelLevel: null,
   ranges: [], charge: null, locked: null, open: [], climateOn: null, outsideTemperature: null, warnings: [], ...v,
 });
 
@@ -86,11 +86,13 @@ test("skill warnings: queues ending within a week, empty or paused, most urgent 
 
 test("car status: level, charging and what to show under it", () => {
   const ev = car({ stateOfCharge: 34, charge, updatedAt: now, ranges: [{ type: "EV", km: 120 }] });
-  expect(carStatus(ev, now, tz)).toEqual({ level: { label: "Accu", percent: 34 }, charging: true, pluggedIn: true, detail: "80% om 11:30" });
+  expect(carStatus(ev, now, tz)).toEqual({ level: { label: "Accu", percent: 34 }, charging: true, pluggedIn: true, detail: "80% om 11:30", away: false });
   const plugged = car({ stateOfCharge: 80, charge: { ...charge, charging: false } });
   expect(carStatus(plugged, now, tz)).toMatchObject({ charging: false, pluggedIn: true, detail: "aangesloten" });
   const parked = car({ stateOfCharge: 78, ranges: [{ type: "EV", km: 312 }], updatedAt: "2026-10-16T09:20:00+02:00" });
-  expect(carStatus(parked, now, tz)).toEqual({ level: { label: "Accu", percent: 78 }, charging: false, pluggedIn: false, detail: "312 km · 09:20" });
+  expect(carStatus(parked, now, tz)).toEqual({ level: { label: "Accu", percent: 78 }, charging: false, pluggedIn: false, detail: "312 km", away: false });
+  expect(carStatus({ ...parked, atHome: true }, now, tz).away).toBe(false);
+  expect(carStatus({ ...parked, atHome: false }, now, tz).away).toBe(true);
   const fuel = car({ type: "GN", fuelLevel: 18 });
   expect(carStatus(fuel, now, tz)).toMatchObject({ level: { label: "Tank", percent: 18 }, detail: null });
 });

@@ -22,7 +22,7 @@ const skill = (id: number, level: number, finish: string | null) => ({ id, name:
 // An EV charging, a plug-in hybrid with the trunk open, and a combustion car seen yesterday.
 const car = {
   brand: "hyundai", nickname: "", keyExpiresAt: "2027-01-01T00:00:00Z", activeAt: null, ignitionOn: false,
-  location: null, open: [], climateOn: false, outsideTemperature: 12, warnings: [],
+  location: null, atHome: true, open: [], climateOn: false, outsideTemperature: 12, warnings: [],
 };
 const cars = [
   {

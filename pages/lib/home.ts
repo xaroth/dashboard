@@ -1,6 +1,6 @@
 import type { CalendarEvent, CarVehicle, EveonlineSkillsCharacter } from "../generated/queries";
 import { addDays, agendaDays, dayLabel, eventTime, localDate } from "./calendar";
-import { chargeDone, chargeLabel, chargeTarget, formatKm, formatSeen, levels, vehicleName, type Level } from "./car";
+import { chargeDone, chargeLabel, chargeTarget, formatKm, levels, vehicleName, type Level } from "./car";
 import { sortQueues } from "./eveonline";
 import { formatTime } from "./format";
 import type { Result } from "./page";
@@ -91,8 +91,10 @@ export type CarStatus = {
   level: Level | null;
   charging: boolean;
   pluggedIn: boolean;
-  /** "80% om 23:40" while charging, "aangesloten", else the longest range and when the car was seen. */
+  /** "80% om 23:40" while charging, "aangesloten", else the longest range. */
   detail: string | null;
+  /** Away faces the car from the house; unknown counts as home. */
+  away: boolean;
 };
 
 /** What the house scene shows of a car. */
@@ -108,8 +110,7 @@ export function carStatus(v: CarVehicle, now: string, timezone: string): CarStat
   } else if (pluggedIn) {
     detail = "aangesloten";
   } else {
-    const range = v.ranges.length ? formatKm(Math.max(...v.ranges.map((r) => r.km))) : null;
-    detail = [range, v.updatedAt && formatSeen(v.updatedAt, now, timezone)].filter(Boolean).join(" · ") || null;
+    detail = v.ranges.length ? formatKm(Math.max(...v.ranges.map((r) => r.km))) : null;
   }
-  return { level: levels(v)[0] ?? null, charging, pluggedIn, detail };
+  return { level: levels(v)[0] ?? null, charging, pluggedIn, detail, away: v.atHome === false };
 }
