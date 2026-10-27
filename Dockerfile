@@ -1,7 +1,7 @@
 # Keep in sync with .bun-version; CI checks.
 ARG BUN_VERSION=1.4.4
 
-FROM golang:1.27.1 AS go
+FROM golang:1.27.3 AS go
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
