@@ -92,13 +92,15 @@ func fetch(ctx context.Context, c *http.Client, s *stored) error {
 			Title: title, Link: it.Link, Published: cmp.Or(it.PublishedParsed, it.UpdatedParsed), Summary: summary,
 		})
 	}
-	// Newest first; undated items keep the feed's order, after the dated ones.
-	slices.SortStableFunc(s.Items, func(a, b Item) int {
-		if a.Published == nil || b.Published == nil {
-			return boolCompare(a.Published == nil, b.Published == nil)
-		}
-		return b.Published.Compare(*a.Published)
-	})
+	if s.Order != orderFeed {
+		// Newest first; undated items keep the feed's order, after the dated ones.
+		slices.SortStableFunc(s.Items, func(a, b Item) int {
+			if a.Published == nil || b.Published == nil {
+				return boolCompare(a.Published == nil, b.Published == nil)
+			}
+			return b.Published.Compare(*a.Published)
+		})
+	}
 	s.Items = s.Items[:min(maxItems, len(s.Items))]
 	return nil
 }

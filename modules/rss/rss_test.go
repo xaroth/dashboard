@@ -153,6 +153,28 @@ func TestChangedURL(t *testing.T) {
 	}
 }
 
+func TestFeedOrder(t *testing.T) {
+	t.Parallel()
+	fake := rss.NewFake(t)
+	dir := t.TempDir()
+	c := &clock{testNow}
+	set := load(t, dir, fake, `feeds: {news: {url: "`+rss.FakeNewsURL+`", order: feed}}`, c)
+	update(t, set)
+	if diff := cmp.Diff([]string{"Second story", "Undated story", "Newest story", "Oldest story"}, titles(items(t, set, map[string]any{"feed": "news"}))); diff != "" {
+		t.Errorf("feed order (-want +got):\n%s", diff)
+	}
+
+	// Another order fetches without validators: a 304 would keep the old order.
+	set = load(t, dir, fake, `feeds: {news: {url: "`+rss.FakeNewsURL+`"}}`, c)
+	update(t, set)
+	if h := fake.LastHeader(rss.FakeNewsURL); h.Get("If-None-Match") != "" {
+		t.Errorf("got headers %v, want no validators after changing the order", h)
+	}
+	if diff := cmp.Diff([]string{"Newest story", "Second story", "Oldest story", "Undated story"}, titles(items(t, set, map[string]any{"feed": "news"}))); diff != "" {
+		t.Errorf("published order (-want +got):\n%s", diff)
+	}
+}
+
 func TestFeedFails(t *testing.T) {
 	t.Parallel()
 	fake := rss.NewFake(t)
@@ -271,6 +293,8 @@ func TestConfig(t *testing.T) {
 		{"relative url", `feeds: {news: {url: "/rss"}}`, module.PhaseInitFail},
 		{"other scheme", `feeds: {news: {url: "ftp://example.com/rss"}}`, module.PhaseInitFail},
 		{"no url", `feeds: {news: {}}`, module.PhaseInitFail},
+		{"feed order", `feeds: {news: {url: "` + rss.FakeNewsURL + `", order: feed}}`, module.PhaseWaiting},
+		{"unknown order", `feeds: {news: {url: "` + rss.FakeNewsURL + `", order: rank}}`, module.PhaseInitFail},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {

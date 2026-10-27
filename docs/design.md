@@ -231,7 +231,8 @@ Reads named feeds (RSS 1.0, RSS 2.0, Atom, JSON Feed), parsed with `gofeed`. Con
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `feeds` | empty | Feeds by name, each with `url` (http or https). Empty disables the module. Another URL fails `Initialize`. |
+| `feeds` | empty | Feeds by name, each with `url` (http or https) and `order`. Empty disables the module. Another URL scheme or order fails `Initialize`. |
+| `feeds.<name>.order` | `published` | `published` stores items newest first; `feed` keeps the feed's own order, for ranked feeds such as Hacker News whose dates are submission times. |
 
 ```yaml
 modules:
@@ -239,9 +240,10 @@ modules:
     feeds:
       news: { url: https://example.com/rss }
       tech: { url: https://example.org/atom.xml }
+      hackernews: { url: https://news.ycombinator.com/rss, order: feed }
 ```
 
-`Update` runs every 15 minutes; data is stale after 2 hours. Each update fetches every feed concurrently, with `If-None-Match` and `If-Modified-Since` from the feed's last response; a 304 keeps its items. A response is read up to 5 MB. Items are stored newest first (published time, else updated time; undated items last, in feed order), at most 50 per feed, with the description (else the content) as plain text cut at about 300 characters. An item without a title takes its summary as title. A feed that fails keeps its previous items with the error; the update fails only when every feed fails. A feed whose URL changed starts over: its old items and validators are dropped.
+`Update` runs every 15 minutes; data is stale after 2 hours. Each update fetches every feed concurrently, with `If-None-Match` and `If-Modified-Since` from the feed's last response; a 304 keeps its items. A response is read up to 5 MB. Items are stored newest first (published time, else updated time; undated items last, in feed order), or in feed order with `order: feed`, at most 50 per feed, with the description (else the content) as plain text cut at about 300 characters. An item without a title takes its summary as title. A feed that fails keeps its previous items with the error; the update fails only when every feed fails. A feed whose URL or order changed starts over: its old items and validators are dropped.
 
 Query `rss.items` takes `feed` (a configured name; empty is the first by name) and `limit` (default 10, at most 50), and returns the feed's `name`, `title` and `link` as it publishes them, `fetchedAt` and `error` of that feed, and `items` (`title`, `link`, `published`, `summary`). An unknown feed is an error. The value is null until the feed's first fetch. A device selects its feed by overriding `feed` for the page, so one page shows a different feed per device.
 

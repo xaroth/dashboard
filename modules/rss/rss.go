@@ -18,7 +18,15 @@ import (
 
 type feedConfig struct {
 	URL string `yaml:"url"`
+	// Order is "published" (newest first) or "feed" (as the feed lists them,
+	// for ranked feeds such as Hacker News).
+	Order string `yaml:"order"`
 }
+
+const (
+	orderPublished = "published"
+	orderFeed      = "feed"
+)
 
 type config struct {
 	// Feeds by name; pages select one with the items query's feed param.
@@ -49,7 +57,10 @@ type snapshot struct {
 
 type stored struct {
 	// URL is the one fetched; validators and items of another URL are not reused.
-	URL          string `json:"url"`
+	URL string `json:"url"`
+	// Order is the one items are stored in; a 304 under another order would
+	// keep them in the old one.
+	Order        string `json:"order"`
 	ETag         string `json:"etag"`
 	LastModified string `json:"lastModified"`
 	// FetchedAt is the last successful fetch; Error is why the latest one
@@ -70,6 +81,12 @@ func (m *rss) Initialize(_ context.Context, cfg *config, _ module.Env) error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("feeds: %s: url must be an http or https URL, got %q", name, cfg.Feeds[name].URL)
 		}
+		f := cfg.Feeds[name]
+		f.Order = cmp.Or(f.Order, orderPublished)
+		if f.Order != orderPublished && f.Order != orderFeed {
+			return fmt.Errorf("feeds: %s: order must be %s or %s, got %q", name, orderPublished, orderFeed, f.Order)
+		}
+		cfg.Feeds[name] = f
 	}
 	m.cfg = cfg
 	return nil
@@ -95,8 +112,9 @@ func (m *rss) Update(ctx context.Context, u *module.Update) error {
 	var wg sync.WaitGroup
 	for i, name := range names {
 		s := prev.Feeds[name]
-		if feedURL := m.cfg.Feeds[name].URL; s.URL != feedURL {
-			s = stored{URL: feedURL}
+		// Snapshots from before Order had none, and were stored by published.
+		if fc := m.cfg.Feeds[name]; s.URL != fc.URL || cmp.Or(s.Order, orderPublished) != fc.Order {
+			s = stored{URL: fc.URL, Order: fc.Order}
 		}
 		wg.Go(func() { feeds[i], errs[i] = refresh(ctx, u.HTTP, s, now) })
 	}
