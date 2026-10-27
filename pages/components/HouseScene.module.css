@@ -75,12 +75,12 @@
 }
 
 .taken {
-  top: 126px;
+  top: 132px;
   background: #fff;
 }
 
 .returned {
-  top: 184px;
+  top: 196px;
   background: #aaa;
 }
 
@@ -107,7 +107,7 @@
 .flow {
   position: absolute;
   left: 34px;
-  top: 241px;
+  top: 262px;
   width: 160px;
   text-align: center;
   font-size: 12px;
@@ -117,7 +117,7 @@
 .battery {
   position: absolute;
   left: 218px;
-  top: 120px;
+  top: 171px;
   display: flex;
   align-items: center;
 }
@@ -162,7 +162,7 @@
 .carDetail {
   position: absolute;
   left: 208px;
-  top: 162px;
+  top: 213px;
   width: 122px;
   text-align: center;
   font-size: 12px;
@@ -177,10 +177,10 @@
 
 .staleMeter {
   left: 176px;
-  top: 118px;
+  top: 124px;
 }
 
 .staleCar {
   left: 302px;
-  top: 112px;
+  top: 163px;
 }

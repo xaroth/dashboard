@@ -41,6 +41,9 @@ type Vehicle struct {
 	IgnitionOn *bool      `json:"ignitionOn"`
 	OdometerKm *float64   `json:"odometerKm"`
 	Location   *Position  `json:"location"`
+	// AtHome is whether Location is within the configured home radius; null
+	// without a home or a location.
+	AtHome *bool `json:"atHome"`
 	// StateOfCharge is the high-voltage battery level, in percent.
 	StateOfCharge *float64 `json:"stateOfCharge"`
 	// FuelLevel is the fuel tank level, in percent.
@@ -212,10 +215,20 @@ func (m *car) vehicle(ctx context.Context, q module.Query, p vehicleParams) (*Ve
 	return nil, fmt.Errorf("no vehicle %q", p.ID)
 }
 
+// atHome is whether p is within the home radius; nil without either.
+func (m *car) atHome(p *Position) *bool {
+	h := m.cfg.Home
+	if h == nil || p == nil {
+		return nil
+	}
+	in := distance(h.Lat, h.Long, p.Latitude, p.Longitude) <= h.RadiusKm*1000
+	return &in
+}
+
 // vehicles returns the stored state of every vehicle, by short name, then
 // VIN. Short names and key expiry come from the admin page's current
-// settings, not the last update.
-func (*car) vehicles(ctx context.Context, q module.Query, _ struct{}) ([]Vehicle, error) {
+// settings and atHome from the config, not the last update.
+func (m *car) vehicles(ctx context.Context, q module.Query, _ struct{}) ([]Vehicle, error) {
 	var snap Snapshot
 	ok, err := q.LoadSnapshot(ctx, &snap)
 	if err != nil || !ok {
@@ -245,6 +258,7 @@ func (*car) vehicles(ctx context.Context, q module.Query, _ struct{}) ([]Vehicle
 			continue // listed since the last update
 		}
 		v.ShortName, v.KeyExpiresAt = row.ShortName, expires[row.ClientID]
+		v.AtHome = m.atHome(v.Location)
 		out = append(out, v)
 	}
 	slices.SortStableFunc(out, func(a, b Vehicle) int {

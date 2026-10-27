@@ -60,6 +60,7 @@ export interface CarVehicle {
   ignitionOn: boolean | null;
   odometerKm: number | null;
   location: CarPosition | null;
+  atHome: boolean | null;
   stateOfCharge: number | null;
   fuelLevel: number | null;
   ranges: CarRange[];

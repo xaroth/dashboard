@@ -190,6 +190,7 @@ Reads Hyundai, Kia and Genesis vehicles through Pleos with private My Vehicle AP
 | `api_url` | `https://api.pleos.ai` | Pleos API base URL |
 | `active_interval` | `15m` | Poll interval while a car is in use |
 | `max_interval` | `12h` | Longest poll interval when every car is parked |
+| `home` | none | `{lat, long, radius_km}`: a car within `radius_km` (default 1) of it is at home. Pleos reports no position accuracy; raise the radius when the position proves coarse. Out-of-range coordinates or a negative radius fail `Initialize`. |
 
 The module is enabled once a key is entered.
 
@@ -215,7 +216,7 @@ Queries:
 - `car.vehicle` takes `id`, a short name (any case) or VIN; empty is the first vehicle. A device selects its car by overriding `id` for the page. An unknown `id` is an error.
 - `car.vehicles` takes no params and returns every vehicle, named ones first by short name, then by VIN.
 
-A vehicle has: `vin`, `shortName`, `brand`, `nickname` (from the brand's app, often empty), `keyExpiresAt`, `model` (sales name), `modelCode`, `type`, `updatedAt`, `activeAt`, `ignitionOn`, `odometerKm`, `location`, `stateOfCharge`, `fuelLevel`, `ranges` (km per energy source), `charge` (plugged in, charging, status, AC/DC targets, minutes remaining), `locked` (all doors locked), `open` (doors, hood, trunk, sunroof), `climateOn`, `outsideTemperature` (°C) and `warnings`. Fields a car does not report are null. Short names and key expiry are read at query time, so changes on the admin page show without an update.
+A vehicle has: `vin`, `shortName`, `brand`, `nickname` (from the brand's app, often empty), `keyExpiresAt`, `model` (sales name), `modelCode`, `type`, `updatedAt`, `activeAt`, `ignitionOn`, `odometerKm`, `location`, `stateOfCharge`, `fuelLevel`, `ranges` (km per energy source), `charge` (plugged in, charging, status, AC/DC targets, minutes remaining), `locked` (all doors locked), `open` (doors, hood, trunk, sunroof), `climateOn`, `outsideTemperature` (°C), `warnings` and `atHome` (whether `location` is within the configured home; null without a home or a location). Fields a car does not report are null. Short names and key expiry are read at query time, so changes on the admin page show without an update; `atHome` is computed at query time too, from the config.
 
 Pages (shared):
 
@@ -683,17 +684,17 @@ export default function Weather({ data, viewport, timezone }: PageProps<Data>) {
 
 | Block | Shows | Queries |
 | --- | --- | --- |
-| right, `HouseScene` | solar power now and today's kWh on the roof; today's kWh taken and returned inside the house, the net flow now under them; the car beside it with its first level as a battery, a bolt and cable while charging, the charge target and end time, else its longest range and when it was seen | `solar.production`, `solar.power`, `p1.actual`, `car.vehicle` |
+| right, `HouseScene` | solar power now and today's kWh on the roof; today's kWh taken and returned inside the house, the net flow now under them; the car beside it, facing the house at home and away from it otherwise (`atHome` false), with its first level as a battery, a bolt while charging, a cable while plugged in at home, the charge target and end time, else its longest range | `solar.production`, `solar.power`, `p1.actual`, `car.vehicle` |
 | left, top | characters whose skill queue ends within a week, is empty or paused (`skillWarnings`, at most 3): a bar of the time left on a 7-day scale, the training skill, the time left; left out when there are none | `eveonline_skills.queue` |
 | left | headlines of one feed with their age, as many as fit under the skill queues | `rss.items` |
-| bottom | five day cards: weather icon (`weatherIcon`), max / min, chance and amount of rain; the day's events (`dayEvents`), all-day first in gray, at most 6 rows with `+N meer` | `weather.forecast`, `calendar.upcoming` |
+| bottom | five day cards: weather icon (`weatherIcon`), max / min, chance and amount of rain; the day's events (`dayEvents`), all-day first in gray, at most 8 rows with `+N meer` | `weather.forecast`, `calendar.upcoming` |
 
 - Top right, small (`DeviceStatus`), from the device's last wake: a Wi-Fi icon with its quality (`wifiQuality`, 2 x (RSSI + 100) as a percentage), then a battery icon with its charge (`batteryPercent`), or a bolt and `USB` on USB power; each icon has three arcs or segments, filled from 1, 34 and 67%. Under them, right-aligned, `Updated:` and the render time. The charge comes from a generic single-cell lithium resting-voltage curve, not measured on the reTerminals.
 - A block whose result is stale or failed shows a black "!" (`StaleMark`) instead of a fetch time; so do the agenda when a calendar failed, the skill queues when a character failed and the headlines when the feed failed.
 - After sunset today's card shows the temperature now instead of the day's range. Under 10 W of solar is idle: the roof box turns gray, with a moon once the sun is down.
 - Without a car (`car.vehicle` empty without error) the car is left out. A device picks the car with `home.car: {id: ...}` and the feed with `home.news: {feed: ...}`.
 - In portrait the house goes above the headlines and the bottom shows three days.
-- The day cards take the height left under the top block, so their event rows follow the panel: 6 at 800x480, 13 at 800x600 (the E1003, scaled).
+- The day cards take the height left under the top block, up to 8 event rows: 5 at 800x480, 8 at 800x600 (the E1003, scaled). Height past 8 rows goes to the top block: more headlines, and a taller house scene whose walls grow at most 10 px, the rest moving the house down.
 - Without skill queues (`e1003/home`) the headlines take the whole left column.
 
 ### Queries

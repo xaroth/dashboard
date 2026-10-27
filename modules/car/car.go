@@ -37,6 +37,16 @@ type config struct {
 	// are polled every quarter of their idle time, up to MaxInterval.
 	ActiveInterval time.Duration `yaml:"active_interval"`
 	MaxInterval    time.Duration `yaml:"max_interval"`
+	// Home is where a car counts as at home; nil leaves atHome null.
+	Home *home `yaml:"home"`
+}
+
+type home struct {
+	Lat  float64 `yaml:"lat"`
+	Long float64 `yaml:"long"`
+	// RadiusKm is how close counts as home; raise it when the car's
+	// position is coarse.
+	RadiusKm float64 `yaml:"radius_km"`
 }
 
 func defaultConfig() *config {
@@ -75,6 +85,14 @@ var Module = module.Define[car, config](
 func (m *car) Initialize(_ context.Context, cfg *config, _ module.Env) error {
 	if cfg.ActiveInterval <= 0 || cfg.MaxInterval < cfg.ActiveInterval {
 		return fmt.Errorf("active_interval must be positive and at most max_interval, got %v and %v", cfg.ActiveInterval, cfg.MaxInterval)
+	}
+	if h := cfg.Home; h != nil {
+		if h.Lat < -90 || h.Lat > 90 || h.Long < -180 || h.Long > 180 || h.RadiusKm < 0 {
+			return fmt.Errorf("home needs lat in -90..90, long in -180..180 and radius_km of 0 (1 km) or more, got %v, %v, %v", h.Lat, h.Long, h.RadiusKm)
+		}
+		if h.RadiusKm == 0 {
+			h.RadiusKm = 1
+		}
 	}
 	m.cfg = cfg
 	m.clients = map[string]*pleos{}

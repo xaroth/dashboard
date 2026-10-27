@@ -7,7 +7,7 @@ const now = "2026-10-16T10:30:00+02:00";
 
 const vehicle = (v: Partial<CarVehicle>): CarVehicle => ({
   vin: "VIN", shortName: null, brand: "kia", nickname: "", keyExpiresAt: "0001-01-01T00:00:00Z", model: "EV6", modelCode: "CV",
-  type: "EV", updatedAt: null, activeAt: null, ignitionOn: null, odometerKm: null, location: null, stateOfCharge: null,
+  type: "EV", updatedAt: null, activeAt: null, ignitionOn: null, odometerKm: null, location: null, atHome: null, stateOfCharge: null,
   fuelLevel: null, ranges: [], charge: null, locked: null, open: [], climateOn: null, outsideTemperature: null, warnings: [],
   ...v,
 });

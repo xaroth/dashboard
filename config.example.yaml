@@ -50,6 +50,7 @@ modules:
   car:   # Pleos Vehicle Data API; enter keys on /car/ on the admin listener
     # active_interval: 15m   # while a car is on, charging or moving
     # max_interval: 12h      # a parked car is polled every quarter of its idle time, up to this
+    # home: {lat: 52.374, long: 4.8897, radius_km: 1}   # within radius_km (default 1) is at home; try 5 if the position is coarse
   p1:   # Smartstuff P1 dongle, DSMR-API firmware
     # url: http://192.168.1.20   # empty disables the module
   solar:   # Hoymiles DTU-Pro-S over Modbus TCP

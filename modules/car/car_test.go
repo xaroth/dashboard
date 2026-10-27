@@ -538,6 +538,9 @@ func TestConfig(t *testing.T) {
 		{"defaults", "", module.PhaseWaiting},
 		{"zero active interval", "active_interval: 0s", module.PhaseInitFail},
 		{"max below active", "active_interval: 1h, max_interval: 30m", module.PhaseInitFail},
+		{"home", "home: {lat: 52.37, long: 4.89}", module.PhaseWaiting},
+		{"home latitude out of range", "home: {lat: 91, long: 4.89}", module.PhaseInitFail},
+		{"home negative radius", "home: {lat: 52.37, long: 4.89, radius_km: -1}", module.PhaseInitFail},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -546,6 +549,46 @@ func TestConfig(t *testing.T) {
 				t.Errorf("got phase %s, want %s", got, testCase.want)
 			}
 		})
+	}
+}
+
+// The fake car stands at 52.374, 4.8897; 0.01° of latitude is 1.1 km.
+func TestAtHome(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+		keys string
+		want *bool
+	}{
+		{"no home", "", nil},
+		{"same spot", "home: {lat: 52.374, long: 4.8897}", ptr(true)},
+		{"1.1 km away", "home: {lat: 52.384, long: 4.8897}", ptr(false)},
+		{"1.1 km in a 5 km radius", "home: {lat: 52.384, long: 4.8897, radius_km: 5}", ptr(true)},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			e := load(t, car.NewFake(t), testCase.keys)
+			e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
+			e.update(t)
+			got, errMsg := e.vehicle(t, "")
+			if got == nil {
+				t.Fatalf("no vehicle: %s", errMsg)
+			}
+			if diff := cmp.Diff(testCase.want, got.AtHome); diff != "" {
+				t.Errorf("atHome (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestAtHomeWithoutLocation(t *testing.T) {
+	t.Parallel()
+	e := load(t, car.NewFake(t, car.ExpectLocation_NoData), "home: {lat: 52.374, long: 4.8897}")
+	e.addKey(t, "hyundai", car.FakeClientID, car.FakeClientSecret)
+	e.update(t)
+	if got, errMsg := e.vehicle(t, ""); got == nil || got.AtHome != nil {
+		t.Errorf("got %+v (%s), want atHome null", got, errMsg)
 	}
 }
 
