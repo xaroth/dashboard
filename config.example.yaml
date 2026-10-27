@@ -59,3 +59,4 @@ modules:
     feeds:
       news: { url: "https://feeds.nos.nl/nosnieuwsalgemeen" }
       # tech: { url: "https://example.org/atom.xml" }
+      # hackernews: { url: "https://news.ycombinator.com/rss", order: feed }   # feed: keep the feed's order instead of newest first
